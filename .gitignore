@@ -1,0 +1,47 @@
+# Runtime data and local databases
+data/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# Local secrets and real configuration
+config.yaml
+config.yml
+.env
+.env.*
+!.env.example
+
+# Build artifacts
+infra-ops
+infra-ops.exe
+dist/
+bin/
+*.exe
+*.out
+
+# Go tooling and caches
+.gocache/
+.coverprofile
+coverage.out
+
+# Local workspace/tooling metadata
+.workbuddy/
+.codex/
+
+# IDE/editor files
+.idea/
+.vscode/
+*.iml
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs and temporary files
+*.log
+*.tmp
+*.temp

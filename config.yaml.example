@@ -1,0 +1,23 @@
+# infra-ops 配置样例（真实文件 config.yaml 不入库）
+# 所有配置项均可通过环境变量覆盖，前缀 INFRA_OPS_
+
+server:
+  port: 8090
+
+database:
+  path: data/infra-ops.db
+
+security:
+  secret_key: ""  # 必填，由 infra-ops keygen 生成
+
+auth:
+  username: admin
+  password_hash: ""  # 必填，由 infra-ops gen-password 生成
+
+ssh:
+  timeout: 8          # 连接超时（秒）
+  host_key_policy: tofu  # tofu | insecure
+
+probe:
+  interval: 60        # 巡检周期（秒）
+  concurrency: 5      # 并发上限

@@ -1,0 +1,132 @@
+const { createApp, ref, computed, watch } = Vue
+const { ElMessage, ElMessageBox } = ElementPlus
+
+// axios 封装
+const api = axios.create({ baseURL: '/api', withCredentials: true, timeout: 15000 })
+api.interceptors.response.use(
+  res => res.data,
+  err => {
+    const code = err.response?.status
+    if (code === 401) { location.hash = '#/login'; return Promise.reject(err) }
+    const msg = err.response?.data?.message || err.message || '请求失败'
+    ElMessage.error(msg)
+    return Promise.reject(err)
+  }
+)
+window.api = api
+
+// 图标库
+const ICONS = {
+  overview: '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>',
+  hosts: '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="6" rx="2"/><rect x="2" y="14" width="20" height="6" rx="2"/><line x1="6" y1="7" x2="6.01" y2="7"/><line x1="6" y1="17" x2="6.01" y2="17"/></svg>',
+  credentials: '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>',
+  audit: '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>'
+}
+
+const routes = {
+  overview: { title: '主机概览', sub: '运行状态一览' },
+  hosts: { title: '主机管理', sub: '纳管服务器凭据与连接' },
+  credentials: { title: '凭据管理', sub: 'SSH 私钥与密码加密托管' },
+  audit: { title: '操作日志', sub: '关键操作审计追踪' }
+}
+
+const app = createApp({
+  template: `
+    <page-login v-if="currentPage==='login'" :version="version" />
+    <app-layout v-else :current-page="currentPage" :user="user" :version="version" @nav="navigate" @logout="logout">
+      <component :is="'page-' + currentPage" :page="currentPage" :user="user" :version-data="versionData" @navigate="navigate" />
+    </app-layout>
+  `,
+  setup() {
+    const currentPage = ref('overview')
+    const user = ref(null)
+    const version = ref('')
+    const versionData = ref(null)
+
+    const loadUser = async () => {
+      try { const res = await api.get('/auth/me'); if (res.code === 0) user.value = res.data } catch (e) { location.hash = '#/login' }
+    }
+    const loadVersion = async () => {
+      try { const res = await api.get('/version'); if (res.code === 0) { version.value = res.data.version; versionData.value = res.data } } catch (e) {}
+    }
+    const handleRoute = () => {
+      const hash = location.hash.slice(2) || 'overview'
+      if (!user.value && hash !== 'login') { currentPage.value = 'login'; location.hash = '#/login'; return }
+      if (routes[hash]) currentPage.value = hash
+      else if (hash === 'login' && user.value) { location.hash = '#/overview' }
+      else if (hash === 'login') currentPage.value = 'login'
+    }
+    const navigate = (page) => { location.hash = '#/' + page }
+    const logout = () => {
+      ElMessageBox.confirm('确认退出登录？', '提示', { type: 'warning' }).then(() => {
+        api.post('/auth/logout').finally(() => { user.value = null; location.hash = '#/login' })
+      }).catch(() => {})
+    }
+
+    watch(() => user.value, (v) => { if (v) loadVersion() })
+
+    return { currentPage, user, version, versionData, handleRoute, navigate, logout, loadUser, ICONS }
+  }
+})
+
+app.use(ElementPlus)
+app.config.globalProperties.$message = ElMessage
+app.config.globalProperties.$confirm = (message, title, options) => ElMessageBox.confirm(message, title, options)
+
+// 全局组件：空态
+app.component('empty-state', {
+  props: { text: { type: String, default: '暂无数据' } },
+  template: '<div class="empty-state"><p>{{text}}</p></div>'
+})
+
+// 布局
+app.component('app-layout', {
+  props: ['currentPage', 'user', 'version'],
+  template: `
+<div class="layout">
+  <div class="sidebar">
+    <div class="sidebar-logo"><span class="logo-mark">i</span><span>infra-ops</span></div>
+    <div class="sidebar-nav">
+      <div class="nav-group">运行管理</div>
+      <div class="nav-item" :class="{active:currentPage==='overview'}" @click="$emit('nav','overview')"><span class="nav-icon">` + ICONS.overview + `</span>总览</div>
+      <div class="nav-item" :class="{active:currentPage==='hosts'}" @click="$emit('nav','hosts')"><span class="nav-icon">` + ICONS.hosts + `</span>主机管理</div>
+      <div class="nav-group">安全审计</div>
+      <div class="nav-item" :class="{active:currentPage==='credentials'}" @click="$emit('nav','credentials')"><span class="nav-icon">` + ICONS.credentials + `</span>凭据管理</div>
+      <div class="nav-item" :class="{active:currentPage==='audit'}" @click="$emit('nav','audit')"><span class="nav-icon">` + ICONS.audit + `</span>操作日志</div>
+    </div>
+    <div class="sidebar-footer">v{{version || '—'}}</div>
+  </div>
+  <div class="main-area">
+    <div class="header">
+      <div style="display:flex;align-items:baseline"><span class="header-title">{{pageTitle}}</span><span class="header-sub">{{pageSub}}</span></div>
+      <div class="header-actions">
+        <div class="header-user"><div class="avatar">{{userInitial}}</div><span>{{user?.username}}</span></div>
+        <el-button size="small" text @click="$emit('logout')">退出</el-button>
+      </div>
+    </div>
+    <div class="content"><div class="content-inner page-fade" :key="currentPage"><slot></slot></div></div>
+  </div>
+</div>`,
+  emits: ['nav', 'logout'],
+  computed: {
+    pageTitle() { return routes[this.currentPage]?.title || '' },
+    pageSub() { return routes[this.currentPage]?.sub || '' },
+    userInitial() { return this.user?.username?.charAt(0)?.toUpperCase() || 'A' }
+  }
+})
+
+// 页面
+app.component('page-login', window.LoginPage)
+app.component('page-overview', window.OverviewPage)
+app.component('page-hosts', window.HostsPage)
+app.component('page-credentials', window.CredentialsPage)
+app.component('page-audit', window.AuditPage)
+
+const root = app.mount('#app')
+
+window.addEventListener('hashchange', root.handleRoute)
+// 刷新时先恢复会话再路由，避免 token 有效却被踢回登录页
+root.loadUser().finally(() => {
+  root.handleRoute()
+  if (root.user) root.loadVersion()
+})
