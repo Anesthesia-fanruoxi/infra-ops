@@ -13,13 +13,12 @@ import (
 	"infra-ops/common/middleware"
 	"infra-ops/common/resp"
 	"infra-ops/common/sshx"
-	"infra-ops/config"
 	"infra-ops/store"
 )
 
 // Deps 路由所需依赖。
 type Deps struct {
-	Cfg           *config.Config
+	Settings      *store.SettingsRepo
 	CryptoService *crypto.Service
 	SSHClient     *sshx.Client
 	Sessions      *middleware.SessionStore
@@ -49,17 +48,20 @@ func Setup(staticFS fs.FS, deps Deps) *gin.Engine {
 	})
 
 	// 认证（login/logout 无需鉴权）
-	authHandler := api.NewAuthHandler(deps.Cfg, deps.Sessions, auditRepo)
+	authHandler := api.NewAuthHandler(deps.Settings, deps.Sessions, auditRepo)
 	auth := r.Group("/api/auth")
 	{
 		auth.POST("/login", authHandler.Login)
 		auth.POST("/logout", authHandler.Logout)
 	}
 
-	// 需鉴权的接口
+	// 需鉴权的接口；待改密时仅放行改密相关接口
 	protected := r.Group("/api")
 	protected.Use(middleware.Auth(deps.Sessions))
 	protected.GET("/auth/me", authHandler.Me)
+	protected.POST("/auth/password", authHandler.ChangePassword)
+	protected.Use(middleware.RequirePasswordChanged(deps.Settings, store.SettingAuthMustChange,
+		"/api/auth/password", "/api/auth/me", "/api/auth/logout"))
 
 	// 凭据管理
 	credRepo := store.NewCredentialRepo()
@@ -92,16 +94,44 @@ func Setup(staticFS fs.FS, deps Deps) *gin.Engine {
 		hosts.POST("/:id/test", hostHandler.Test)
 	}
 
-	// 总览 & 审计日志
+	// 部署中心
+	deployRepo := store.NewDeployRepo()
+	scheduleRepo := store.NewDeployScheduleRepo()
+	deployTplHandler := api.NewDeployTemplateHandler(deployRepo, scheduleRepo)
+	tpl := protected.Group("/deploy/templates")
+	{
+		tpl.GET("", deployTplHandler.List)
+		tpl.POST("", deployTplHandler.Create)
+		tpl.PUT("/:id", deployTplHandler.Update)
+		tpl.DELETE("/:id", deployTplHandler.Delete)
+	}
+	deployTaskHandler := api.NewDeployHandler(deployRepo, scheduleRepo, hostRepo, credRepo,
+		deps.CryptoService, deps.SSHClient, deps.Bus, auditRepo)
+	deployTaskHandler.StartScheduler()
+	deploySchedHandler := api.NewDeployScheduleHandler(scheduleRepo, deployRepo, deployTaskHandler)
+	protected.POST("/deploy/run", deployTaskHandler.Run)
+	protected.GET("/deploy/tasks", deployTaskHandler.Tasks)
+	protected.GET("/deploy/tasks/:id", deployTaskHandler.TaskDetail)
+	sched := protected.Group("/deploy/schedules")
+	{
+		sched.GET("", deploySchedHandler.List)
+		sched.POST("", deploySchedHandler.Create)
+		sched.PUT("/:id", deploySchedHandler.Update)
+		sched.DELETE("/:id", deploySchedHandler.Delete)
+		sched.POST("/:id/toggle", deploySchedHandler.Toggle)
+		sched.GET("/:id/runs", deploySchedHandler.Runs)
+	}
+
+	// 总览 & 审计日志（审计日志统一走 /api/sse/audits 单一查询流）
 	miscHandler := api.NewMiscHandler(hostRepo, auditRepo)
 	protected.GET("/overview", miscHandler.Overview)
-	protected.GET("/audit-logs", miscHandler.AuditLogs)
 
 	// SSE 推送
 	sseHandler := api.NewSSEHandler(deps.Bus, hostRepo, credRepo, auditRepo)
 	protected.GET("/sse/overview", sseHandler.Overview)
-	// ????????????????
 	protected.GET("/sse/hosts", sseHandler.HostStatus)
+	protected.GET("/sse/audits", sseHandler.Audits)
+	protected.GET("/sse/deploy", deployTaskHandler.SSEProgress)
 
 	// 前端静态资源
 	if staticFS != nil {

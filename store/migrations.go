@@ -12,6 +12,94 @@ var migrations = []migration{
 	{2, migrateV2},
 	{3, migrateV3},
 	{4, migrateV4},
+	{5, migrateV5},
+	{6, migrateV6},
+	{7, migrateV7},
+}
+
+// migrateV5 创建 settings 表：全部运行配置以 KV 形式持久化于此。
+func migrateV5(db *sql.DB) error {
+	_, err := db.Exec(`CREATE TABLE IF NOT EXISTS settings (
+		key        TEXT PRIMARY KEY,
+		value      TEXT NOT NULL,
+		updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+	)`)
+	return err
+}
+
+// migrateV6 创建部署中心三张表并预置内置模板。
+func migrateV6(db *sql.DB) error {
+	stmts := []string{
+		`CREATE TABLE IF NOT EXISTS deploy_templates (
+			id          INTEGER PRIMARY KEY AUTOINCREMENT,
+			name        TEXT NOT NULL UNIQUE,
+			description TEXT NOT NULL DEFAULT '',
+			script      TEXT NOT NULL,
+			variables   TEXT NOT NULL DEFAULT '[]',
+			is_builtin  INTEGER NOT NULL DEFAULT 0,
+			created_at  TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+			updated_at  TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+		)`,
+		`CREATE TABLE IF NOT EXISTS deploy_tasks (
+			id            INTEGER PRIMARY KEY AUTOINCREMENT,
+			template_id   INTEGER NOT NULL REFERENCES deploy_templates(id),
+			template_name TEXT NOT NULL DEFAULT '',
+			status        TEXT NOT NULL DEFAULT 'running' CHECK (status IN ('running','success','partial','failed')),
+			total         INTEGER NOT NULL DEFAULT 0,
+			success_cnt   INTEGER NOT NULL DEFAULT 0,
+			fail_cnt      INTEGER NOT NULL DEFAULT 0,
+			created_at    TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+			finished_at   TEXT
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_deploy_tasks_created ON deploy_tasks(created_at)`,
+		`CREATE TABLE IF NOT EXISTS deploy_task_hosts (
+			id          INTEGER PRIMARY KEY AUTOINCREMENT,
+			task_id     INTEGER NOT NULL REFERENCES deploy_tasks(id) ON DELETE CASCADE,
+			host_id     INTEGER NOT NULL,
+			host_name   TEXT NOT NULL DEFAULT '',
+			host_ip     TEXT NOT NULL DEFAULT '',
+			status      TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','running','success','failed')),
+			output      TEXT NOT NULL DEFAULT '',
+			error       TEXT NOT NULL DEFAULT '',
+			started_at  TEXT,
+			finished_at TEXT
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_dth_task ON deploy_task_hosts(task_id)`,
+	}
+	for _, s := range stmts {
+		if _, err := db.Exec(s); err != nil {
+			return err
+		}
+	}
+	return seedBuiltinTemplates(db)
+}
+
+// migrateV7 创建定时任务表并为部署任务补充来源字段。
+func migrateV7(db *sql.DB) error {
+	stmts := []string{
+		`CREATE TABLE IF NOT EXISTS deploy_schedules (
+			id           INTEGER PRIMARY KEY AUTOINCREMENT,
+			name         TEXT NOT NULL UNIQUE,
+			template_id  INTEGER NOT NULL REFERENCES deploy_templates(id),
+			host_ids     TEXT NOT NULL DEFAULT '[]',
+			params_json  TEXT NOT NULL DEFAULT '{}',
+			cron_expr    TEXT NOT NULL,
+			enabled      INTEGER NOT NULL DEFAULT 1,
+			last_task_id INTEGER,
+			last_run_at  TEXT,
+			next_run_at  TEXT,
+			created_at   TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+			updated_at   TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+		)`,
+		`ALTER TABLE deploy_tasks ADD COLUMN schedule_id INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE deploy_tasks ADD COLUMN trigger_type TEXT NOT NULL DEFAULT 'manual'`,
+	}
+	for _, s := range stmts {
+		if _, err := db.Exec(s); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func migrateV1(db *sql.DB) error {

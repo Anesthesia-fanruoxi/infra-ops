@@ -7,7 +7,12 @@ api.interceptors.response.use(
   res => res.data,
   err => {
     const code = err.response?.status
+    const bizCode = err.response?.data?.code
     if (code === 401) { location.hash = '#/login'; return Promise.reject(err) }
+    if (code === 403 && bizCode === 4031) {
+      window.dispatchEvent(new CustomEvent('force-change-password'))
+      return Promise.reject(err)
+    }
     const msg = err.response?.data?.message || err.message || '请求失败'
     ElMessage.error(msg)
     return Promise.reject(err)
@@ -20,14 +25,20 @@ const ICONS = {
   overview: '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>',
   hosts: '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="6" rx="2"/><rect x="2" y="14" width="20" height="6" rx="2"/><line x1="6" y1="7" x2="6.01" y2="7"/><line x1="6" y1="17" x2="6.01" y2="17"/></svg>',
   credentials: '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>',
-  audit: '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>'
+  audit: '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>',
+  templates: '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="16" y2="17"/></svg>',
+  deploy: '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg>',
+  schedules: '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>'
 }
 
 const routes = {
   overview: { title: '主机概览', sub: '运行状态一览' },
   hosts: { title: '主机管理', sub: '纳管服务器凭据与连接' },
   credentials: { title: '凭据管理', sub: 'SSH 私钥与密码加密托管' },
-  audit: { title: '操作日志', sub: '关键操作审计追踪' }
+  audit: { title: '操作日志', sub: '关键操作审计追踪' },
+  templates: { title: '部署模板', sub: '管理部署脚本与变量' },
+  deploy: { title: '基础建设', sub: '批量部署与实时监控' },
+  schedules: { title: '定时任务', sub: '周期性自动化执行' }
 }
 
 const app = createApp({
@@ -36,15 +47,45 @@ const app = createApp({
     <app-layout v-else :current-page="currentPage" :user="user" :version="version" @nav="navigate" @logout="logout">
       <component :is="'page-' + currentPage" :page="currentPage" :user="user" :version-data="versionData" @navigate="navigate" />
     </app-layout>
+    <change-password-dialog v-model="pwdDialog" :forced="pwdForced" :old-password="pwdOld" @done="onPwdDone" />
   `,
   setup() {
     const currentPage = ref('overview')
     const user = ref(null)
     const version = ref('')
     const versionData = ref(null)
+    const pwdDialog = ref(false)
+    const pwdForced = ref(false)
+    const pwdOld = ref('')
+
+    const openChangePassword = (oldPassword) => {
+      pwdForced.value = true
+      pwdOld.value = oldPassword || ''
+      pwdDialog.value = true
+    }
+    const onPwdDone = () => {
+      pwdDialog.value = false
+      pwdForced.value = false
+      pwdOld.value = ''
+      // 改密后作废当前会话，回登录页用新密码重新登录
+      api.post('/auth/logout').finally(() => {
+        user.value = null
+        ElMessage.success('密码修改成功，请使用新密码重新登录')
+        currentPage.value = 'login'
+        location.hash = '#/login'
+      })
+    }
 
     const loadUser = async () => {
-      try { const res = await api.get('/auth/me'); if (res.code === 0) user.value = res.data } catch (e) { location.hash = '#/login' }
+      try {
+        const res = await api.get('/auth/me')
+        if (res.code === 0) {
+          user.value = res.data
+          if (res.data?.must_change_password && currentPage.value !== 'login') {
+            openChangePassword()
+          }
+        }
+      } catch (e) { location.hash = '#/login' }
     }
     const loadVersion = async () => {
       try { const res = await api.get('/version'); if (res.code === 0) { version.value = res.data.version; versionData.value = res.data } } catch (e) {}
@@ -65,11 +106,17 @@ const app = createApp({
 
     watch(() => user.value, (v) => { if (v) loadVersion() })
 
-    return { currentPage, user, version, versionData, handleRoute, navigate, logout, loadUser, ICONS }
+    window.addEventListener('force-change-password', openChangePassword)
+
+    return { currentPage, user, version, versionData, pwdDialog, pwdForced, pwdOld, openChangePassword, onPwdDone, handleRoute, navigate, logout, loadUser, ICONS }
   }
 })
 
 app.use(ElementPlus)
+// 注册全部图标为全局组件（支持 prefix-icon="Lock" 等字符串引用）
+for (const [name, comp] of Object.entries(ElementPlusIconsVue)) {
+  app.component(name, comp)
+}
 app.config.globalProperties.$message = ElMessage
 app.config.globalProperties.$confirm = (message, title, options) => ElMessageBox.confirm(message, title, options)
 
@@ -90,6 +137,10 @@ app.component('app-layout', {
       <div class="nav-group">运行管理</div>
       <div class="nav-item" :class="{active:currentPage==='overview'}" @click="$emit('nav','overview')"><span class="nav-icon">` + ICONS.overview + `</span>总览</div>
       <div class="nav-item" :class="{active:currentPage==='hosts'}" @click="$emit('nav','hosts')"><span class="nav-icon">` + ICONS.hosts + `</span>主机管理</div>
+      <div class="nav-group">部署中心</div>
+      <div class="nav-item" :class="{active:currentPage==='templates'}" @click="$emit('nav','templates')"><span class="nav-icon">` + ICONS.templates + `</span>部署模板</div>
+      <div class="nav-item" :class="{active:currentPage==='deploy'}" @click="$emit('nav','deploy')"><span class="nav-icon">` + ICONS.deploy + `</span>基础建设</div>
+      <div class="nav-item" :class="{active:currentPage==='schedules'}" @click="$emit('nav','schedules')"><span class="nav-icon">` + ICONS.schedules + `</span>定时任务</div>
       <div class="nav-group">安全审计</div>
       <div class="nav-item" :class="{active:currentPage==='credentials'}" @click="$emit('nav','credentials')"><span class="nav-icon">` + ICONS.credentials + `</span>凭据管理</div>
       <div class="nav-item" :class="{active:currentPage==='audit'}" @click="$emit('nav','audit')"><span class="nav-icon">` + ICONS.audit + `</span>操作日志</div>
@@ -121,6 +172,10 @@ app.component('page-overview', window.OverviewPage)
 app.component('page-hosts', window.HostsPage)
 app.component('page-credentials', window.CredentialsPage)
 app.component('page-audit', window.AuditPage)
+app.component('page-templates', window.TemplatesPage)
+app.component('page-deploy', window.DeployPage)
+app.component('page-schedules', window.SchedulesPage)
+app.component('change-password-dialog', window.ChangePasswordDialog)
 
 const root = app.mount('#app')
 

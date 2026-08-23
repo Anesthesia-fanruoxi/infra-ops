@@ -33,7 +33,14 @@ window.LoginPage = {
       this.loading = true
       try {
         const res = await api.post('/auth/login', this.form)
-        if (res.code === 0) { await this.$root.loadUser(); location.hash = '#/overview' } else { this.error = res.message || '登录失败' }
+        if (res.code === 0) {
+          await this.$root.loadUser()
+          if (res.data?.must_change_password === true) {
+            this.$root.openChangePassword(this.form.password)
+          } else {
+            location.hash = '#/overview'
+          }
+        } else { this.error = res.message || '登录失败' }
       } catch (e) { this.error = '网络错误' } finally { this.loading = false }
     }
   }

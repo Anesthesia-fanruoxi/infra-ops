@@ -1,120 +1,84 @@
-// Package config 负责配置加载：env 优先、config.yaml 兜底。
+// Package config 定义全局配置结构，并从 settings KV 构建运行配置。
 package config
 
 import (
-	"fmt"
-	"os"
 	"strconv"
 
-	"gopkg.in/yaml.v3"
+	"infra-ops/store"
 )
 
 // Config 全局配置结构。
 type Config struct {
-	Server   ServerConfig   `yaml:"server"`
-	Database DatabaseConfig `yaml:"database"`
-	Security SecurityConfig `yaml:"security"`
-	Auth     AuthConfig     `yaml:"auth"`
-	SSH      SSHConfig      `yaml:"ssh"`
-	Probe    ProbeConfig    `yaml:"probe"`
+	Server   ServerConfig
+	Database DatabaseConfig
+	Security SecurityConfig
+	Auth     AuthConfig
+	SSH      SSHConfig
+	Probe    ProbeConfig
 }
 
 type ServerConfig struct {
-	Port int `yaml:"port"`
+	Host string
+	Port int
 }
 
 type DatabaseConfig struct {
-	Path string `yaml:"path"`
+	Path string
 }
 
 type SecurityConfig struct {
-	SecretKey string `yaml:"secret_key"`
+	SecretKey string
 }
 
 type AuthConfig struct {
-	Username     string `yaml:"username"`
-	PasswordHash string `yaml:"password_hash"`
+	Username           string
+	PasswordHash       string
+	MustChangePassword bool
 }
 
 type SSHConfig struct {
-	Timeout       int    `yaml:"timeout"`
-	HostKeyPolicy string `yaml:"host_key_policy"`
+	Timeout       int
+	HostKeyPolicy string
 }
 
 type ProbeConfig struct {
-	Interval    int `yaml:"interval"`
-	Concurrency int `yaml:"concurrency"`
+	Interval    int
+	Concurrency int
 }
 
-// Load 加载配置：先读 yaml，再用环境变量覆盖。
-func Load(path string) (*Config, error) {
+// FromSettings 从 settings KV 构建配置，缺失项回退默认值。
+func FromSettings(m map[string]string) *Config {
 	cfg := defaultConfig()
-
-	if path != "" {
-		if err := loadYAML(path, cfg); err != nil {
-			return nil, fmt.Errorf("load yaml: %w", err)
-		}
+	if h := m[store.SettingServerHost]; h != "" {
+		cfg.Server.Host = h
 	}
-
-	applyEnv(cfg)
-	return cfg, nil
+	cfg.Security.SecretKey = m[store.SettingSecretKey]
+	cfg.Auth.Username = m[store.SettingAuthUsername]
+	cfg.Auth.PasswordHash = m[store.SettingAuthPasswordHash]
+	cfg.Auth.MustChangePassword = m[store.SettingAuthMustChange] == "1"
+	if p, err := strconv.Atoi(m[store.SettingServerPort]); err == nil && p > 0 {
+		cfg.Server.Port = p
+	}
+	if t, err := strconv.Atoi(m[store.SettingSSHTimeout]); err == nil && t > 0 {
+		cfg.SSH.Timeout = t
+	}
+	if v := m[store.SettingSSHHostKeyPolicy]; v != "" {
+		cfg.SSH.HostKeyPolicy = v
+	}
+	if i, err := strconv.Atoi(m[store.SettingProbeInterval]); err == nil && i > 0 {
+		cfg.Probe.Interval = i
+	}
+	if c, err := strconv.Atoi(m[store.SettingProbeConcurrency]); err == nil && c > 0 {
+		cfg.Probe.Concurrency = c
+	}
+	return cfg
 }
 
 func defaultConfig() *Config {
 	return &Config{
-		Server:   ServerConfig{Port: 8090},
+		Server: ServerConfig{Port: 8090},
 		Database: DatabaseConfig{Path: "data/infra-ops.db"},
-		SSH:      SSHConfig{Timeout: 8, HostKeyPolicy: "tofu"},
-		Probe:    ProbeConfig{Interval: 60, Concurrency: 5},
-	}
-}
-
-func loadYAML(path string, cfg *Config) error {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil // 文件不存在则跳过，不报错
-		}
-		return err
-	}
-	return yaml.Unmarshal(data, cfg)
-}
-
-// applyEnv 用环境变量覆盖配置。
-func applyEnv(cfg *Config) {
-	if v := os.Getenv("INFRA_OPS_PORT"); v != "" {
-		if p, err := strconv.Atoi(v); err == nil {
-			cfg.Server.Port = p
-		}
-	}
-	if v := os.Getenv("INFRA_OPS_DB_PATH"); v != "" {
-		cfg.Database.Path = v
-	}
-	if v := os.Getenv("INFRA_OPS_SECRET"); v != "" {
-		cfg.Security.SecretKey = v
-	}
-	if v := os.Getenv("INFRA_OPS_USERNAME"); v != "" {
-		cfg.Auth.Username = v
-	}
-	if v := os.Getenv("INFRA_OPS_PASSWORD_HASH"); v != "" {
-		cfg.Auth.PasswordHash = v
-	}
-	if v := os.Getenv("INFRA_OPS_SSH_TIMEOUT"); v != "" {
-		if t, err := strconv.Atoi(v); err == nil {
-			cfg.SSH.Timeout = t
-		}
-	}
-	if v := os.Getenv("INFRA_OPS_HOST_KEY_POLICY"); v != "" {
-		cfg.SSH.HostKeyPolicy = v
-	}
-	if v := os.Getenv("INFRA_OPS_PROBE_INTERVAL"); v != "" {
-		if t, err := strconv.Atoi(v); err == nil {
-			cfg.Probe.Interval = t
-		}
-	}
-	if v := os.Getenv("INFRA_OPS_PROBE_CONCURRENCY"); v != "" {
-		if c, err := strconv.Atoi(v); err == nil {
-			cfg.Probe.Concurrency = c
-		}
+		SSH:   SSHConfig{Timeout: 8, HostKeyPolicy: "tofu"},
+		Probe: ProbeConfig{Interval: 60, Concurrency: 5},
 	}
 }

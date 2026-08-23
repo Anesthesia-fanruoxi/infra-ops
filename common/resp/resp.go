@@ -20,6 +20,7 @@ const (
 	CodeSSHAuthFail    = 1002
 	CodeSSHHostKey     = 1003
 	CodeSSHCollectFail = 1004
+	CodePwdChangeReq   = 4031 // 首次登录必须修改默认密码
 )
 
 // R 统一响应结构。

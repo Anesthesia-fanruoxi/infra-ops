@@ -13,6 +13,8 @@ const (
 	TopicCredentialChanged = "credential.changed"
 	// TopicAuditCreated 在新的操作日志写入后发布。
 	TopicAuditCreated = "audit.created"
+	// TopicDeployProgress 在部署任务单台主机状态变化后发布。
+	TopicDeployProgress = "deploy.progress"
 )
 
 // Event 事件。

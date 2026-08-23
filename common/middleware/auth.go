@@ -3,7 +3,6 @@ package middleware
 
 import (
 	"crypto/hmac"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
@@ -95,8 +94,26 @@ func Auth(store *SessionStore) gin.HandlerFunc {
 	}
 }
 
-func generateToken() string {
-	b := make([]byte, 32)
-	rand.Read(b)
-	return base64.RawURLEncoding.EncodeToString(b)
+// SettingsReader 按键读取配置的最小接口，避免中间件依赖具体存储实现。
+type SettingsReader interface {
+	Get(key string) (string, error)
+}
+
+// RequirePasswordChanged 强制改密拦截：待改密时仅放行白名单接口。
+func RequirePasswordChanged(reader SettingsReader, mustChangeKey string, whitelist ...string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		path := c.Request.URL.Path
+		for _, p := range whitelist {
+			if path == p {
+				c.Next()
+				return
+			}
+		}
+		if v, err := reader.Get(mustChangeKey); err == nil && v == "1" {
+			resp.ErrHTTP(c, http.StatusForbidden, resp.CodePwdChangeReq, "请先修改默认密码")
+			c.Abort()
+			return
+		}
+		c.Next()
+	}
 }

@@ -26,7 +26,7 @@ func NewSSEHandler(bus *eventbus.Bus, hostRepo *store.HostRepo, credRepo *store.
 	return &sseHandler{bus: bus, hostRepo: hostRepo, credRepo: credRepo, auditRepo: auditRepo}
 }
 
-// Overview SSE 鎬昏娴侊細鎸変富鏈烘眹鎬汇€佷富鏈洪€熻銆佹搷浣滄棩蹇椾笁涓澘鍧楀垎鍒帹閫佸畬鏁村揩鐓с€?
+// Overview SSE 总览流：按主机汇总、主机速览、操作日志三个板块分别推送完整快照。
 func (h *sseHandler) Overview(c *gin.Context) {
 	if !h.prepareStream(c) {
 		return
@@ -189,7 +189,7 @@ func (h *sseHandler) sendJSONEvent(c *gin.Context, name string, data interface{}
 	c.SSEvent(name, string(payload))
 }
 
-// HostStatus 淇濈暀鍘熸湁涓绘満鐘舵€?SSE 鎺ュ彛锛屽吋瀹瑰凡鏈夎闃呮柟銆?
+// HostStatus 保留原有主机状态 SSE 接口，兼容已有订阅方。
 func (h *sseHandler) HostStatus(c *gin.Context) {
 	if !h.prepareStream(c) {
 		return
@@ -240,6 +240,108 @@ func (h *sseHandler) HostStatus(c *gin.Context) {
 			return false
 		}
 	})
+}
+
+// Audits GET /api/sse/audits：审计日志统一查询流。
+// 筛选/分页参数经 URL 传入；建连即推统计与日志快照，
+// 之后新日志匹配当前筛选时增量推送，统计随新日志刷新。
+func (h *sseHandler) Audits(c *gin.Context) {
+	if !h.prepareStream(c) {
+		return
+	}
+	q := store.AuditQuery{
+		Action:  c.Query("action"),
+		Status:  c.Query("status"),
+		Keyword: c.Query("keyword"),
+		From:    c.Query("from"),
+		To:      c.Query("to"),
+	}
+	q.Page, q.PageSize = parsePage(c)
+
+	flusher, ok := c.Writer.(http.Flusher)
+	if !ok {
+		resp.ErrHTTP(c, http.StatusInternalServerError, resp.CodeInternal, "streaming not supported")
+		return
+	}
+
+	emitSnapshot := func() {
+		if stats, err := h.auditRepo.Stats(); err == nil {
+			h.sendJSONEvent(c, "stats", stats)
+		}
+		items, total, err := h.auditRepo.List(q)
+		if err != nil {
+			return
+		}
+		if items == nil {
+			items = []model.AuditLog{}
+		}
+		h.sendJSONEvent(c, "logs", resp.PageData{List: items, Total: total, Page: q.Page, PageSize: q.PageSize})
+	}
+
+	ch := make(chan eventbus.Event, 64)
+	var subID int
+	if h.bus != nil {
+		subID = h.bus.Subscribe(eventbus.TopicAuditCreated, func(ev eventbus.Event) {
+			select {
+			case ch <- ev:
+			default:
+			}
+		})
+		defer h.bus.Unsubscribe(eventbus.TopicAuditCreated, subID)
+	}
+
+	c.SSEvent("connected", time.Now().Format(time.RFC3339))
+	emitSnapshot()
+	flusher.Flush()
+
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+	c.Stream(func(w io.Writer) bool {
+		select {
+		case ev := <-ch:
+			if entry, ok := ev.Data.(model.AuditLog); ok && matchAuditQuery(entry, q) {
+				h.sendJSONEvent(c, "append", entry)
+			}
+			if stats, err := h.auditRepo.Stats(); err == nil {
+				h.sendJSONEvent(c, "stats", stats)
+			}
+		case <-ticker.C:
+			_, _ = io.WriteString(w, ": ping\n\n")
+		case <-c.Request.Context().Done():
+			return false
+		}
+		flusher.Flush()
+		return true
+	})
+}
+
+// matchAuditQuery 内存侧筛选判定，与 store 层 SQL 条件保持一致。
+func matchAuditQuery(a model.AuditLog, q store.AuditQuery) bool {
+	if q.Action != "" && !strings.HasPrefix(a.Action, q.Action) {
+		return false
+	}
+	switch q.Status {
+	case "fail":
+		if !strings.HasSuffix(a.Action, "_fail") {
+			return false
+		}
+	case "success":
+		if strings.HasSuffix(a.Action, "_fail") {
+			return false
+		}
+	}
+	if kw := strings.TrimSpace(q.Keyword); kw != "" {
+		if !strings.Contains(a.Detail, kw) && !strings.Contains(a.RemoteIP, kw) {
+			return false
+		}
+	}
+	if q.From != "" && a.CreatedAt < q.From {
+		return false
+	}
+	if q.To != "" && a.CreatedAt > q.To {
+		return false
+	}
+	return true
 }
 
 func (h *sseHandler) emitHostsPage(c *gin.Context, tag, status, name, ip string, page, pageSize int) {
