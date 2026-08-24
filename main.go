@@ -5,12 +5,15 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
+	"time"
 
 	"golang.org/x/crypto/bcrypt"
 
 	icrypto "infra-ops/common/crypto"
 	"infra-ops/common/eventbus"
 	"infra-ops/common/middleware"
+	"infra-ops/common/netinfo"
 	"infra-ops/common/probe"
 	"infra-ops/common/sshx"
 	"infra-ops/config"
@@ -105,9 +108,28 @@ func main() {
 
 	// 启动 HTTP 服务
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
+	logNetworkInfo()
 	log.Printf("infra-ops starting on %s", addr)
 	if err := r.Run(addr); err != nil {
 		fmt.Fprintf(os.Stderr, "server error: %v\n", err)
 		os.Exit(1)
+	}
+}
+
+// logNetworkInfo 输出本机内网 IP 与公网出口 IP（如有）。
+func logNetworkInfo() {
+	local := netinfo.LocalIPv4s()
+	if len(local) > 0 {
+		log.Printf("[net] 内网IP: %s", strings.Join(local, ", "))
+	}
+	ch := make(chan string, 1)
+	go func() { ch <- netinfo.PublicIP() }()
+	select {
+	case pub := <-ch:
+		if pub != "" {
+			log.Printf("[net] 公网IP: %s", pub)
+		}
+	case <-time.After(5 * time.Second):
+		log.Printf("[net] 公网IP探测超时，已跳过")
 	}
 }
