@@ -43,11 +43,35 @@ window.HostsPage = {
       </el-table-column>
     </el-table>
     <div v-else class="hosts-card-grid" v-loading="loading">
-      <article v-for="row in list" :key="row.id" class="host-card">
-        <div class="host-card-top"><div class="host-card-title"><span class="host-card-status" :class="row.status"></span><div><h3>{{row.name}}</h3><div class="mono host-card-endpoint">{{row.ip}}:{{row.port}}</div></div></div><el-dropdown @command="command => handleCardCommand(command, row)"><el-button text class="host-card-more">...</el-button><template #dropdown><el-dropdown-menu><el-dropdown-item command="detail">查看详情</el-dropdown-item><el-dropdown-item command="test">测试连接</el-dropdown-item><el-dropdown-item command="edit">编辑主机</el-dropdown-item><el-dropdown-item command="delete" divided>删除主机</el-dropdown-item></el-dropdown-menu></template></el-dropdown></div>
-        <div class="host-card-meta"><span class="tag-badge" :class="tagClass(row.tag)">{{tagLabel(row.tag)}}</span><span class="status-badge" :class="row.status"><span class="dot"></span>{{statusText(row.status)}}</span><span class="mono host-card-spec">{{specText(row)}}</span></div>
-        <div class="host-card-metrics"><div class="host-card-metric"><span>负载</span><div class="metric"><div class="metric-bar"><div class="fill" :class="loadCls(row)" :style="{width:loadPct(row)+'%'}"></div></div><span class="metric-value">{{info(row)?loadPct(row)+'%':'-'}}</span></div></div><div class="host-card-metric"><span>内存</span><div class="metric"><div class="metric-bar"><div class="fill" :class="memCls(row)" :style="{width:memPct(row)+'%'}"></div></div><span class="metric-value">{{info(row)?memPct(row)+'%':'-'}}</span></div></div><div class="host-card-metric"><span>磁盘</span><div class="metric"><div class="metric-bar"><div class="fill" :class="diskCls(row)" :style="{width:diskPct(row)+'%'}"></div></div><span class="metric-value">{{info(row)?diskPct(row)+'%':'-'}}</span></div></div></div>
-        <div class="host-card-actions"><el-button size="small" text @click="openDetail(row)">详情</el-button><el-button size="small" text type="primary" :loading="row._testing" @click="testConn(row)">测试连接</el-button><el-button size="small" text @click="openForm(row)">编辑</el-button></div>
+      <article v-for="row in list" :key="row.id" class="host-card" :class="'st-'+row.status">
+        <header class="host-card-head">
+          <span class="host-card-status" :class="row.status"></span>
+          <div class="host-card-idbox">
+            <h3 class="host-card-name" :title="row.name">{{row.name}}</h3>
+            <span class="mono host-card-endpoint">{{row.ip}}:{{row.port}}</span>
+          </div>
+          <el-dropdown trigger="click" @command="command => handleCardCommand(command, row)">
+            <el-button text class="host-card-more">···</el-button>
+            <template #dropdown><el-dropdown-menu><el-dropdown-item command="detail">查看详情</el-dropdown-item><el-dropdown-item command="test">测试连接</el-dropdown-item><el-dropdown-item command="edit">编辑主机</el-dropdown-item><el-dropdown-item command="delete" divided>删除主机</el-dropdown-item></el-dropdown-menu></template>
+          </el-dropdown>
+        </header>
+        <div class="host-card-meta">
+          <span class="tag-badge" :class="tagClass(row.tag)">{{tagLabel(row.tag)}}</span>
+          <span class="status-badge" :class="row.status"><span class="dot"></span>{{statusText(row.status)}}</span>
+          <span v-if="row.latency_ms > 0" class="hc-latency mono">{{row.latency_ms}}ms</span>
+          <span class="mono host-card-spec">{{specText(row)}}</span>
+        </div>
+        <div v-if="info(row)" class="host-card-metrics">
+          <div class="hc-metric"><span class="hc-metric-label">负载</span><div class="metric-bar"><div class="fill" :class="loadCls(row)" :style="{width:loadPct(row)+'%'}"></div></div><span class="hc-metric-value mono">{{loadPct(row)}}%</span></div>
+          <div class="hc-metric"><span class="hc-metric-label">内存</span><div class="metric-bar"><div class="fill" :class="memCls(row)" :style="{width:memPct(row)+'%'}"></div></div><span class="hc-metric-value mono">{{memPct(row)}}%</span></div>
+          <div class="hc-metric"><span class="hc-metric-label">磁盘</span><div class="metric-bar"><div class="fill" :class="diskCls(row)" :style="{width:diskPct(row)+'%'}"></div></div><span class="hc-metric-value mono">{{diskPct(row)}}%</span></div>
+        </div>
+        <div v-else class="hc-noinfo">尚未采集到巡检数据，可点击「测试连接」获取</div>
+        <footer class="host-card-actions">
+          <button type="button" class="hca-btn" @click="openDetail(row)">详情</button>
+          <button type="button" class="hca-btn hca-btn-primary" :disabled="row._testing" @click="testConn(row)">{{row._testing ? '测试中…' : '测试连接'}}</button>
+          <button type="button" class="hca-btn" @click="openForm(row)">编辑</button>
+        </footer>
       </article>
       <empty-state v-if="!loading && !list.length" text="暂无主机" />
     </div>
@@ -56,7 +80,6 @@ window.HostsPage = {
   <el-drawer v-model="drawer" :title="detail?.name" size="480px">
       <div class="detail-section"><h4>基本信息</h4><div class="detail-grid"><div class="detail-item"><div class="label">IP</div><div class="value mono">{{detail.ip}}</div></div><div class="detail-item"><div class="label">端口</div><div class="value mono">{{detail.port}}</div></div><div class="detail-item"><div class="label">标签</div><div class="value">{{detail.tag || '其他'}}</div></div><div class="detail-item"><div class="label">状态</div><div class="value"><span class="status-badge" :class="detail.status"><span class="dot"></span>{{statusText(detail.status)}}</span></div></div></div></div>
       <div class="detail-section" v-if="info(detail)"><h4>系统信息</h4><div class="detail-grid"><div class="detail-item"><div class="label">主机名</div><div class="value mono">{{info(detail).hostname||'-'}}</div></div><div class="detail-item"><div class="label">操作系统</div><div class="value">{{info(detail).os||'-'}}</div></div><div class="detail-item"><div class="label">内核</div><div class="value mono">{{info(detail).kernel||'-'}}</div></div><div class="detail-item"><div class="label">运行时长</div><div class="value mono">{{info(detail).uptime||'-'}}</div></div></div></div>
-      <div class="detail-section" v-if="info(detail)"><h4>资源使用</h4><div class="detail-grid"><div class="detail-item"><div class="label">CPU</div><div class="value mono">{{info(detail).cpu_cores||'-'}} 核</div></div><div class="detail-item"><div class="label">内存</div><div class="metric"><div class="metric-bar" style="max-width:100%"><div class="fill" :class="memCls(detail)" :style="{width:memPct(detail)+'%'}"></div></div><span class="metric-value">{{memPct(detail)}}%</span></div></div><div class="detail-item" style="grid-column:span 2"><div class="label">磁盘</div><div class="metric"><div class="metric-bar" style="max-width:100%"><div class="fill" :class="diskCls(detail)" :style="{width:diskPct(detail)+'%'}"></div></div><span class="metric-value">{{diskPct(detail)}}%</span></div></div></div></div>
       <div class="detail-section" v-if="info(detail)"><h4>资源使用</h4><div class="detail-grid"><div class="detail-item"><div class="label">CPU</div><div class="value mono">{{info(detail).cpu_cores||'-'}} 核</div></div><div class="detail-item"><div class="label">内存</div><div class="metric"><div class="metric-bar" style="max-width:100%"><div class="fill" :class="memCls(detail)" :style="{width:memPct(detail)+'%'}"></div></div><span class="metric-value">{{memPct(detail)}}%</span></div></div><div class="detail-item" style="grid-column:span 2"><div class="label">磁盘</div><div class="metric"><div class="metric-bar" style="max-width:100%"><div class="fill" :class="diskCls(detail)" :style="{width:diskPct(detail)+'%'}"></div></div><span class="metric-value">{{diskPct(detail)}}%</span></div></div></div></div>
     </div>
   </el-drawer>
@@ -238,7 +261,7 @@ window.HostsPage = {
      errText(code) { return { 1001: 'SSH 连接失败', 1002: 'SSH 认证失败', 1003: 'host key 发生变化', 1004: '信息采集失败' }[code] || ('错误 ' + code) },
     closeResultRefresh() { this.result.show = false; this.connectSSE() },
     info(row) { if (!row.info_json || row.info_json === '{}') return null; try { return typeof row.info_json === 'string' ? JSON.parse(row.info_json) : row.info_json } catch (e) { return null } },
-    specText(row) { const i = this.info(row); if (!i) return '-'; return (i.cpu_cores||'?')+'C/'+(i.mem_total_mb||'?')+'M' },
+    specText(row) { const i = this.info(row); if (!i) return '-'; const mem = i.mem_total_mb ? (i.mem_total_mb >= 1024 ? Math.round(i.mem_total_mb/1024)+'G' : i.mem_total_mb+'M') : '?'; return (i.cpu_cores||'?')+'C/'+mem },
     loadPct(row) { const i = this.info(row); if (!i || !i.load1 || !i.cpu_cores) return 0; return Math.round(i.load1/i.cpu_cores*100) },
     memPct(row) { const i = this.info(row); return i?.mem_used_percent ? Math.round(i.mem_used_percent) : 0 },
     diskPct(row) { const i = this.info(row); if (!i?.disk?.[0]) return 0; return Math.round(i.disk[0].used_percent || 0) },
