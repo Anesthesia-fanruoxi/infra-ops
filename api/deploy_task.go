@@ -22,7 +22,7 @@ import (
 )
 
 const (
-	execTimeout   = 300 * time.Second // 单台执行超时
+	execTimeout   = 600 * time.Second // 单台执行超时（安装类脚本耗时较长）
 	outputLimit   = 64 << 10          // 单台输出上限 64KB
 	runConcurrent = 5                 // 并发执行数
 )
@@ -262,6 +262,13 @@ func (h *deployHandler) execute(taskID int64, script string) {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
+
+			// 先发布 running 事件，避免长任务执行期间前端一直显示"等待中"
+			if h.bus != nil {
+				h.bus.Publish(eventbus.TopicDeployProgress, deployProgress{
+					TaskID: taskID, HostID: rec.HostID, Status: "running", Total: len(records), TaskStatus: "running",
+				})
+			}
 
 			output, execErr := h.execOnHost(rec.HostID, script)
 			status, errMsg := "success", ""

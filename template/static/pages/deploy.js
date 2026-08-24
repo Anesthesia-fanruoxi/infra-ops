@@ -182,6 +182,10 @@ window.DeployPage = {
       return this.hosts.filter(h => (h.name||'').toLowerCase().includes(kw) || (h.ip||'').toLowerCase().includes(kw) || (h.tag||'').toLowerCase().includes(kw))
     },
     selectedHosts() { return this.hosts.filter(h => this.selectedHostIds.has(h.id)) },
+    paramsValid() {
+      if (!this.selectedTemplate) return false
+      return (this.selectedTemplate.variables || []).every(v => !v.required || String(this.params[v.name] || '').trim() !== '')
+    },
     taskStatusType() {
       if (!this.taskDetail) return 'info'
       const s = this.taskDetail.status
@@ -202,7 +206,8 @@ window.DeployPage = {
       if (this.selectedTemplate?.variables) {
         this.selectedTemplate.variables.forEach(v => { this.params[v.name] = v.default || '' })
       }
-    }
+    },
+    paramsValid(ok) { if (ok && this.step < 3) this.step = 3 }
   },
   methods: {
     /* ===== 加载 ===== */
@@ -269,7 +274,18 @@ window.DeployPage = {
           }
         } catch (err) { /* */ }
       })
-      source.addEventListener('done', () => { this.running = false; this.closeSse(); this.loadTasks() })
+      source.addEventListener('done', (e) => {
+        try {
+          const d = JSON.parse(e.data)
+          if (d && d.task_status) {
+            this.taskDetail.total = d.total || this.taskDetail.total
+            this.taskDetail.success_cnt = d.success_cnt
+            this.taskDetail.fail_cnt = d.fail_cnt
+            this.taskDetail.status = d.task_status
+          }
+        } catch (err) { /* */ }
+        this.running = false; this.closeSse(); this.loadTasks()
+      })
       source.onerror = () => { /* EventSource auto-reconnect */ }
     },
     closeSse() { if (this.taskSse) { this.taskSse.close(); this.taskSse = null } },
@@ -285,7 +301,7 @@ window.DeployPage = {
         }
       } catch (e) { ElMessage.error('加载任务详情失败') }
     },
-    hostStatusCls(s) { if (s === 'success') return 'online'; if (s === 'failed') return 'offline'; return 'unverified' },
+    hostStatusCls(s) { if (s === 'success') return 'online'; if (s === 'failed') return 'offline'; if (s === 'running') return 'running'; return 'unverified' },
     hostStatusText(s) { return { pending: '等待中', running: '执行中', success: '成功', failed: '失败' }[s] || s },
     taskTagType(s) { if (s === 'success') return 'success'; if (s === 'failed' || s === 'partial') return 'danger'; if (s === 'running') return 'warning'; return 'info' },
     taskStatusLabel(s) { return { running: '执行中', success: '已完成', partial: '部分成功', failed: '失败' }[s] || s },

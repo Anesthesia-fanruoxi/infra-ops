@@ -62,7 +62,8 @@ func Migrate() error {
 			return err
 		}
 	}
-	return nil
+	// 内置模板随版本演进，每次启动幂等刷新（缺失则插入，脚本有变更则更新）
+	return seedBuiltinTemplates(DB)
 }
 
 func ensureMigrationsTable() error {

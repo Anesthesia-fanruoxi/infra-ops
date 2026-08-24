@@ -32,9 +32,17 @@ window.CredentialsPage = {
   <el-dialog v-model="dialog" :title="form.id?'编辑凭据':'新增凭据'" width="560px">
     <el-form :model="form" label-position="top">
       <el-form-item label="名称" required><el-input v-model="form.name" /></el-form-item>
-      <el-form-item label="类型"><el-select v-model="form.type" style="width:100%"><el-option label="私钥" value="private_key" /><el-option label="密码" value="password" /></el-select></el-form-item>
+      <el-form-item label="类型">
+        <el-radio-group v-model="form.type" @change="form.secret=''">
+          <el-radio value="private_key" border>私钥</el-radio>
+          <el-radio value="password" border>密码</el-radio>
+        </el-radio-group>
+      </el-form-item>
       <el-form-item label="用户名" required><el-input v-model="form.username" /></el-form-item>
-      <el-form-item label="密钥/密码" required><el-input v-model="form.secret" type="password" show-password :placeholder="form.id?'留空则不修改':''" /></el-form-item>
+      <el-form-item :label="form.type==='private_key'?'私钥':'密码'" required>
+        <el-input v-if="form.type==='private_key'" v-model="form.secret" type="textarea" :rows="4" :placeholder="form.id?'留空则不修改':''" />
+        <el-input v-else v-model="form.secret" type="password" show-password :placeholder="form.id?'留空则不修改':''" />
+      </el-form-item>
       <el-form-item label="备注"><el-input v-model="form.remark" type="textarea" :rows="2" /></el-form-item>
     </el-form>
     <template #footer><el-button @click="dialog=false">取消</el-button><el-button type="primary" :loading="saving" @click="save">保存</el-button></template>

@@ -71,7 +71,7 @@ func migrateV6(db *sql.DB) error {
 			return err
 		}
 	}
-	return seedBuiltinTemplates(db)
+	return nil
 }
 
 // migrateV7 创建定时任务表并为部署任务补充来源字段。
