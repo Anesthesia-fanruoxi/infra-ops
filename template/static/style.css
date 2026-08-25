@@ -919,6 +919,10 @@ a { text-decoration: none; }
 .deploy-detail-meta { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; font-size: 13px; color: var(--text-sub); }
 /* 逐主机变量面板 */
 .deploy-host-vars { margin-top: 14px; border: 1px solid var(--border); border-radius: var(--radius-btn); padding: 12px 14px; background: var(--bg-soft); }
+.deploy-step-next { display: flex; justify-content: flex-end; margin-top: 10px; }
+.deploy-var-missing { font-size: 11px; color: var(--danger); font-weight: 600; }
+.deploy-action-bar { position: relative; }
+.deploy-action-hint { position: absolute; left: 50%; transform: translateX(-50%); bottom: -18px; font-size: 11px; color: var(--danger); white-space: nowrap; }
 .deploy-host-vars-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
 .deploy-host-vars-title { font-weight: 600; font-size: 13px; }
 .deploy-var-hint { font-weight: 400; font-size: 11px; color: var(--text-faint); margin-left: 6px; }

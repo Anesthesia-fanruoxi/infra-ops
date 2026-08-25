@@ -8,7 +8,7 @@ window.DeployPage = {
     <div class="deploy-hero-content">
       <span class="deploy-eyebrow">DEPLOY CENTER</span>
       <h1>基础建设</h1>
-      <p>选择模板、配置参数、批量执行部署任务</p>
+      <p>选择模板、勾选主机、逐台定制变量、批量执行</p>
     </div>
   </section>
 
@@ -32,30 +32,12 @@ window.DeployPage = {
       </div>
     </div>
 
-    <!-- Step 2: 填参数 -->
+    <!-- Step 2: 勾选主机 -->
     <div class="deploy-step" :class="{'deploy-step--active': step===2, 'deploy-step--done': step>2, 'deploy-step--disabled': step<2}">
       <div class="deploy-step-num"><span>2</span></div>
       <div class="deploy-step-body">
-        <h3>配置参数</h3>
-        <div v-if="step<2" class="deploy-placeholder">请先选择模板</div>
-        <div v-else-if="!selectedTemplate.variables || !selectedTemplate.variables.length" class="deploy-placeholder deploy-placeholder--ok">该模板无需参数</div>
-        <div v-else class="deploy-params">
-          <el-form label-position="top" size="default">
-            <el-form-item v-for="(v,i) in selectedTemplate.variables" :key="v.name" :label="v.label || v.name" :required="v.required">
-              <el-input v-model="params[v.name]" :placeholder="v.default || '请输入' + (v.label || v.name)" />
-              <div v-if="v.default" class="deploy-param-hint">默认值：{{v.default}}</div>
-            </el-form-item>
-          </el-form>
-        </div>
-      </div>
-    </div>
-
-    <!-- Step 3: 选主机 + 执行 -->
-    <div class="deploy-step" :class="{'deploy-step--active': step===3, 'deploy-step--disabled': step<3}">
-      <div class="deploy-step-num"><span>3</span></div>
-      <div class="deploy-step-body">
         <h3>选择主机 <span v-if="selectedHosts.length" class="deploy-sel-count">已选 {{selectedHosts.length}} 台</span></h3>
-        <div v-if="step<3" class="deploy-placeholder">请先完成前两步</div>
+        <div v-if="step<2" class="deploy-placeholder">请先选择模板</div>
         <div v-else>
           <div class="deploy-host-toolbar">
             <el-input v-model="hostFilter" placeholder="搜索主机名 / IP / 标签" clearable size="small" style="width:220px" />
@@ -73,42 +55,55 @@ window.DeployPage = {
             </label>
             <div v-if="!filteredHosts.length && !hostsLoading" class="deploy-placeholder">无匹配主机</div>
           </div>
-
-          <!-- 逐主机变量：默认继承上方参数，可逐台覆盖 -->
-          <div v-if="selectedTemplate && selectedHosts.length" class="deploy-host-vars">
-            <div class="deploy-host-vars-head">
-              <span class="deploy-host-vars-title">逐主机变量 <span class="deploy-var-hint">默认继承上方参数，可逐台单独覆盖</span></span>
-              <div v-if="hasTplVars">
-                <el-button size="small" @click="resetAllHostParams">全部重置为默认</el-button>
-                <el-button size="small" :disabled="selectedHosts.length < 2" @click="copyFirstToAll">复制首台到其他</el-button>
-              </div>
-            </div>
-            <template v-if="hasTplVars">
-              <div class="deploy-host-var-row" v-for="h in selectedHosts" :key="h.id">
-                <div class="deploy-host-var-rowhead">
-                  <span class="deploy-host-name">{{h.name}}</span>
-                  <span class="mono deploy-host-ip">{{h.ip}}</span>
-                  <el-button size="small" text type="primary" @click="resetHostParams(h.id)">重置本机</el-button>
-                </div>
-                <div class="deploy-host-var-fields">
-                  <div class="deploy-host-var-field" v-for="v in selectedTemplate.variables" :key="v.name">
-                    <label :title="v.name">{{v.label || v.name}}</label>
-                    <el-input size="small" :model-value="hostParamValue(h.id, v)" @input="val => onHostParamInput(h.id, v, val)" :placeholder="v.default || '继承默认'" />
-                  </div>
-                </div>
-              </div>
-            </template>
-            <div v-else class="deploy-placeholder deploy-placeholder--ok">该模板无需变量：已选 {{selectedHosts.length}} 台主机将执行相同脚本</div>
+          <div v-if="selectedHosts.length" class="deploy-step-next">
+            <el-button type="primary" @click="step = 3">下一步：逐台变量</el-button>
           </div>
         </div>
       </div>
     </div>
 
+    <!-- Step 3: 逐台变量 -->
+    <div class="deploy-step" :class="{'deploy-step--active': step===3, 'deploy-step--disabled': step<3}">
+      <div class="deploy-step-num"><span>3</span></div>
+      <div class="deploy-step-body">
+        <h3>自定义变量 <span v-if="hasTplVars && selectedHosts.length" class="deploy-sel-count">{{selectedHosts.length}} 台主机</span></h3>
+        <div v-if="step<3 || !selectedHosts.length" class="deploy-placeholder">请先完成前两步</div>
+        <template v-else>
+          <!-- 逐主机变量：默认继承模板默认值，可逐台覆盖 -->
+          <div v-if="hasTplVars" class="deploy-host-vars">
+            <div class="deploy-host-vars-head">
+              <span class="deploy-host-vars-title">每台主机单独设置 <span class="deploy-var-hint">留空则使用模板默认值</span></span>
+              <div>
+                <el-button size="small" @click="resetAllHostParams">全部重置为默认</el-button>
+                <el-button size="small" :disabled="selectedHosts.length < 2" @click="copyFirstToAll">复制首台到其他</el-button>
+              </div>
+            </div>
+            <div class="deploy-host-var-row" v-for="h in selectedHosts" :key="h.id">
+              <div class="deploy-host-var-rowhead">
+                <span class="deploy-host-name">{{h.name}}</span>
+                <span class="mono deploy-host-ip">{{h.ip}}</span>
+                <span v-if="hostMissingRequired(h).length" class="deploy-var-missing">必填未填</span>
+                <el-button size="small" text type="primary" @click="resetHostParams(h.id)">重置本机</el-button>
+              </div>
+              <div class="deploy-host-var-fields">
+                <div class="deploy-host-var-field" v-for="v in selectedTemplate.variables" :key="v.name">
+                  <label :title="v.name">{{v.label || v.name}}<b v-if="v.required">*</b></label>
+                  <el-input size="small" :model-value="hostParamValue(h.id, v)" @input="val => onHostParamInput(h.id, v, val)" :placeholder="v.default || '继承默认'" />
+                </div>
+              </div>
+            </div>
+          </div>
+          <div v-else class="deploy-placeholder deploy-placeholder--ok">该模板无需变量，已选 {{selectedHosts.length}} 台主机将执行相同脚本，直接开始部署即可</div>
+        </template>
+      </div>
+    </div>
+
     <!-- 执行按钮 -->
     <div v-if="step>=3" class="deploy-action-bar">
-      <el-button type="primary" size="large" :loading="deploying" :disabled="!selectedHosts.length" @click="confirmDeploy">
+      <el-button type="primary" size="large" :loading="deploying" :disabled="!varsReady" @click="confirmDeploy">
         开始部署
       </el-button>
+      <div v-if="!varsReady" class="deploy-action-hint">还有 {{missingHosts.length}} 台主机的必填变量未填写</div>
     </div>
   </div>
 
@@ -198,8 +193,8 @@ window.DeployPage = {
   data() {
     return {
       step: 1, templates: [], tplLoading: false, tplLoaded: false, selectedTemplateId: null, selectedTemplate: null,
-      params: {}, hosts: [], hostsLoading: false, hostsLoaded: false, selectedHostIds: new Set(), hostFilter: '', hostSort: { field: 'name', order: 'asc' },
-      hostParams: {}, // 逐主机变量覆盖 host_id -> {name: value}
+      hosts: [], hostsLoading: false, hostsLoaded: false, selectedHostIds: new Set(), hostFilter: '', hostSort: { field: 'name', order: 'asc' },
+      hostParams: {}, // 逐主机变量覆盖 host_id -> {name: value}；留空字段=继承模板默认
       deploying: false, running: false,
       taskDetail: null, taskHosts: [], taskSse: null,
       tasks: [], tasksLoading: false,
@@ -217,9 +212,14 @@ window.DeployPage = {
     },
     selectedHosts() { return this.hosts.filter(h => this.selectedHostIds.has(h.id)) },
     hasTplVars() { return !!(this.selectedTemplate && this.selectedTemplate.variables && this.selectedTemplate.variables.length) },
-    paramsValid() {
-      if (!this.selectedTemplate) return false
-      return (this.selectedTemplate.variables || []).every(v => !v.required || String(this.params[v.name] || '').trim() !== '')
+    // 存在必填变量未填的主机列表
+    missingHosts() {
+      if (!this.hasTplVars) return []
+      return this.selectedHosts.filter(h => this.hostMissingRequired(h).length > 0)
+    },
+    varsReady() {
+      if (!this.selectedHosts.length || !this.selectedTemplate) return false
+      return this.missingHosts.length === 0
     },
     taskStatusType() {
       if (!this.taskDetail) return 'info'
@@ -237,13 +237,10 @@ window.DeployPage = {
     selectedTemplateId(id) {
       this.step = id ? 2 : 1
       this.selectedTemplate = this.templates.find(t => t.id === id) || null
-      this.params = {}
-      if (this.selectedTemplate?.variables) {
-        this.selectedTemplate.variables.forEach(v => { this.params[v.name] = v.default || '' })
-      }
+      this.hostParams = {} // 切换模板后逐台变量全部失效
+      if (id) this.loadHosts() // 第二步需要主机列表
     },
-    paramsValid(ok) { if (ok && this.step < 3) this.step = 3 },
-    // 进入第三步时才按需加载主机列表
+    // 进入第三步时若主机列表尚未加载则补拉（直接点步骤条的场景）
     step(v) { if (v === 3 && !this.hostsLoaded && !this.hostsLoading) this.loadHosts() }
   },
   methods: {
@@ -273,16 +270,23 @@ window.DeployPage = {
       const cmp = sort.field === 'ip' ? cmpHostIP : cmpHostName
       return [...list].sort((a, b) => desc ? cmp(b, a) : cmp(a, b))
     },
-    toggleHost(id) { const s = new Set(this.selectedHostIds); s.has(id) ? s.delete(id) : s.add(id); this.selectedHostIds = s; this.step = 3 },
+    toggleHost(id) { const s = new Set(this.selectedHostIds); s.has(id) ? s.delete(id) : s.add(id); this.selectedHostIds = s },
     toggleSelectAll() {
       if (this.selectedHosts.length === this.filteredHosts.length) { this.selectedHostIds = new Set() }
-      else { this.selectedHostIds = new Set(this.filteredHosts.map(h => h.id)); this.step = 3 }
+      else { this.selectedHostIds = new Set(this.filteredHosts.map(h => h.id)) }
     },
     /* ===== 逐主机变量 ===== */
     hostParamValue(hostId, v) {
       const hp = this.hostParams[hostId]
       if (hp && Object.prototype.hasOwnProperty.call(hp, v.name)) return hp[v.name]
-      return this.params[v.name] !== undefined && this.params[v.name] !== '' ? this.params[v.name] : (v.default || '')
+      return v.default || ''
+    },
+    // 该主机缺失的必填变量名列表
+    hostMissingRequired(h) {
+      if (!this.hasTplVars) return []
+      return (this.selectedTemplate.variables || [])
+        .filter(v => v.required && String(this.hostParamValue(h.id, v)).trim() === '')
+        .map(v => v.label || v.name)
     },
     onHostParamInput(hostId, v, val) {
       const cur = this.hostParams[hostId] ? { ...this.hostParams[hostId] } : {}
@@ -323,7 +327,6 @@ window.DeployPage = {
           template_id: this.selectedTemplateId,
           // 按页面当前显示顺序提交（排序后全选时序号跟随该顺序，供 {{__seq}} 批量命名使用）
           host_ids: this.filteredHosts.filter(h => this.selectedHostIds.has(h.id)).map(h => h.id),
-          params: this.params,
           host_params: this.buildHostParams()
         })
         if (r.code === 0) {
