@@ -39,6 +39,17 @@ a { text-decoration: none; }
 .avatar { width: 28px; height: 28px; border-radius: 50%; background: var(--brand-soft); color: var(--brand); display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 600; }
 .content { flex: 1; overflow-y: auto; padding: 32px; }
 .content-inner { min-width: 0; }
+/* 标签页栏 */
+.tab-bar { display: flex; align-items: center; gap: 4px; padding: 10px 24px 0; border-bottom: 1px solid var(--border); background: transparent; overflow-x: auto; scrollbar-width: none; }
+.tab-bar::-webkit-scrollbar { display: none; }
+.tab-item { display: inline-flex; align-items: center; gap: 8px; padding: 7px 10px 7px 14px; font-size: 13px; color: var(--text-sub); border: 1px solid transparent; border-bottom: none; border-radius: 8px 8px 0 0; cursor: pointer; user-select: none; white-space: nowrap; transition: background .12s, color .12s; }
+.tab-item:hover { background: var(--bg-hover); color: var(--text-main); }
+.tab-item.active { background: var(--bg-card, #fff); border-color: var(--border); color: var(--text-main); font-weight: 600; position: relative; top: 1px; }
+.tab-label { pointer-events: none; }
+.tab-actions { display: inline-flex; align-items: center; gap: 2px; opacity: 0; transition: opacity .12s; }
+.tab-item:hover .tab-actions, .tab-item.active .tab-actions { opacity: 1; }
+.tab-btn { font-size: 13px; padding: 3px; border-radius: 4px; color: var(--text-faint); }
+.tab-btn:hover { color: var(--brand); background: var(--bg-hover); }
 .page-fade { animation: pageIn .25s ease; }
 @keyframes pageIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 
@@ -919,6 +930,14 @@ a { text-decoration: none; }
 .deploy-detail-meta { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; font-size: 13px; color: var(--text-sub); }
 /* 逐主机变量面板 */
 .deploy-host-vars { margin-top: 14px; border: 1px solid var(--border); border-radius: var(--radius-btn); padding: 12px 14px; background: var(--bg-soft); }
+/* 基础建设：hero 右侧新建按钮 + 向导弹框 */
+.deploy-hero-content { display: flex; }
+.deploy-hero-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; width: 100%; }
+.deploy-new-btn { height: 42px; padding: 0 22px; font-size: 14px; }
+.deploy-host-list--dialog { max-height: 320px; }
+.deploy-host-vars-list { max-height: 380px; overflow-y: auto; border: 1px solid var(--border); border-radius: var(--radius-btn); padding: 4px 14px; background: var(--bg-soft); }
+.deploy-wizard-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.deploy-action-hint-inline { font-size: 12px; color: var(--danger); }
 .deploy-step-next { display: flex; justify-content: flex-end; margin-top: 10px; }
 .deploy-var-missing { font-size: 11px; color: var(--danger); font-weight: 600; }
 .deploy-action-bar { position: relative; }

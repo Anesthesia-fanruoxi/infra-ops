@@ -6,106 +6,105 @@ window.DeployPage = {
     <div class="deploy-hero-grid"></div>
     <div class="deploy-hero-glow"></div>
     <div class="deploy-hero-content">
-      <span class="deploy-eyebrow">DEPLOY CENTER</span>
-      <h1>基础建设</h1>
-      <p>选择模板、勾选主机、逐台定制变量、批量执行</p>
+      <div class="deploy-hero-row">
+        <div>
+          <span class="deploy-eyebrow">DEPLOY CENTER</span>
+          <h1>基础建设</h1>
+          <p>历史任务回溯 · 三步创建批量部署</p>
+        </div>
+        <el-button type="primary" size="large" class="deploy-new-btn" @click="openWizard">
+          <el-icon style="margin-right:6px"><Plus /></el-icon>新建任务
+        </el-button>
+      </div>
     </div>
   </section>
 
-  <!-- 三步向导 -->
-  <div class="page-card deploy-wizard">
+  <!-- 新建任务：三步引导弹框 -->
+  <el-dialog v-model="wizardVisible" title="新建部署任务" width="900px" :close-on-click-modal="false" @closed="resetWizard">
+    <el-steps :active="step - 1" finish-status="success" align-center style="margin-bottom:20px">
+      <el-step title="选择模板" />
+      <el-step title="选择主机" />
+      <el-step title="自定义变量" />
+    </el-steps>
+
     <!-- Step 1: 选模板 -->
-    <div class="deploy-step" :class="{'deploy-step--active': step===1, 'deploy-step--done': step>1}">
-      <div class="deploy-step-num"><span>1</span></div>
-      <div class="deploy-step-body">
-        <h3>选择模板</h3>
-        <el-select v-model="selectedTemplateId" placeholder="请选择部署模板" style="width:100%" @change="onTemplateChange" :disabled="running" :loading="tplLoading" loading-text="模板加载中…" @visible-change="onTplDropdown">
-          <el-option v-for="t in templates" :key="t.id" :label="t.name" :value="t.id">
-            <span>{{t.name}}</span><span style="float:right;color:var(--text-faint);font-size:12px">{{(t.variables||[]).length}} 个变量</span>
-          </el-option>
-        </el-select>
-        <div v-if="tplLoading && !templates.length" class="deploy-placeholder">模板列表加载中…</div>
-        <div v-if="selectedTemplate" class="deploy-tpl-desc">
-          <p v-if="selectedTemplate.description">{{selectedTemplate.description}}</p>
-          <span v-if="selectedTemplate.variables && selectedTemplate.variables.length" class="deploy-var-count">需要填写 {{selectedTemplate.variables.length}} 个参数</span>
-        </div>
+    <div v-show="step===1">
+      <el-select v-model="selectedTemplateId" placeholder="请选择部署模板" style="width:100%" @change="onTemplateChange" :loading="tplLoading" loading-text="模板加载中…" @visible-change="onTplDropdown">
+        <el-option v-for="t in templates" :key="t.id" :label="t.name" :value="t.id">
+          <span>{{t.name}}</span><span style="float:right;color:var(--text-faint);font-size:12px">{{(t.variables||[]).length}} 个变量</span>
+        </el-option>
+      </el-select>
+      <div v-if="tplLoading && !templates.length" class="deploy-placeholder">模板列表加载中…</div>
+      <div v-if="selectedTemplate" class="deploy-tpl-desc">
+        <p v-if="selectedTemplate.description">{{selectedTemplate.description}}</p>
+        <span v-if="(selectedTemplate.variables||[]).length" class="deploy-var-count">包含 {{selectedTemplate.variables.length}} 个变量，可在第三步逐台填写</span>
       </div>
     </div>
 
     <!-- Step 2: 勾选主机 -->
-    <div class="deploy-step" :class="{'deploy-step--active': step===2, 'deploy-step--done': step>2, 'deploy-step--disabled': step<2}">
-      <div class="deploy-step-num"><span>2</span></div>
-      <div class="deploy-step-body">
-        <h3>选择主机 <span v-if="selectedHosts.length" class="deploy-sel-count">已选 {{selectedHosts.length}} 台</span></h3>
-        <div v-if="step<2" class="deploy-placeholder">请先选择模板</div>
-        <div v-else>
-          <div class="deploy-host-toolbar">
-            <el-input v-model="hostFilter" placeholder="搜索主机名 / IP / 标签" clearable size="small" style="width:220px" />
-            <el-select v-model="hostSort.field" size="small" style="width:100px"><el-option label="按主机名" value="name" /><el-option label="按 IP" value="ip" /></el-select>
-            <el-button size="small" @click="toggleHostSortOrder">{{hostSort.order==='asc' ? '↑ 升序' : '↓ 降序'}}</el-button>
-            <el-button size="small" @click="toggleSelectAll">{{ selectedHosts.length === filteredHosts.length ? '取消全选' : '全选' }}</el-button>
-          </div>
-          <div class="deploy-host-list" v-loading="hostsLoading">
-            <label v-for="h in filteredHosts" :key="h.id" class="deploy-host-item" :class="{'deploy-host-item--sel': selectedHostIds.has(h.id)}">
-              <el-checkbox :model-value="selectedHostIds.has(h.id)" @change="toggleHost(h.id)" :disabled="running" />
-              <span class="deploy-host-name">{{h.name}}</span>
-              <span class="mono deploy-host-ip">{{h.ip}}</span>
-              <span class="tag-badge other" style="font-size:10px">{{h.tag || 'other'}}</span>
-              <span class="status-badge" :class="h.status"><span class="dot"></span>{{h.status==='online'?'在线':h.status==='offline'?'离线':'未验证'}}</span>
-            </label>
-            <div v-if="!filteredHosts.length && !hostsLoading" class="deploy-placeholder">无匹配主机</div>
-          </div>
-          <div v-if="selectedHosts.length" class="deploy-step-next">
-            <el-button type="primary" @click="step = 3">下一步：逐台变量</el-button>
-          </div>
-        </div>
+    <div v-show="step===2">
+      <div class="deploy-host-toolbar">
+        <el-input v-model="hostFilter" placeholder="搜索主机名 / IP / 标签" clearable size="small" style="width:220px" />
+        <el-select v-model="hostSort.field" size="small" style="width:100px"><el-option label="按主机名" value="name" /><el-option label="按 IP" value="ip" /></el-select>
+        <el-button size="small" @click="toggleHostSortOrder">{{hostSort.order==='asc' ? '↑ 升序' : '↓ 降序'}}</el-button>
+        <el-button size="small" @click="toggleSelectAll">{{ selectedHosts.length === filteredHosts.length ? '取消全选' : '全选' }}</el-button>
+        <span class="deploy-sel-count">已选 {{selectedHosts.length}} 台</span>
+      </div>
+      <div class="deploy-host-list deploy-host-list--dialog" v-loading="hostsLoading">
+        <label v-for="h in filteredHosts" :key="h.id" class="deploy-host-item" :class="{'deploy-host-item--sel': selectedHostIds.has(h.id)}">
+          <el-checkbox :model-value="selectedHostIds.has(h.id)" @change="toggleHost(h.id)" />
+          <span class="deploy-host-name">{{h.name}}</span>
+          <span class="mono deploy-host-ip">{{h.ip}}</span>
+          <span class="tag-badge other" style="font-size:10px">{{h.tag || 'other'}}</span>
+          <span class="status-badge" :class="h.status"><span class="dot"></span>{{h.status==='online'?'在线':h.status==='offline'?'离线':'未验证'}}</span>
+        </label>
+        <div v-if="!filteredHosts.length && !hostsLoading" class="deploy-placeholder">无匹配主机</div>
       </div>
     </div>
 
     <!-- Step 3: 逐台变量 -->
-    <div class="deploy-step" :class="{'deploy-step--active': step===3, 'deploy-step--disabled': step<3}">
-      <div class="deploy-step-num"><span>3</span></div>
-      <div class="deploy-step-body">
-        <h3>自定义变量 <span v-if="hasTplVars && selectedHosts.length" class="deploy-sel-count">{{selectedHosts.length}} 台主机</span></h3>
-        <div v-if="step<3 || !selectedHosts.length" class="deploy-placeholder">请先完成前两步</div>
-        <template v-else>
-          <!-- 逐主机变量：默认继承模板默认值，可逐台覆盖 -->
-          <div v-if="hasTplVars" class="deploy-host-vars">
-            <div class="deploy-host-vars-head">
-              <span class="deploy-host-vars-title">每台主机单独设置 <span class="deploy-var-hint">留空则使用模板默认值</span></span>
-              <div>
-                <el-button size="small" @click="resetAllHostParams">全部重置为默认</el-button>
-                <el-button size="small" :disabled="selectedHosts.length < 2" @click="copyFirstToAll">复制首台到其他</el-button>
-              </div>
+    <div v-show="step===3">
+      <template v-if="hasTplVars">
+        <div class="deploy-host-vars-head" style="margin-bottom:10px">
+          <span class="deploy-host-vars-title">每台主机单独设置 <span class="deploy-var-hint">留空则使用模板默认值</span></span>
+          <div>
+            <el-button size="small" @click="resetAllHostParams">全部重置为默认</el-button>
+            <el-button size="small" :disabled="selectedHosts.length < 2" @click="copyFirstToAll">复制首台到其他</el-button>
+          </div>
+        </div>
+        <div class="deploy-host-vars-list">
+          <div class="deploy-host-var-row" v-for="h in selectedHosts" :key="h.id">
+            <div class="deploy-host-var-rowhead">
+              <span class="deploy-host-name">{{h.name}}</span>
+              <span class="mono deploy-host-ip">{{h.ip}}</span>
+              <span v-if="hostMissingRequired(h).length" class="deploy-var-missing">必填未填</span>
+              <el-button size="small" text type="primary" @click="resetHostParams(h.id)">重置本机</el-button>
             </div>
-            <div class="deploy-host-var-row" v-for="h in selectedHosts" :key="h.id">
-              <div class="deploy-host-var-rowhead">
-                <span class="deploy-host-name">{{h.name}}</span>
-                <span class="mono deploy-host-ip">{{h.ip}}</span>
-                <span v-if="hostMissingRequired(h).length" class="deploy-var-missing">必填未填</span>
-                <el-button size="small" text type="primary" @click="resetHostParams(h.id)">重置本机</el-button>
-              </div>
-              <div class="deploy-host-var-fields">
-                <div class="deploy-host-var-field" v-for="v in selectedTemplate.variables" :key="v.name">
-                  <label :title="v.name">{{v.label || v.name}}<b v-if="v.required">*</b></label>
-                  <el-input size="small" :model-value="hostParamValue(h.id, v)" @input="val => onHostParamInput(h.id, v, val)" :placeholder="v.default || '继承默认'" />
-                </div>
+            <div class="deploy-host-var-fields">
+              <div class="deploy-host-var-field" v-for="v in selectedTemplate.variables" :key="v.name">
+                <label :title="v.name">{{v.label || v.name}}<b v-if="v.required">*</b></label>
+                <el-input size="small" :model-value="hostParamValue(h.id, v)" @input="val => onHostParamInput(h.id, v, val)" :placeholder="v.default || '继承默认'" />
               </div>
             </div>
           </div>
-          <div v-else class="deploy-placeholder deploy-placeholder--ok">该模板无需变量，已选 {{selectedHosts.length}} 台主机将执行相同脚本，直接开始部署即可</div>
-        </template>
-      </div>
+        </div>
+      </template>
+      <div v-else class="deploy-placeholder deploy-placeholder--ok">该模板无需变量，已选 {{selectedHosts.length}} 台主机将执行相同脚本，直接开始部署即可</div>
     </div>
 
-    <!-- 执行按钮 -->
-    <div v-if="step>=3" class="deploy-action-bar">
-      <el-button type="primary" size="large" :loading="deploying" :disabled="!varsReady" @click="confirmDeploy">
-        开始部署
-      </el-button>
-      <div v-if="!varsReady" class="deploy-action-hint">还有 {{missingHosts.length}} 台主机的必填变量未填写</div>
-    </div>
-  </div>
+    <template #footer>
+      <div class="deploy-wizard-footer">
+        <span v-if="step===3 && hasTplVars && missingHosts.length" class="deploy-action-hint-inline">还有 {{missingHosts.length}} 台主机的必填变量未填写</span>
+        <div>
+          <el-button @click="wizardVisible=false">取消</el-button>
+          <el-button v-if="step>1" @click="step--">上一步</el-button>
+          <el-button v-if="step===1" type="primary" :disabled="!selectedTemplateId" @click="goStep(2)">下一步</el-button>
+          <el-button v-if="step===2" type="primary" :disabled="!selectedHosts.length" @click="goStep(3)">下一步</el-button>
+          <el-button v-if="step===3" type="primary" :loading="deploying" :disabled="!varsReady" @click="confirmDeploy">开始部署</el-button>
+        </div>
+      </div>
+    </template>
+  </el-dialog>
 
   <!-- 实时进度区 -->
   <div v-if="taskDetail" class="page-card deploy-progress-card">
@@ -145,7 +144,10 @@ window.DeployPage = {
 
   <!-- 历史任务 -->
   <div class="page-card deploy-history">
-    <div class="card-header"><span class="title">历史任务</span></div>
+    <div class="card-header">
+      <span class="title">历史执行任务</span>
+      <el-button size="small" text @click="loadTasks"><el-icon style="margin-right:4px"><Refresh /></el-icon>刷新</el-button>
+    </div>
     <el-table :data="tasks" style="width:100%" v-loading="tasksLoading" class="deploy-task-table" @row-click="viewTaskDetail">
       <el-table-column label="任务 ID" width="90">
         <template #default="{row}"><span class="mono">#{{row.id}}</span></template>
@@ -196,6 +198,7 @@ window.DeployPage = {
       hosts: [], hostsLoading: false, hostsLoaded: false, selectedHostIds: new Set(), hostFilter: '', hostSort: { field: 'name', order: 'asc' },
       hostParams: {}, // 逐主机变量覆盖 host_id -> {name: value}；留空字段=继承模板默认
       deploying: false, running: false,
+      wizardVisible: false,
       taskDetail: null, taskHosts: [], taskSse: null,
       tasks: [], tasksLoading: false,
       detailVisible: false, detailTask: null, detailHosts: []
@@ -312,6 +315,23 @@ window.DeployPage = {
       this.selectedHosts.forEach(h => { if (this.hostParams[h.id]) o[h.id] = this.hostParams[h.id] })
       return o
     },
+    /* ===== 新建任务向导 ===== */
+    openWizard() {
+      this.loadTemplates()
+      this.wizardVisible = true
+    },
+    goStep(n) {
+      if (n >= 2) this.loadHosts() // 主机列表懒加载（已加载则跳过）
+      this.step = n
+    },
+    resetWizard() {
+      this.step = 1
+      this.selectedTemplateId = null
+      this.selectedTemplate = null
+      this.hostParams = {}
+      this.selectedHostIds = new Set()
+      this.hostFilter = ''
+    },
     /* ===== 部署 ===== */
     async confirmDeploy() {
       if (!this.selectedHosts.length) { ElMessage.warning('请至少选择一台主机'); return }
@@ -331,10 +351,11 @@ window.DeployPage = {
         })
         if (r.code === 0) {
           ElMessage.success('部署任务已创建')
+          this.wizardVisible = false
           this.taskDetail = { id: r.data.task_id, status: 'running', total: this.selectedHosts.length, success_cnt: 0, fail_cnt: 0 }
           this.taskHosts = this.selectedHosts.map(h => ({ host_id: h.id, host_name: h.name, host_ip: h.ip, status: 'pending', output: '', error: '' }))
           this.connectTaskSse(r.data.task_id)
-          this.running = true; this.step = 4
+          this.running = true
           this.loadTasks()
         }
       } catch (e) { ElMessage.error(e.response?.data?.message || '部署失败') } finally { this.deploying = false }

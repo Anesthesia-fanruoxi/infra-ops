@@ -60,20 +60,44 @@ const routes = {
 
 const app = createApp({
   template: `
-    <page-login v-if="currentPage==='login'" :version="version" />
-    <app-layout v-else :current-page="currentPage" :user="user" :version="version" @nav="navigate" @logout="logout">
-      <component :is="'page-' + currentPage" :page="currentPage" :user="user" :version-data="versionData" @navigate="navigate" />
+    <page-login v-if="activePage==='login'" :version="version" />
+    <app-layout v-else :current-page="activePage" :tabs="openTabs" :user="user" :version="version"
+      @nav="navigate" @logout="logout" @close-tab="closeTab" @refresh-tab="refreshTab">
+      <div v-for="t in openTabs" :key="t.name + '#' + (pageVers[t.name]||0)" v-show="t.name===activePage" class="page-fade">
+        <component :is="'page-' + t.name" :page="t.name" :user="user" :version-data="versionData" @navigate="navigate" />
+      </div>
     </app-layout>
     <change-password-dialog v-model="pwdDialog" :forced="pwdForced" :old-password="pwdOld" @done="onPwdDone" />
   `,
   setup() {
-    const currentPage = ref('overview')
+    const activePage = ref('overview')
+    const openTabs = ref([{ name: 'overview' }])
+    const pageVers = ref({}) // 每个标签页的重挂载计数：+1 即强制该页重新加载
     const user = ref(null)
     const version = ref('')
     const versionData = ref(null)
     const pwdDialog = ref(false)
     const pwdForced = ref(false)
     const pwdOld = ref('')
+
+    const ensureTab = (page) => {
+      if (!openTabs.value.some(t => t.name === page)) openTabs.value.push({ name: page })
+    }
+    const closeTab = (name) => {
+      const idx = openTabs.value.findIndex(t => t.name === name)
+      if (idx < 0) return
+      openTabs.value.splice(idx, 1)
+      if (!openTabs.value.length) openTabs.value.push({ name: 'overview' })
+      if (activePage.value === name) {
+        const next = openTabs.value[Math.min(idx, openTabs.value.length - 1)]
+        activePage.value = next.name
+        location.hash = '#/' + next.name
+      }
+    }
+    // 刷新 = 该页组件整体重建（数据重拉、SSE 自动重连）
+    const refreshTab = (name) => {
+      pageVers.value = { ...pageVers.value, [name]: (pageVers.value[name] || 0) + 1 }
+    }
 
     const openChangePassword = (oldPassword) => {
       pwdForced.value = true
@@ -88,7 +112,7 @@ const app = createApp({
       api.post('/auth/logout').finally(() => {
         user.value = null
         ElMessage.success('密码修改成功，请使用新密码重新登录')
-        currentPage.value = 'login'
+        activePage.value = 'login'
         location.hash = '#/login'
       })
     }
@@ -98,7 +122,7 @@ const app = createApp({
         const res = await api.get('/auth/me')
         if (res.code === 0) {
           user.value = res.data
-          if (res.data?.must_change_password && currentPage.value !== 'login') {
+          if (res.data?.must_change_password && activePage.value !== 'login') {
             openChangePassword()
           }
         }
@@ -109,12 +133,16 @@ const app = createApp({
     }
     const handleRoute = () => {
       const hash = location.hash.slice(2) || 'overview'
-      if (!user.value && hash !== 'login') { currentPage.value = 'login'; location.hash = '#/login'; return }
-      if (routes[hash]) currentPage.value = hash
-      else if (hash === 'login' && user.value) { location.hash = '#/overview' }
-      else if (hash === 'login') currentPage.value = 'login'
+      if (!user.value && hash !== 'login') { activePage.value = 'login'; location.hash = '#/login'; return }
+      if (routes[hash]) { ensureTab(hash); activePage.value = hash }
+      else if (hash === 'login' && user.value) { location.hash = '#/' + activePage.value }
+      else if (hash === 'login') activePage.value = 'login'
     }
-    const navigate = (page) => { location.hash = '#/' + page }
+    const navigate = (page) => {
+      if (page === 'login') { location.hash = '#/login'; return }
+      ensureTab(page)
+      location.hash = '#/' + page
+    }
     const logout = () => {
       ElMessageBox.confirm('确认退出登录？', '提示', { type: 'warning' }).then(() => {
         api.post('/auth/logout').finally(() => { user.value = null; location.hash = '#/login' })
@@ -125,7 +153,7 @@ const app = createApp({
 
     window.addEventListener('force-change-password', openChangePassword)
 
-    return { currentPage, user, version, versionData, pwdDialog, pwdForced, pwdOld, openChangePassword, onPwdDone, handleRoute, navigate, logout, loadUser, loadVersion, ICONS }
+    return { activePage, openTabs, pageVers, ensureTab, closeTab, refreshTab, user, version, versionData, pwdDialog, pwdForced, pwdOld, openChangePassword, onPwdDone, handleRoute, navigate, logout, loadUser, loadVersion, ICONS }
   }
 })
 
@@ -145,7 +173,7 @@ app.component('empty-state', {
 
 // 布局
 app.component('app-layout', {
-  props: ['currentPage', 'user', 'version'],
+  props: ['currentPage', 'tabs', 'user', 'version'],
   template: `
 <div class="layout">
   <div class="sidebar">
@@ -172,10 +200,19 @@ app.component('app-layout', {
         <el-button size="small" text @click="$emit('logout')">退出</el-button>
       </div>
     </div>
-    <div class="content"><div class="content-inner page-fade" :key="currentPage"><slot></slot></div></div>
+    <div class="tab-bar">
+      <div v-for="t in tabs" :key="t.name" class="tab-item" :class="{active:t.name===currentPage}" @click="$emit('nav',t.name)">
+        <span class="tab-label">{{routes[t.name]?.title || t.name}}</span>
+        <span class="tab-actions">
+          <el-icon class="tab-btn" title="重新加载本页" @click.stop="$emit('refresh-tab',t.name)"><Refresh /></el-icon>
+          <el-icon class="tab-btn" title="关闭标签页" @click.stop="$emit('close-tab',t.name)"><Close /></el-icon>
+        </span>
+      </div>
+    </div>
+    <div class="content"><slot></slot></div>
   </div>
 </div>`,
-  emits: ['nav', 'logout'],
+  emits: ['nav', 'logout', 'close-tab', 'refresh-tab'],
   computed: {
     pageTitle() { return routes[this.currentPage]?.title || '' },
     pageSub() { return routes[this.currentPage]?.sub || '' },
