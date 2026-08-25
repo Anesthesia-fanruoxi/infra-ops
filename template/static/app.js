@@ -202,7 +202,7 @@ app.component('app-layout', {
     </div>
     <div class="tab-bar">
       <div v-for="t in tabs" :key="t.name" class="tab-item" :class="{active:t.name===currentPage}" @click="$emit('nav',t.name)">
-        <span class="tab-label">{{routes[t.name]?.title || t.name}}</span>
+        <span class="tab-label">{{tabTitle(t.name)}}</span>
         <span class="tab-actions">
           <el-icon class="tab-btn" title="重新加载本页" @click.stop="$emit('refresh-tab',t.name)"><Refresh /></el-icon>
           <el-icon class="tab-btn" title="关闭标签页" @click.stop="$emit('close-tab',t.name)"><Close /></el-icon>
@@ -217,6 +217,9 @@ app.component('app-layout', {
     pageTitle() { return routes[this.currentPage]?.title || '' },
     pageSub() { return routes[this.currentPage]?.sub || '' },
     userInitial() { return this.user?.username?.charAt(0)?.toUpperCase() || 'A' }
+  },
+  methods: {
+    tabTitle(name) { return routes[name]?.title || name } // routes 是闭包变量，模板内不可直接访问
   }
 })
 
