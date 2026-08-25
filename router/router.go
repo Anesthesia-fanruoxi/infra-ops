@@ -143,12 +143,15 @@ func Setup(staticFS fs.FS, deps Deps) *gin.Engine {
 
 	// 前端静态资源
 	if staticFS != nil {
-		// 启动时读取 index.html
-		indexHTML, _ := fs.ReadFile(staticFS, "index.html")
+		// 启动时读取 index.html，并注入实例启动时间标记（控制台可见，便于确认浏览器加载的是新构建）
+		rawHTML, _ := fs.ReadFile(staticFS, "index.html")
+		startStamp := time.Now().Format("2006-01-02 15:04:05")
+		indexHTML := strings.ReplaceAll(string(rawHTML), "</head>",
+			`<script>console.info("[infra-ops] 实例启动于 `+startStamp+` —— 若看不到此行说明前端未更新")</script></head>`)
 		r.GET("/", func(c *gin.Context) {
 			// 不加缓存：index.html 引用带内容哈希 ETag 的静态资源，升级后必须重新拉取
 			c.Header("Cache-Control", "no-store")
-			c.Data(200, "text/html; charset=utf-8", indexHTML)
+			c.Data(200, "text/html; charset=utf-8", []byte(indexHTML))
 		})
 		// embed FS 中文件在 static/... 下，需要取子目录
 		staticSub, err := fs.Sub(staticFS, "static")

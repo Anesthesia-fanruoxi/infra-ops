@@ -75,27 +75,30 @@ window.DeployPage = {
           </div>
 
           <!-- 逐主机变量：默认继承上方参数，可逐台覆盖 -->
-          <div v-if="selectedTemplate && selectedTemplate.variables && selectedTemplate.variables.length && selectedHosts.length" class="deploy-host-vars">
+          <div v-if="selectedTemplate && selectedHosts.length" class="deploy-host-vars">
             <div class="deploy-host-vars-head">
               <span class="deploy-host-vars-title">逐主机变量 <span class="deploy-var-hint">默认继承上方参数，可逐台单独覆盖</span></span>
-              <div>
+              <div v-if="hasTplVars">
                 <el-button size="small" @click="resetAllHostParams">全部重置为默认</el-button>
                 <el-button size="small" :disabled="selectedHosts.length < 2" @click="copyFirstToAll">复制首台到其他</el-button>
               </div>
             </div>
-            <div class="deploy-host-var-row" v-for="h in selectedHosts" :key="h.id">
-              <div class="deploy-host-var-rowhead">
-                <span class="deploy-host-name">{{h.name}}</span>
-                <span class="mono deploy-host-ip">{{h.ip}}</span>
-                <el-button size="small" text type="primary" @click="resetHostParams(h.id)">重置本机</el-button>
-              </div>
-              <div class="deploy-host-var-fields">
-                <div class="deploy-host-var-field" v-for="v in selectedTemplate.variables" :key="v.name">
-                  <label :title="v.name">{{v.label || v.name}}</label>
-                  <el-input size="small" :model-value="hostParamValue(h.id, v)" @input="val => onHostParamInput(h.id, v, val)" :placeholder="v.default || '继承默认'" />
+            <template v-if="hasTplVars">
+              <div class="deploy-host-var-row" v-for="h in selectedHosts" :key="h.id">
+                <div class="deploy-host-var-rowhead">
+                  <span class="deploy-host-name">{{h.name}}</span>
+                  <span class="mono deploy-host-ip">{{h.ip}}</span>
+                  <el-button size="small" text type="primary" @click="resetHostParams(h.id)">重置本机</el-button>
+                </div>
+                <div class="deploy-host-var-fields">
+                  <div class="deploy-host-var-field" v-for="v in selectedTemplate.variables" :key="v.name">
+                    <label :title="v.name">{{v.label || v.name}}</label>
+                    <el-input size="small" :model-value="hostParamValue(h.id, v)" @input="val => onHostParamInput(h.id, v, val)" :placeholder="v.default || '继承默认'" />
+                  </div>
                 </div>
               </div>
-            </div>
+            </template>
+            <div v-else class="deploy-placeholder deploy-placeholder--ok">该模板无需变量：已选 {{selectedHosts.length}} 台主机将执行相同脚本</div>
           </div>
         </div>
       </div>
@@ -213,6 +216,7 @@ window.DeployPage = {
       return this.sortHostList(list, this.hostSort)
     },
     selectedHosts() { return this.hosts.filter(h => this.selectedHostIds.has(h.id)) },
+    hasTplVars() { return !!(this.selectedTemplate && this.selectedTemplate.variables && this.selectedTemplate.variables.length) },
     paramsValid() {
       if (!this.selectedTemplate) return false
       return (this.selectedTemplate.variables || []).every(v => !v.required || String(this.params[v.name] || '').trim() !== '')
