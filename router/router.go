@@ -2,8 +2,13 @@
 package router
 
 import (
+	"crypto/sha256"
+	"fmt"
+	"io"
 	"io/fs"
+	"strings"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -141,20 +146,87 @@ func Setup(staticFS fs.FS, deps Deps) *gin.Engine {
 		// 启动时读取 index.html
 		indexHTML, _ := fs.ReadFile(staticFS, "index.html")
 		r.GET("/", func(c *gin.Context) {
-			c.Header("Cache-Control", "no-cache")
+			// 不加缓存：index.html 引用带内容哈希 ETag 的静态资源，升级后必须重新拉取
+			c.Header("Cache-Control", "no-store")
 			c.Data(200, "text/html; charset=utf-8", indexHTML)
 		})
 		// embed FS 中文件在 static/... 下，需要取子目录
 		staticSub, err := fs.Sub(staticFS, "static")
 		if err == nil {
-			// no-cache 强制浏览器每次升级后重新校验（配合 Last-Modified 返回 304），避免新旧 JS 混用
-			staticServer := http.StripPrefix("/static", http.FileServer(http.FS(staticSub)))
+			// 嵌入文件修改时间为固定值，http.FileServer 会稳定返回 304 使浏览器沿用旧 JS。
+			// 改为基于内容哈希的 ETag + no-store：内容变化即强制重新下载，避免新旧 JS 混用。
+			staticServer := http.StripPrefix("/static", &embedFileServer{fs: staticSub})
 			r.GET("/static/*filepath", func(c *gin.Context) {
-				c.Header("Cache-Control", "no-cache")
 				staticServer.ServeHTTP(c.Writer, c.Request)
 			})
 		}
 	}
 
 	return r
+}
+
+// embedFileServer 用内容哈希 ETag 提供嵌入静态文件，避免嵌入文件固定修改时间导致的 304 陈旧缓存。
+type embedFileServer struct{ fs fs.FS }
+
+func (s *embedFileServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	upath := strings.TrimPrefix(r.URL.Path, "/")
+	f, err := s.fs.Open(upath)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil || fi.IsDir() {
+		http.NotFound(w, r)
+		return
+	}
+	data, err := io.ReadAll(f)
+	if err != nil {
+		http.Error(w, "read static file failed", http.StatusInternalServerError)
+		return
+	}
+	sum := sha256.Sum256(data)
+	etag := fmt.Sprintf("\"%x\"", sum[:16])
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("ETag", etag)
+	if r.Header.Get("If-None-Match") == etag {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	http.ServeContent(w, r, fi.Name(), time.Time{}, bytesReader(data))
+}
+
+// bytesReader 避免额外依赖：io.NopCloser 包装供 ServeContent 使用。
+func bytesReader(b []byte) io.ReadSeeker {
+	return &bytesReaderT{b: b}
+}
+
+type bytesReaderT struct {
+	b   []byte
+	off int
+}
+
+func (r *bytesReaderT) Read(p []byte) (int, error) {
+	if r.off >= len(r.b) {
+		return 0, io.EOF
+	}
+	n := copy(p, r.b[r.off:])
+	r.off += n
+	return n, nil
+}
+
+func (r *bytesReaderT) Seek(offset int64, whence int) (int64, error) {
+	switch whence {
+	case io.SeekStart:
+		r.off = int(offset)
+	case io.SeekCurrent:
+		r.off += int(offset)
+	case io.SeekEnd:
+		r.off = len(r.b) + int(offset)
+	}
+	if r.off < 0 {
+		r.off = 0
+	}
+	return int64(r.off), nil
 }
