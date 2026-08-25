@@ -29,7 +29,7 @@ window.DeployPage = {
 
     <!-- Step 1: 选模板 -->
     <div v-show="step===1">
-      <el-select v-model="selectedTemplateId" placeholder="请选择部署模板" style="width:100%" @change="onTemplateChange" :loading="tplLoading" loading-text="模板加载中…" @visible-change="onTplDropdown">
+      <el-select v-model="selectedTemplateId" placeholder="请选择部署模板" style="width:100%" @change="onTemplateChange" :loading="tplLoading" loading-text="模板加载中…" @visible-change="onTplDropdown" :teleported="false">
         <el-option v-for="t in templates" :key="t.id" :label="t.name" :value="t.id">
           <span>{{t.name}}</span><span style="float:right;color:var(--text-faint);font-size:12px">{{(t.variables||[]).length}} 个变量</span>
         </el-option>
@@ -45,7 +45,7 @@ window.DeployPage = {
     <div v-show="step===2">
       <div class="deploy-host-toolbar">
         <el-input v-model="hostFilter" placeholder="搜索主机名 / IP / 标签" clearable size="small" style="width:220px" />
-        <el-select v-model="hostSort.field" size="small" style="width:100px"><el-option label="按主机名" value="name" /><el-option label="按 IP" value="ip" /></el-select>
+        <el-select v-model="hostSort.field" size="small" style="width:100px" :teleported="false"><el-option label="按主机名" value="name" /><el-option label="按 IP" value="ip" /></el-select>
         <el-button size="small" @click="toggleHostSortOrder">{{hostSort.order==='asc' ? '↑ 升序' : '↓ 降序'}}</el-button>
         <el-button size="small" @click="toggleSelectAll">{{ selectedHosts.length === filteredHosts.length ? '取消全选' : '全选' }}</el-button>
         <span class="deploy-sel-count">已选 {{selectedHosts.length}} 台</span>
