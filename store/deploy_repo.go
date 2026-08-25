@@ -113,8 +113,8 @@ func (r *DeployRepo) CreateTask(task *model.DeployTask, hosts []model.DeployTask
 	defer func() { _ = tx.Rollback() }()
 
 	res, err := tx.Exec(
-		`INSERT INTO deploy_tasks(template_id,template_name,status,total,schedule_id,trigger_type) VALUES(?,?,'running',?,?,?)`,
-		task.TemplateID, task.TemplateName, len(hosts), task.ScheduleID, task.TriggerType,
+		`INSERT INTO deploy_tasks(template_id,template_name,status,total,schedule_id,trigger_type,params_json) VALUES(?,?,'running',?,?,?,?)`,
+		task.TemplateID, task.TemplateName, len(hosts), task.ScheduleID, task.TriggerType, task.ParamsJSON,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("create task: %w", err)
@@ -126,8 +126,8 @@ func (r *DeployRepo) CreateTask(task *model.DeployTask, hosts []model.DeployTask
 
 	for _, h := range hosts {
 		if _, err := tx.Exec(
-			`INSERT INTO deploy_task_hosts(task_id,host_id,host_name,host_ip,status) VALUES(?,?,?,?,'pending')`,
-			taskID, h.HostID, h.HostName, h.HostIP,
+			`INSERT INTO deploy_task_hosts(task_id,host_id,host_name,host_ip,status,params_json) VALUES(?,?,?,?,'pending',?)`,
+			taskID, h.HostID, h.HostName, h.HostIP, h.ParamsJSON,
 		); err != nil {
 			return 0, fmt.Errorf("create task host: %w", err)
 		}
@@ -156,7 +156,7 @@ type HostRecord struct {
 // TaskHosts 取任务下全部主机记录。
 func (r *DeployRepo) TaskHosts(taskID int64) ([]HostRecord, error) {
 	rows, err := DB.Query(
-		`SELECT id,host_id,host_name,host_ip,status,output,error FROM deploy_task_hosts WHERE task_id=? ORDER BY id`,
+		`SELECT id,host_id,host_name,host_ip,status,output,error,params_json FROM deploy_task_hosts WHERE task_id=? ORDER BY id`,
 		taskID,
 	)
 	if err != nil {
@@ -167,7 +167,7 @@ func (r *DeployRepo) TaskHosts(taskID int64) ([]HostRecord, error) {
 	var items []HostRecord
 	for rows.Next() {
 		var h HostRecord
-		if err := rows.Scan(&h.RecID, &h.HostID, &h.HostName, &h.HostIP, &h.Status, &h.Output, &h.Error); err != nil {
+		if err := rows.Scan(&h.RecID, &h.HostID, &h.HostName, &h.HostIP, &h.Status, &h.Output, &h.Error, &h.ParamsJSON); err != nil {
 			return nil, err
 		}
 		items = append(items, h)

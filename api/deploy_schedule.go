@@ -253,7 +253,7 @@ func (s *deployScheduler) fire(scheduleID int64) {
 	var params map[string]string
 	_ = json.Unmarshal(sc.Params, &params)
 
-	taskID, err := s.h.createAndRun(tpl, hostIDs, params, "schedule", scheduleID, "scheduler")
+	taskID, err := s.h.createAndRun(tpl, hostIDs, params, nil, "schedule", scheduleID, "scheduler")
 	if err != nil {
 		log.Printf("[scheduler] 任务 %d 触发失败: %v", scheduleID, err)
 		return

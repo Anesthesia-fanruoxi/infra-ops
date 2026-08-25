@@ -73,6 +73,30 @@ window.DeployPage = {
             </label>
             <div v-if="!filteredHosts.length && !hostsLoading" class="deploy-placeholder">无匹配主机</div>
           </div>
+
+          <!-- 逐主机变量：默认继承上方参数，可逐台覆盖 -->
+          <div v-if="selectedTemplate && selectedTemplate.variables && selectedTemplate.variables.length && selectedHosts.length" class="deploy-host-vars">
+            <div class="deploy-host-vars-head">
+              <span class="deploy-host-vars-title">逐主机变量 <span class="deploy-var-hint">默认继承上方参数，可逐台单独覆盖</span></span>
+              <div>
+                <el-button size="small" @click="resetAllHostParams">全部重置为默认</el-button>
+                <el-button size="small" :disabled="selectedHosts.length < 2" @click="copyFirstToAll">复制首台到其他</el-button>
+              </div>
+            </div>
+            <div class="deploy-host-var-row" v-for="h in selectedHosts" :key="h.id">
+              <div class="deploy-host-var-rowhead">
+                <span class="deploy-host-name">{{h.name}}</span>
+                <span class="mono deploy-host-ip">{{h.ip}}</span>
+                <el-button size="small" text type="primary" @click="resetHostParams(h.id)">重置本机</el-button>
+              </div>
+              <div class="deploy-host-var-fields">
+                <div class="deploy-host-var-field" v-for="v in selectedTemplate.variables" :key="v.name">
+                  <label :title="v.name">{{v.label || v.name}}</label>
+                  <el-input size="small" :model-value="hostParamValue(h.id, v)" @input="val => onHostParamInput(h.id, v, val)" :placeholder="v.default || '继承默认'" />
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -172,6 +196,7 @@ window.DeployPage = {
     return {
       step: 1, templates: [], tplLoading: false, tplLoaded: false, selectedTemplateId: null, selectedTemplate: null,
       params: {}, hosts: [], hostsLoading: false, hostsLoaded: false, selectedHostIds: new Set(), hostFilter: '', hostSort: { field: 'name', order: 'asc' },
+      hostParams: {}, // 逐主机变量覆盖 host_id -> {name: value}
       deploying: false, running: false,
       taskDetail: null, taskHosts: [], taskSse: null,
       tasks: [], tasksLoading: false,
@@ -249,6 +274,36 @@ window.DeployPage = {
       if (this.selectedHosts.length === this.filteredHosts.length) { this.selectedHostIds = new Set() }
       else { this.selectedHostIds = new Set(this.filteredHosts.map(h => h.id)); this.step = 3 }
     },
+    /* ===== 逐主机变量 ===== */
+    hostParamValue(hostId, v) {
+      const hp = this.hostParams[hostId]
+      if (hp && Object.prototype.hasOwnProperty.call(hp, v.name)) return hp[v.name]
+      return this.params[v.name] !== undefined && this.params[v.name] !== '' ? this.params[v.name] : (v.default || '')
+    },
+    onHostParamInput(hostId, v, val) {
+      const cur = this.hostParams[hostId] ? { ...this.hostParams[hostId] } : {}
+      if (val === '' || val == null) delete cur[v.name]
+      else cur[v.name] = val
+      this.hostParams = { ...this.hostParams, [hostId]: cur }
+    },
+    resetHostParams(hostId) {
+      if (!this.hostParams[hostId]) return
+      const next = { ...this.hostParams }; delete next[hostId]; this.hostParams = next
+    },
+    resetAllHostParams() { this.hostParams = {} },
+    copyFirstToAll() {
+      const first = this.selectedHosts[0]; if (!first) return
+      const src = {}
+      ;(this.selectedTemplate.variables || []).forEach(v => { src[v.name] = this.hostParamValue(first.id, v) })
+      const next = { ...this.hostParams }
+      this.selectedHosts.forEach(h => { if (h.id !== first.id) next[h.id] = { ...src } })
+      this.hostParams = next
+    },
+    buildHostParams() {
+      const o = {}
+      this.selectedHosts.forEach(h => { if (this.hostParams[h.id]) o[h.id] = this.hostParams[h.id] })
+      return o
+    },
     /* ===== 部署 ===== */
     async confirmDeploy() {
       if (!this.selectedHosts.length) { ElMessage.warning('请至少选择一台主机'); return }
@@ -264,7 +319,8 @@ window.DeployPage = {
           template_id: this.selectedTemplateId,
           // 按页面当前显示顺序提交（排序后全选时序号跟随该顺序，供 {{__seq}} 批量命名使用）
           host_ids: this.filteredHosts.filter(h => this.selectedHostIds.has(h.id)).map(h => h.id),
-          params: this.params
+          params: this.params,
+          host_params: this.buildHostParams()
         })
         if (r.code === 0) {
           ElMessage.success('部署任务已创建')

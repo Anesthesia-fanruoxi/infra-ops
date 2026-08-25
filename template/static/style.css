@@ -917,6 +917,19 @@ a { text-decoration: none; }
 .deploy-history { padding: 20px 24px; }
 .deploy-task-table .el-table__row { cursor: pointer; }
 .deploy-detail-meta { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; font-size: 13px; color: var(--text-sub); }
+/* 逐主机变量面板 */
+.deploy-host-vars { margin-top: 14px; border: 1px solid var(--border); border-radius: var(--radius-btn); padding: 12px 14px; background: var(--bg-soft); }
+.deploy-host-vars-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+.deploy-host-vars-title { font-weight: 600; font-size: 13px; }
+.deploy-var-hint { font-weight: 400; font-size: 11px; color: var(--text-faint); margin-left: 6px; }
+.deploy-host-var-row { border-top: 1px dashed var(--border); padding: 10px 0; }
+.deploy-host-var-row:first-of-type { border-top: none; }
+.deploy-host-var-rowhead { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.deploy-host-var-rowhead .deploy-host-name { font-weight: 600; }
+.deploy-host-var-rowhead .el-button { margin-left: auto; }
+.deploy-host-var-fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px 14px; }
+.deploy-host-var-field { display: flex; flex-direction: column; gap: 3px; }
+.deploy-host-var-field label { font-size: 11px; color: var(--text-sub); }
 
 /* ===== 定时任务页 ===== */
 .sched-page { display: flex; flex-direction: column; gap: 20px; padding-bottom: 40px; }

@@ -174,8 +174,13 @@ func validatePlaceholders(script string, vars []tplVar) error {
 		declared[v.Name] = true
 	}
 	for _, m := range placeholderRe.FindAllStringSubmatch(script, -1) {
-		if !declared[m[1]] {
-			return fmt.Errorf("脚本中的占位符 {{%s}} 未在变量表中声明", m[1])
+		name := m[1]
+		// 内置变量(__name/__ip/__seq/__ip_last)由执行引擎在运行时注入，免声明
+		if strings.HasPrefix(name, "__") {
+			continue
+		}
+		if !declared[name] {
+			return fmt.Errorf("脚本中的占位符 {{%s}} 未在变量表中声明", name)
 		}
 	}
 	return nil

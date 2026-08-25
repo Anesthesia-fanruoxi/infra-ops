@@ -58,9 +58,10 @@ func NewDeployHandler(tplRepo *store.DeployRepo, schedRepo *store.DeploySchedule
 }
 
 type runReq struct {
-	TemplateID int64             `json:"template_id" binding:"required"`
-	HostIDs    []int64           `json:"host_ids" binding:"required,min=1"`
-	Params     map[string]string `json:"params"`
+	TemplateID int64                        `json:"template_id" binding:"required"`
+	HostIDs    []int64                      `json:"host_ids" binding:"required,min=1"`
+	Params     map[string]string            `json:"params"`      // 任务级默认变量
+	HostParams map[int64]map[string]string  `json:"host_params"` // 主机级变量覆盖 host_id -> {k:v}
 }
 
 // deployProgress SSE 推送的进度事件。
@@ -88,7 +89,7 @@ func (h *deployHandler) Run(c *gin.Context) {
 		resp.Fail(c, resp.CodeNotFound, "模板不存在")
 		return
 	}
-	taskID, err := h.createAndRun(tpl, req.HostIDs, req.Params, "manual", 0, c.ClientIP())
+	taskID, err := h.createAndRun(tpl, req.HostIDs, req.Params, req.HostParams, "manual", 0, c.ClientIP())
 	if err != nil {
 		resp.Fail(c, resp.CodeBadRequest, err.Error())
 		return
@@ -98,13 +99,10 @@ func (h *deployHandler) Run(c *gin.Context) {
 
 // createAndRun 校验渲染脚本、落库建任务并异步执行；手动与定时触发共用。
 // 主机列表允许为空：任务照常创建并落执行记录（total=0）。
+// hostParams 为逐主机变量覆盖（host_id -> {k:v}），为空则所有主机共用 params。
 func (h *deployHandler) createAndRun(tpl *model.DeployTemplate, hostIDs []int64,
-	params map[string]string, triggerType string, scheduleID int64, remoteIP string) (int64, error) {
+	params map[string]string, hostParams map[int64]map[string]string, triggerType string, scheduleID int64, remoteIP string) (int64, error) {
 	ids := dedupInt64(hostIDs)
-	script, err := renderScript(tpl.Script, tpl.Variables, params)
-	if err != nil {
-		return 0, err
-	}
 
 	var hosts []model.DeployTaskHost
 	for _, id := range ids {
@@ -112,14 +110,25 @@ func (h *deployHandler) createAndRun(tpl *model.DeployTemplate, hostIDs []int64,
 		if err != nil || hh == nil {
 			continue // 台账中已删除的主机自动跳过（定时触发容错）
 		}
+		// 合并变量（模板默认 < 任务默认 < 主机覆盖）并做渲染校验，提前暴露缺参
+		merged, err := mergeParams(tpl.Variables, params, hostParams[id])
+		if err != nil {
+			return 0, err
+		}
+		if _, err := renderScript(tpl.Script, tpl.Variables, merged); err != nil {
+			return 0, fmt.Errorf("主机 %s 变量校验失败: %w", hh.Name, err)
+		}
+		pb, _ := json.Marshal(merged)
 		hosts = append(hosts, model.DeployTaskHost{
 			HostID: hh.ID, HostName: hh.Name, HostIP: hh.IP, Status: "pending",
+			ParamsJSON: string(pb),
 		})
 	}
 
+	taskParamsJSON, _ := json.Marshal(params)
 	task := &model.DeployTask{
 		TemplateID: tpl.ID, TemplateName: tpl.Name, Total: len(hosts),
-		TriggerType: triggerType, ScheduleID: scheduleID,
+		TriggerType: triggerType, ScheduleID: scheduleID, ParamsJSON: string(taskParamsJSON),
 	}
 	taskID, err := h.tplRepo.CreateTask(task, hosts)
 	if err != nil {
@@ -135,8 +144,29 @@ func (h *deployHandler) createAndRun(tpl *model.DeployTemplate, hostIDs []int64,
 		Detail: detail, RemoteIP: remoteIP,
 	})
 
-	go h.execute(taskID, script)
+	go h.execute(taskID)
 	return taskID, nil
+}
+
+// mergeParams 合并变量：模板默认值 < 任务级默认 < 主机级覆盖。
+func mergeParams(rawVars json.RawMessage, taskParams, hostParams map[string]string) (map[string]string, error) {
+	vars, err := parseVariables(rawVars)
+	if err != nil {
+		return nil, err
+	}
+	merged := make(map[string]string, len(vars))
+	for _, v := range vars {
+		if v.Default != "" {
+			merged[v.Name] = v.Default
+		}
+	}
+	for k, val := range taskParams {
+		merged[k] = val
+	}
+	for k, val := range hostParams {
+		merged[k] = val
+	}
+	return merged, nil
 }
 
 // Tasks GET /api/deploy/tasks
@@ -229,14 +259,15 @@ func (h *deployHandler) SSEProgress(c *gin.Context) {
 	})
 }
 
-// execute 并发执行任务内全部主机，逐台发布进度事件，结束后落终态。
-func (h *deployHandler) execute(taskID int64, script string) {
+// execute 并发执行任务内全部主机，逐台按各自变量渲染并发布进度事件，结束后落终态。
+func (h *deployHandler) execute(taskID int64) {
 	records, err := h.tplRepo.TaskHosts(taskID)
 	if err != nil || len(records) == 0 {
 		_, _ = h.tplRepo.FinishTask(taskID)
 		return
 	}
 	task, _ := h.tplRepo.GetTask(taskID) // 用于成功后写入主机安装标记
+	tpl, _ := h.tplRepo.GetTemplate(task.TemplateID)
 
 	var mu sync.Mutex
 	successCnt, failCnt := 0, 0
@@ -296,7 +327,21 @@ func (h *deployHandler) execute(taskID int64, script string) {
 				})
 			}
 
-			output, execErr := h.execOnHost(rec.HostID, applyHostVars(script, i+1, rec), onLog)
+			// 按本主机变量覆盖渲染（模板默认 < 任务默认 < 主机覆盖）
+			if tpl == nil {
+				publish(rec, "failed", "", "模板不存在或已删除")
+				return
+			}
+			var params map[string]string
+			_ = json.Unmarshal([]byte(rec.ParamsJSON), &params)
+			rendered, rerr := renderScript(tpl.Script, tpl.Variables, params)
+			if rerr != nil {
+				publish(rec, "failed", "", "脚本渲染失败: "+rerr.Error())
+				return
+			}
+			rendered = applyHostVars(rendered, seq, rec)
+
+			output, execErr := h.execOnHost(rec.HostID, rendered, onLog)
 			status, errMsg := "success", ""
 			if execErr != nil {
 				status, errMsg = "failed", execErr.Error()

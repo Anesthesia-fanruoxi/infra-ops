@@ -18,6 +18,7 @@ var migrations = []migration{
 	{8, migrateV8},
 	{9, migrateV9},
 	{10, migrateV10},
+	{11, migrateV11},
 }
 
 // migrateV8 并发配置改为自适应：存量库中未改过的旧引导默认值 5 归一为 auto。
@@ -43,6 +44,21 @@ func migrateV9(db *sql.DB) error {
 	}
 	_, err = db.Exec(`CREATE INDEX IF NOT EXISTS idx_host_installs_host ON host_installs(host_id)`)
 	return err
+}
+
+// migrateV11 部署任务支持逐主机变量：任务级与主机级各存一份 params_json。
+// 变量解析优先级：模板默认 < 任务默认 < 主机覆盖。
+func migrateV11(db *sql.DB) error {
+	stmts := []string{
+		`ALTER TABLE deploy_tasks ADD COLUMN params_json TEXT NOT NULL DEFAULT '{}'`,
+		`ALTER TABLE deploy_task_hosts ADD COLUMN params_json TEXT NOT NULL DEFAULT '{}'`,
+	}
+	for _, s := range stmts {
+		if _, err := db.Exec(s); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // migrateV10 主机唯一身份调整为 ip+port：name 退化为自动维护的显示字段

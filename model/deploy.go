@@ -25,6 +25,7 @@ type DeployTask struct {
 	FailCnt      int     `json:"fail_cnt"`
 	TriggerType  string  `json:"trigger_type"` // manual/schedule
 	ScheduleID   int64   `json:"schedule_id"`  // 定时触发时的 schedule ID，手动为 0
+	ParamsJSON   string  `json:"params_json"`  // 任务级默认变量(JSON)，空为"{}"
 	CreatedAt    string  `json:"created_at"`
 	FinishedAt   *string `json:"finished_at"`
 }
@@ -57,4 +58,5 @@ type DeployTaskHost struct {
 	Error      string  `json:"error"`
 	StartedAt  *string `json:"started_at"`
 	FinishedAt *string `json:"finished_at"`
+	ParamsJSON string  `json:"params_json"` // 该主机的变量覆盖(JSON)，空为"{}"
 }
