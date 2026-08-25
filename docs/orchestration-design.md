@@ -1,74 +1,77 @@
-# 任务编排（Orchestration）设计方案
+# 任务编排（Orchestration）设计方案 v2
 
 > 目标：让「一台服务器要做的 N 件事」变成一个可保存、可复用、可定时的整体，
 > 而不是每次手动按顺序点 N 个模板。
+>
+> **v2 关键修订**：变量不再是「一套参数共享给所有主机」，而是**逐主机设置**。
+> 模板的参数只作为默认值，每台主机可在运行时单独覆盖。
+> 因此「批量修改主机名」不再需要特殊模板——它只是某台主机上填了 `new_name` 变量的一个普通步骤。
 
 ---
 
 ## 1. 背景与现状
 
-当前部署中心的能力边界：
+- 一次任务 = 一个模板 × 一批主机（并行执行），当前参数只有「任务级一套」，所有主机共用同一份变量
+- 缺口 A：**多模板顺序组合**无承载（新机初始化 = NTP → 基础软件 → 内核调优 → Docker → 业务，要手动点 5 次）
+- 缺口 B：**同一模板对不同主机要用不同变量**（如每台 Web 的 `server_name`、每台 DB 的 `buffer_size` 不同），当前做不到
 
-- 一次任务 = 一个模板 × 一批主机（并行执行）
-- 已有可复用资产：模板变量渲染、`{{__seq}}` 等内置主机变量、流式 SSE 日志、
-  自适应并发、超时控制、安装标记（host_installs）、审计、历史保留清理
+v2 同时补两个缺口：① 变量逐主机；② 模板可编排成链。
 
-缺口：**多个模板之间的顺序组合**没有承载。例如新机器初始化 =
-时区/NTP → 基础软件 → 内核调优 → Docker → 业务组件，目前要手动排队点 5 次。
-
-## 2. 概念模型
+## 2. 核心抽象
 
 ```
-编排（Orchestration）
- ├─ 基本信息：名称 / 备注 / 执行模式
- └─ 步骤链（Step 1..N，严格有序）
-      └─ 步骤 = 模板 + 参数 + （可选）适用范围
+一次执行 = 一个模板 + 一批主机
+  每个主机用自己的「变量合集」渲染同一个模板脚本
+  变量合集 = 模板默认值  ◁  任务级默认  ◁  主机级覆盖  ◁  内置变量(__ip/__name...)
 ```
 
-两种创建视角，本质是同一条数据的不同填法：
+**变量解析优先级（后者覆盖前者）**：
+```
+模板 variables 默认值
+   < 任务/步骤级默认 params
+   < 主机级覆盖 host_params
+   < 引擎内置变量 {{__ip}} {{__seq}} {{__ip_last}} {{__name}}
+```
 
-| | 主机触发（先选主机） | 任务触发（先选模板） |
-|---|---|---|
-| 交互顺序 | 勾选主机 → 为**每台主机**排各自的步骤链 | 选模板+填参数 → 追加为步骤 → 最后统一选主机 |
-| 典型场景 | 各台服务器角色不同（A 要 docker，B 要 nginx） | 同一批机器走相同的标准化流程（新机初始化） |
-| 存储形态 | 每台主机一条差异化链 | 一条共享链应用到全部所选主机 |
+编排（Orchestration）只是把「多个模板」按顺序排成链，再套用同一套逐主机变量机制：
+- 链上每个步骤 = 一个模板 + （可选）步骤级默认参数
+- 逐主机覆盖在主机维度始终生效
 
-**核心抽象：一切编排最终都归约为「每台主机一个有序步骤队列」。**
-任务触发的共享链 = 把同一条链复制给每台主机。引擎只需要实现一个原语：
-*按队列逐个执行主机上的步骤*。
+## 3. 基础建设（部署中心）新流程
 
-## 3. 执行模式与并发语义（重点）
+```
+① 选择模板
+    → 右侧展示该模板的变量表单（作为默认值，可先填通用部分）
+② 勾选主机
+    → 多选 + 排序控件（复用现有组件）
+③ 展示已勾选主机，逐台自定义变量
+    ┌──────────┬──────────────┬──────────┐
+    │ 主机      │ 变量(覆盖)    │ 操作      │
+    │ web-01    │ server_name=w1 ✎      │ 重置为默认 │
+    │ web-02    │ server_name=w2 ✎      │ 重置为默认 │
+    │ db-01     │ buffer_size=4G ✎      │ 重置为默认 │
+    └──────────┴──────────────┴──────────┘
+    [应用到全部] [复制到选中主机]  ← 大多数相同、个别微调时一键铺开
+④ 确认执行 → 逐主机用各自变量渲染运行
+```
 
-### 3.1 两种执行模式
+修改主机名就是这条流程的一个实例：选 `set_hostname` 模板 → 勾主机 → 给每台填 `new_name` → 执行。
+模板执行后自报 `infra-ops:set-name={{new_name}}`，台账名自动同步，无需单独做"批量改名"入口。
+
+## 4. 执行模式与并发语义
 
 | 模式 | 代号 | 语义 | 适用 |
 |------|------|------|------|
-| 主机独立流水线 | `by_host`（默认） | 每台主机各自从头到尾跑完自己的链；主机之间完全并行 | 绝大多数情况：各主机链条互不相同、互不依赖 |
-| 全局步骤栅栏 | `by_step` | 第 k 步在**所有**目标主机上完成后，才允许任何主机开始第 k+1 步 | 少数需要跨主机先后关系的场景（如先扩 DB 再发应用） |
+| 主机独立流水线 | `by_host`（默认） | 每台主机各自跑完自己的链；主机间完全并行 | 绝大多数：各主机链不同、互不依赖 |
+| 全局步骤栅栏 | `by_step` | 第 k 步在**所有**目标主机完成后，才允许任何主机开始 k+1 | 少数跨主机先后（先 DB 后 Web） |
 
-> 你的观察完全正确：「绝大多数主机独一无二，极少数挤在一起」。
-> 所以默认 `by_host`——一台主机卡住（如 dnf 锁等待）只影响它自己的链，
-> 不拖累其他几十台。`by_step` 作为显式选项保留，不为默认。
+- 同一主机步骤严格串行；不同主机沿用自适应并发 `min(CPU×4, 主机数)`，上限 32
+- 等待/慢步骤：步骤级重试（retry_count / retry_interval_sec，专治 apt/dnf 锁）+ 全局超时 600s（步骤可覆盖）+ 失败终止该主机链（可开 continue_on_error）
 
-### 3.2 主机内部的并发
-
-- 同一台主机的步骤**严格串行**（SSH 会话本身也是串行的，无收益）
-- 不同主机之间：沿用现有自适应并发
-  `min(CPU×4, 主机数)`，上限 32
-
-### 3.3 等待与慢步骤的处理
-
-| 问题 | 方案 |
-|------|------|
-| 包管理器锁等待（apt/dnf lock） | 步骤级**重试**：`retry_count`(默认 0) + `retry_interval_sec`(默认 30)；脚本本身保持幂等 |
-| 单步卡死 | 沿用全局执行超时 600s，步骤级可覆盖 `timeout_sec` |
-| 某台主机某步失败 | 该主机链条**立即终止**标记 failed；其他主机不受影响 |
-| 失败也要走完后续 | 步骤级开关 `continue_on_error`（默认关），如「清理磁盘失败无所谓，继续装」 |
-
-## 4. 数据模型
+## 5. 数据模型
 
 ```sql
--- 编排定义
+-- 编排定义（不变）
 CREATE TABLE orchestrations (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     name         TEXT NOT NULL UNIQUE,
@@ -79,186 +82,156 @@ CREATE TABLE orchestrations (
     updated_at   TEXT NOT NULL DEFAULT (datetime('now','localtime'))
 );
 
--- 步骤定义（by_step 模式：host_scope 留空表示共享主机集）
+-- 步骤定义（params_json = 步骤级默认，可被主机覆盖）
 CREATE TABLE orchestration_steps (
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
     orchestration_id  INTEGER NOT NULL REFERENCES orchestrations(id) ON DELETE CASCADE,
-    seq               INTEGER NOT NULL,            -- 1 起，链内唯一
+    seq               INTEGER NOT NULL,
     template_id       INTEGER NOT NULL REFERENCES deploy_templates(id),
-    params_json       TEXT NOT NULL DEFAULT '{}',
-    host_scope        TEXT NOT NULL DEFAULT '',    -- 空=全部；或 JSON 数组 [host_id...]（by_step 局部主机）
+    params_json       TEXT NOT NULL DEFAULT '{}',   -- 步骤级默认
+    host_scope        TEXT NOT NULL DEFAULT '',     -- 空=全部；JSON 数组[host_id] 局部
     continue_on_error INTEGER NOT NULL DEFAULT 0,
     retry_count       INTEGER NOT NULL DEFAULT 0,
     retry_interval_sec INTEGER NOT NULL DEFAULT 30,
-    timeout_sec       INTEGER NOT NULL DEFAULT 0,  -- 0=沿用全局
+    timeout_sec       INTEGER NOT NULL DEFAULT 0,   -- 0=全局
     UNIQUE(orchestration_id, seq)
 );
 
--- 主机触发模式的差异化链（by_host：每台主机自己的 seq 序列）
+-- 主机触发模式：每台主机自己的链（params 天然逐主机）
 CREATE TABLE orchestration_host_chains (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
     orchestration_id INTEGER NOT NULL REFERENCES orchestrations(id) ON DELETE CASCADE,
     host_id          INTEGER NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
     seq              INTEGER NOT NULL,
     template_id      INTEGER NOT NULL REFERENCES deploy_templates(id),
-    params_json      TEXT NOT NULL DEFAULT '{}',
+    params_json      TEXT NOT NULL DEFAULT '{}',    -- 该主机的变量覆盖
     continue_on_error INTEGER NOT NULL DEFAULT 0,
     retry_count      INTEGER NOT NULL DEFAULT 0,
     retry_interval_sec INTEGER NOT NULL DEFAULT 30,
     UNIQUE(orchestration_id, host_id, seq)
 );
 
--- 运行实例
-CREATE TABLE orchestration_runs (
+-- by_step 模式下，主机级变量覆盖（by_host 模式已在 host_chains 内）
+CREATE TABLE orchestration_step_host_vars (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
-    orchestration_id INTEGER NOT NULL,
-    name             TEXT NOT NULL DEFAULT '',
-    exec_mode        TEXT NOT NULL,
-    status           TEXT NOT NULL DEFAULT 'running'
-                     CHECK (status IN ('running','success','partial','failed')),
-    total_hosts      INTEGER NOT NULL DEFAULT 0,
-    ok_hosts         INTEGER NOT NULL DEFAULT 0,
-    fail_hosts       INTEGER NOT NULL DEFAULT 0,
-    trigger_type     TEXT NOT NULL DEFAULT 'manual',  -- manual / schedule
-    created_at       TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-    finished_at      TEXT
+    orchestration_id INTEGER NOT NULL REFERENCES orchestrations(id) ON DELETE CASCADE,
+    seq              INTEGER NOT NULL,
+    host_id          INTEGER NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+    params_json      TEXT NOT NULL DEFAULT '{}',
+    UNIQUE(orchestration_id, seq, host_id)
 );
 
--- 运行明细：每主机×每步骤一行（含实时输出，纳入保留清理）
-CREATE TABLE orchestration_run_steps (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    run_id      INTEGER NOT NULL REFERENCES orchestration_runs(id) ON DELETE CASCADE,
-    host_id     INTEGER NOT NULL,
-    host_name   TEXT NOT NULL DEFAULT '',
-    host_ip     TEXT NOT NULL DEFAULT '',
-    seq         INTEGER NOT NULL,
-    template_id INTEGER NOT NULL,
-    template_name TEXT NOT NULL DEFAULT '',
-    status      TEXT NOT NULL DEFAULT 'pending'
-                CHECK (status IN ('pending','running','success','failed','skipped')),
-    attempt     INTEGER NOT NULL DEFAULT 1,
-    output      TEXT NOT NULL DEFAULT '',
-    error       TEXT NOT NULL DEFAULT '',
-    started_at  TEXT,
-    finished_at TEXT
+-- 运行实例（不变）
+CREATE TABLE orchestration_runs (
+    id, orchestration_id, name, exec_mode, status,
+    total_hosts, ok_hosts, fail_hosts, trigger_type, created_at, finished_at
 );
-CREATE INDEX idx_orun_steps_run ON orchestration_run_steps(run_id);
+
+-- 运行明细
+CREATE TABLE orchestration_run_steps (
+    id, run_id, host_id, host_name, host_ip, seq,
+    template_id, template_name, status, attempt, output, error,
+    started_at, finished_at
+);
 ```
 
-要点：
-- **不**为每个微步骤生成 deploy_task，避免任务记录爆炸；
-  编排运行有独立的 runs/run_steps 两级记录，粒度足够回放与排查
-- `orchestration_run_steps.output` 纳入现有的按天保留清理
-- 成功步骤照常写 `host_installs` 安装标记
+**对现有 `deploy_tasks` / `deploy_task_hosts` 的调整**（支持逐主机变量）：
+- `deploy_tasks.params_json` 语义改为 **任务级默认**（可为空）
+- `deploy_task_hosts` 增加列 `params_json TEXT NOT NULL DEFAULT '{}'`（该主机的变量覆盖）
+- 渲染：`renderScript(script, mergeVars(templateVars, taskDefault, hostOverride))`
+- 旧数据 `deploy_task_hosts.params_json` 为空 → 回退用 `deploy_tasks.params_json`，行为不变（兼容）
 
-## 5. 执行引擎
+## 6. 执行引擎
 
 ```
 Run(orchestrationId)
-  ├─ 1. 展开为每主机队列:  map[hostID] => []stepExec{seq, script, retry...}
-  │      by_host : 直接取 orchestration_host_chains
-  │      by_step : 取 orchestration_steps 共享链复制给所有 scope 内主机
-  ├─ 2. 建 orchestration_runs + 批量插入 run_steps(pending)
-  ├─ 3. 调度循环（单 goroutine 即可）:
-  │      - 自适应信号量内，为每个"有空闲且未完结"的主机派发下一步
-  │      - by_step 模式额外检查全局栅栏：seq=k 未全员终态前不发 k+1
-  │      - 步骤失败: 尝试重试(retry_count) → 仍败则该主机链终止(除非 continue_on_error)
-  └─ 4. 每步执行体 = 复用现有 execOnHost(渲染/解密/拨号) + streamTee 实时输出
-         输出增量 → SSE TopicOrchestrationProgress
-         输出全量 → 回写 run_steps.output（64KB 上限不变）
+  ├─ 展开为每主机队列 map[hostID] => []stepExec{seq, template, retry...}
+  │    by_host : orchestration_host_chains（params 已在行内）
+  │    by_step : orchestration_steps 默认链
+  │              + 每台主机叠加 orchestration_step_host_vars 覆盖
+  ├─ 建 orchestration_runs + run_steps(pending)
+  ├─ 调度循环（单 goroutine）:
+  │    - 自适应信号量内，为每个未完结主机派发下一步
+  │    - by_step 额外检查全局栅栏
+  │    - 步骤失败: 重试 → 仍败则终止该主机链(除非 continue_on_error)
+  └─ 每步 = execOnHost(逐主机 mergeVars 渲染 + 解密 + 拨号) + streamTee
+        增量 → SSE TopicOrchestrationProgress；全量 → run_steps.output
 ```
 
-**复用清单**（几乎不需要新造轮子）：
+复用清单（不变）：renderScript/applyHostVars、execOnHost/streamTee、eventbus+SSE、
+host_installs、audit_logs、保留清理、自适应并发。
 
-| 现有能力 | 在编排中的角色 |
-|----------|----------------|
-| renderScript + applyHostVars | 步骤脚本渲染（含 {{__seq}} 等） |
-| execOnHost / streamTee | 单主机执行 + 实时日志（建议抽成公共 service 供两处调用） |
-| eventbus + SSE | 新增 TopicOrchestrationProgress，前端订阅方式与部署一致 |
-| host_installs 标记 | 步骤成功即打标 |
-| audit_logs | action=`orchestration.run` |
-| 保留清理 loop | 扩展清理 orchestration_runs 超期数据 |
-| 自适应并发 | 主机级并行度 |
+## 7. SSE 与进度页
 
-## 6. SSE 与进度页
-
-事件流：`GET /api/sse/orchestration?run_id=N`
-
+`GET /api/sse/orchestration?run_id=N`
 ```
-event: step      data={"run_id":1,"host_id":3,"seq":2,"status":"running"}
-event: output    data={"run_id":1,"host_id":3,"seq":2,"output":"..."}   ← 增量日志
-event: step      data={"run_id":1,"host_id":3,"seq":2,"status":"success","attempt":1}
-event: done      data={"status":"partial","ok_hosts":8,"fail_hosts":1}
+event: step   data={"run_id":1,"host_id":3,"seq":2,"status":"running"}
+event: output data={"run_id":1,"host_id":3,"seq":2,"output":"..."}
+event: step   data={"run_id":1,"host_id":3,"seq":2,"status":"success","attempt":1}
+event: done   data={"status":"partial","ok_hosts":8,"fail_hosts":1}
 ```
+进度页：每主机一行，列=步骤状态徽章；点格子展开该步骤实时日志。
 
-进度页布局（复用部署进度页风格）：
-- 顶部：运行状态 + 主机完成度汇总条
-- 主表格：每主机一行，列 = 步骤 1..N 的状态徽章（成功绿/失败红/进行中蓝/等待灰）
-- 点击任一格子展开该步骤的实时日志抽屉
+## 8. UI 交互线框
 
-## 7. UI 交互（文字线框）
-
-### 7.1 编排列表页（新增导航项：部署中心 → 任务编排）
+### 8.1 编排列表页（部署中心 → 任务编排）
 ```
-[新建编排]                                [搜索____]
-┌──────────────────────────────────────────────┐
-│ 名称        模式     步骤数  最近运行   操作      │
-│ 新机初始化   by_step   5     2h前 成功  运行 编辑 ⋯ │
-│ k8s-node    by_host   4     1d前 失败  运行 编辑 ⋯ │
-└──────────────────────────────────────────────┘
+[新建编排]                       [搜索____]
+名称        模式     步骤数  最近运行   操作
+新机初始化   by_step   5     2h前 成功  运行 编辑 ⋯
+k8s-node    by_host   4     1d前 失败  运行 编辑 ⋯
 ```
 
-### 7.2 编排编辑器
-- **模式切换**（顶部 radio）：按主机编排 / 按模板编排
+### 8.2 编排编辑器
+- 顶部 radio：按主机编排 / 按模板编排
 - **按模板编排**：
   ```
-  步骤链:  [≡ 1. 时区与NTP      参数:默认      范围:全部  ✕]
-          [≡ 2. 基础软件安装    参数:默认      范围:全部  ✕]
-          [+ 从模板库添加步骤]
-  底部: 选择目标主机（现有多选组件 + 排序控件复用）
+  步骤链: [≡1. NTP] [≡2. 基础软件] [≡3. 内核调优] [+ 添加步骤]
+  底部: 勾选目标主机 → 主机表格逐台填变量(可"应用到全部")
   ```
-  步骤卡片可拖拽排序、点击展开参数表单（由模板 variables 动态生成，复用现有渲染）
 - **按主机编排**：
   ```
-  左栏: 已选主机列表（web-01 ● 当前编辑 / db-01 / node-03）
-  右栏: 当前主机的链
-        [≡ 1. 内核调优] [≡ 2. 安装Docker] [+ 添加步骤]
-  快捷: [将此链复制到 → 全部/勾选主机]   ← 90% 场景一键铺开再微调
+  左栏: 已选主机(web-01 ●编辑 / db-01 / node-03)
+  右栏: 当前主机链 [≡1. 内核调优 参数:本机] [≡2. Docker 参数:本机]
+  快捷: [复制此链 → 全部/选中]   ← 90% 场景一键铺开再微调
   ```
 
-### 7.3 定时触发
-现有 `deploy_schedules` 扩展一列 `target_type`(template/orchestration) +
-`orchestration_id`，cron 到点跑编排；UI 在定时任务新建表单加类型切换。
+### 8.3 部署中心（基础建设）按 §3 三步流改造
+重点在第三步的「逐主机变量表格」，这是 v2 的核心交互。
 
-## 8. 配套内置模板补充
+### 8.4 定时触发
+`deploy_schedules` 扩展 `target_type`(template/orchestration) + `orchestration_id`，
+cron 跑编排；定时任务的变量同样支持逐主机（保存时按主机固化快照）。
 
-配合编排上线，补齐「新机初始化」全家桶：
+## 9. 配套内置模板
 
-| 模板 | 内容要点 |
-|------|----------|
-| 基础软件安装（新增） | vim/curl/wget/tar/unzip/htop/lsof/tcpdump/bash-completion 等；自动识别 yum/dnf/apt；幂等 |
-| 内核参数调优（增强现有） | 在 BBR 基础上补：文件句柄 655350、conntrack 上限、TCP 缓冲区、somaxconn、swappiness=10、arp 忽略异常通告等；分文件落盘便于回滚 |
-| 时间同步（已有） | 不动 |
+| 模板 | 内容 | 关键变量（逐主机） |
+|------|------|--------------------|
+| 设置主机名（原"批量修改主机名"回归为普通模板） | `hostnamectl set-hostname {{new_name}}` + 自报同步台账 | `new_name` |
+| 基础软件安装（新增） | vim/curl/wget/htop... 自动识别 yum/dnf/apt，幂等 | 可选开关 |
+| 内核参数调优（增强） | 句柄数/conntrack/TCP缓冲/swappiness... 分文件落盘 | — |
+| 时间同步（已有） | 不动 | — |
 
-## 9. 分期实施
+## 10. 分期实施
 
-| 阶段 | 内容 | 预估工作量 |
-|------|------|-----------|
-| **P1** | 数据表 + 编排 CRUD API + **按模板编排**（by_step）手动执行 + 进度页（表格+日志抽屉）+ SSE | 引擎改造为主，约 60% |
-| **P2** | **按主机差异化链**（by_host）+ 编辑器双模式交互 + 重试/continue_on_error + 安装标记打通 | 约 30% |
-| **P3** | 定时触发编排 + 保留清理接入 + 运行历史对比视图 | 约 10% |
+| 阶段 | 内容 |
+|------|------|
+| **P0（前置，建议先做）** | 部署中心支持**逐主机变量**（deploy_task_hosts.params_json + 第三步变量表格 + 渲染合并） |
+| **P1** | 编排数据表 + CRUD + **按模板编排(by_step)** 手动执行 + 进度页 + SSE |
+| **P2** | **按主机差异化链(by_host)** + 双模式编辑器 + 重试/continue_on_error + 安装标记 |
+| **P3** | 定时触发 + 保留清理 + 历史对比 |
 
-P1 结束即可覆盖「新机初始化」这条最高频路径。
+> P0 是 P1/P2 的基础：逐主机变量机制先落地，编排直接复用。
 
-## 10. 开放问题（需要你拍板）
+## 11. 开放问题（需拍板）
 
-1. **跨主机顺序**（先 DB 后 Web 这种）v1 用 `by_step` 模式覆盖够不够？
-   更细粒度的「阶段分组」建议放 P3 之后看真实需求。
-2. **编排内引用变量**：步骤参数要不要支持引用前序步骤的输出（如取到 IP 写配置）？
-   实现成本高，v1 建议**不做**，用 `{{__ip}}` 等内置变量先顶。
-3. **权限**：编排属于高危聚合操作（一键改 N 台），v1 沿用单一管理员账号体系不做细分，未来若有多用户再加。
-4. **运行中编辑**：编排正在跑时禁止修改定义（编辑器锁定），避免语义混乱——默认这么做，OK？
+1. **跨主机顺序** v1 用 `by_step` 覆盖够否？更细「阶段分组」放 P3 后。
+2. **步骤间变量传递**（前序输出喂后续）v1 不做，用内置变量先顶。
+3. **权限**：编排高危聚合操作，v1 单一管理员账号不过细。
+4. **运行中锁定编辑**：编排执行中禁止改定义。
+5. **（新增）逐主机变量 UI 密度**：主机很多时（如 50 台）第三步表格要不要支持
+   分组/筛选 + 「批量填某变量」？v1 先做基础表格 + 应用到全部，复杂交互放 P2。
 
 ---
 
-*评审通过后按 P1 → P2 → P3 顺序实施，每阶段独立提交。*
+*评审通过按 P0 → P1 → P2 → P3 实施，每阶段独立提交。*
