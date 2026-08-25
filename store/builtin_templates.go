@@ -29,17 +29,13 @@ echo "用户 {{username}} 创建成功"
 id "{{username}}"`,
 	},
 	{
-		name:        "批量修改主机名",
-		description: "按「前缀+序号」批量命名：如前缀 node-、起始编号 1，选中 10 台则依次命名为 node-1 ~ node-10。序号按任务内主机清单顺序分配（页面上可先按主机名或 IP 排序再全选）。同时持久化 hostname、更新 /etc/hosts，并自动同步平台台账中的主机名。",
-		variables:   `[{"name":"prefix","label":"主机名前缀（含连接符）","default":"node-","required":true},{"name":"start_num","label":"起始编号","default":"1","required":true}]`,
+		name:        "修改主机名",
+		description: "为当前主机设置新主机名：在第三步「自定义变量」中为每台主机分别填写各自的新名字（留空会校验失败）。持久化 hostname、更新 /etc/hosts，并自动同步平台台账中的主机名。",
+		variables:   `[{"name":"new_name","label":"新主机名","default":"","required":true}]`,
 		script: `#!/bin/bash
 set -e
-PREFIX="{{prefix}}"
-START_NUM="{{start_num}}"
-SEQ={{__seq}}
-case "${START_NUM}" in ''|*[!0-9]*) echo "起始编号必须是数字: ${START_NUM}"; exit 1 ;; esac
-if [ -z "${PREFIX}" ]; then echo "主机名前缀不能为空"; exit 1; fi
-NEW_NAME="$(printf '%s%d' "${PREFIX}" $((SEQ + START_NUM - 1)))"
+NEW_NAME="{{new_name}}"
+if [ -z "${NEW_NAME}" ]; then echo "新主机名不能为空"; exit 1; fi
 if ! echo "${NEW_NAME}" | grep -qE '^([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)*[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$'; then
   echo "非法主机名: ${NEW_NAME}（仅允许字母、数字、- 和 .）"; exit 1
 fi
@@ -49,7 +45,7 @@ hostnamectl set-hostname "${NEW_NAME}"
 if grep -qE '^127\.0\.1\.1[[:space:]]' /etc/hosts 2>/dev/null; then
   sed -i "s/^\\(127\\.0\\.1\\.1[[:space:]]\\+\\).*/\\1${NEW_NAME}/" /etc/hosts
 fi
-echo "本机序号=${SEQ}，系统主机名已由 ${OLD} 修改为: ${NEW_NAME}"
+echo "系统主机名已由 ${OLD} 修改为: ${NEW_NAME}"
 # 自报新名字给平台，自动同步台账
 echo "infra-ops:set-name=${NEW_NAME}"`,
 	},
@@ -265,12 +261,22 @@ echo "警告：请先用新端口验证可连通，再关闭当前会话！"` ,
 // 内置模板随版本演进：脚本有变化时原地刷新（内置模板 UI 只读，不存在覆盖用户修改的问题）；
 // 已不在当前内置列表中的历史内置模板会被清理。
 func seedBuiltinTemplates(db *sql.DB) error {
-	// 清理历史版本遗留的内置模板
+	// 清理历史版本遗留的内置模板。
+	// 已被部署任务/定时任务引用的模板受外键约束不可硬删，降级为普通模板保留（历史可追溯）；
+	// 无引用的直接删除。
 	names := make([]string, len(builtinTemplates))
 	args := make([]interface{}, len(builtinTemplates))
 	for i, t := range builtinTemplates {
 		names[i] = t.name
 		args[i] = t.name
+	}
+	if _, err := db.Exec(
+		`UPDATE deploy_templates SET is_builtin=0
+		WHERE is_builtin=1 AND name NOT IN (`+strings.Repeat("?,", len(args)-1)+`?)
+		AND (EXISTS(SELECT 1 FROM deploy_tasks t WHERE t.template_id=deploy_templates.id)
+		  OR EXISTS(SELECT 1 FROM deploy_schedules s WHERE s.template_id=deploy_templates.id))`, args...,
+	); err != nil {
+		return err
 	}
 	if _, err := db.Exec(
 		`DELETE FROM deploy_templates WHERE is_builtin=1 AND name NOT IN (`+strings.Repeat("?,", len(args)-1)+"?)", args...,
