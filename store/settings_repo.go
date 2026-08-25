@@ -15,6 +15,8 @@ const (
 	SettingSSHHostKeyPolicy = "ssh.host_key_policy"
 	SettingProbeInterval    = "probe.interval"
 	SettingProbeConcurrency = "probe.concurrency"
+	SettingDeployConc       = "deploy.concurrency"
+	SettingLogRetentionDays = "deploy.log_retention_days"
 )
 
 // SettingsRepo settings 表 KV 存取。
@@ -80,7 +82,9 @@ func (r *SettingsRepo) EnsureBootstrap(secretKey, passwordHash string) (bool, er
 		{SettingSSHTimeout, "8"},
 		{SettingSSHHostKeyPolicy, "tofu"},
 		{SettingProbeInterval, "60"},
-		{SettingProbeConcurrency, "5"},
+		{SettingProbeConcurrency, "auto"},
+		{SettingDeployConc, "auto"},
+		{SettingLogRetentionDays, "30"},
 	}
 	for _, kv := range defaults {
 		if err := r.Set(kv[0], kv[1]); err != nil {
@@ -88,4 +92,21 @@ func (r *SettingsRepo) EnsureBootstrap(secretKey, passwordHash string) (bool, er
 		}
 	}
 	return true, nil
+}
+
+// EnsureRuntimeDefaults 补齐后续版本新增的运行配置键。
+// 仅 INSERT 缺失项，不覆盖已有值；每次启动幂等调用。
+func (r *SettingsRepo) EnsureRuntimeDefaults() error {
+	defaults := [][2]string{
+		{SettingProbeInterval, "60"},
+		{SettingProbeConcurrency, "auto"},
+		{SettingDeployConc, "auto"},
+		{SettingLogRetentionDays, "30"},
+	}
+	for _, kv := range defaults {
+		if _, err := DB.Exec(`INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO NOTHING`, kv[0], kv[1]); err != nil {
+			return err
+		}
+	}
+	return nil
 }

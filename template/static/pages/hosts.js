@@ -9,6 +9,8 @@ window.HostsPage = {
   <div class="page-card hosts-panel">
     <div class="card-header hosts-toolbar">
       <div class="filter-bar hosts-filters">
+        <el-select v-model="sort.field" style="width:108px"><el-option label="按主机名" value="name" /><el-option label="按 IP" value="ip" /></el-select>
+        <el-button :title="sort.order==='asc'?'切换降序':'切换升序'" @click="toggleSortOrder">{{sort.order==='asc' ? '↑ 升序' : '↓ 降序'}}</el-button>
         <el-select v-model="filter.status" placeholder="状态" clearable style="width:115px"><el-option label="在线" value="online" /><el-option label="离线" value="offline" /><el-option label="未验证" value="unverified" /></el-select>
         <el-input v-model="filter.name" placeholder="主机名称，模糊搜索" clearable style="width:170px" />
         <el-input v-model="filter.ip" placeholder="IP 地址，模糊搜索" clearable style="width:170px" />
@@ -18,7 +20,7 @@ window.HostsPage = {
     </div>
     <el-table v-if="viewMode==='table'" class="hosts-table" :data="list" style="width:100%" v-loading="loading">
       <el-table-column label="主机" min-width="180">
-        <template #default="{row}"><div><span style="font-weight:500">{{row.name}}</span><div class="mono" style="font-size:12px;color:#9CA3AF">{{row.ip}}:{{row.port}}</div></div></template>
+        <template #default="{row}"><div><span style="font-weight:500" :title="'平台名称：' + row.name">{{displayName(row)}}</span><div class="mono" style="font-size:12px;color:#9CA3AF">{{row.ip}}</div></div></template>
       </el-table-column>
       <el-table-column label="标签" width="120">
         <template #default="{row}"><span class="tag-badge" :class="tagClass(row.tag)">{{tagLabel(row.tag)}}</span></template>
@@ -47,8 +49,11 @@ window.HostsPage = {
         <header class="host-card-head">
           <span class="host-card-status" :class="row.status"></span>
           <div class="host-card-idbox">
-            <h3 class="host-card-name" :title="row.name">{{row.name}}</h3>
-            <span class="mono host-card-endpoint">{{row.ip}}:{{row.port}}</span>
+            <h3 class="host-card-name" :title="row.name">{{displayName(row)}}</h3>
+            <span class="host-card-sub">
+              <span class="mono host-card-endpoint">{{row.ip}}</span>
+              <span v-if="displayName(row) !== row.name" class="host-card-osname" :title="'平台名称：' + row.name">台账: {{row.name}}</span>
+            </span>
           </div>
           <el-dropdown trigger="click" @command="command => handleCardCommand(command, row)">
             <el-button text class="host-card-more">···</el-button>
@@ -78,15 +83,23 @@ window.HostsPage = {
     <div class="hosts-pagination"><el-pagination v-model:current-page="pg" :page-size="20" :total="total" layout="total, prev, pager, next" @current-change="connectSSE" /></div>
   </div>
   <el-drawer v-model="drawer" :title="detail?.name" size="480px">
-      <div class="detail-section"><h4>基本信息</h4><div class="detail-grid"><div class="detail-item"><div class="label">IP</div><div class="value mono">{{detail.ip}}</div></div><div class="detail-item"><div class="label">端口</div><div class="value mono">{{detail.port}}</div></div><div class="detail-item"><div class="label">标签</div><div class="value">{{detail.tag || '其他'}}</div></div><div class="detail-item"><div class="label">状态</div><div class="value"><span class="status-badge" :class="detail.status"><span class="dot"></span>{{statusText(detail.status)}}</span></div></div></div></div>
-      <div class="detail-section" v-if="info(detail)"><h4>系统信息</h4><div class="detail-grid"><div class="detail-item"><div class="label">主机名</div><div class="value mono">{{info(detail).hostname||'-'}}</div></div><div class="detail-item"><div class="label">操作系统</div><div class="value">{{info(detail).os||'-'}}</div></div><div class="detail-item"><div class="label">内核</div><div class="value mono">{{info(detail).kernel||'-'}}</div></div><div class="detail-item"><div class="label">运行时长</div><div class="value mono">{{info(detail).uptime||'-'}}</div></div></div></div>
-      <div class="detail-section" v-if="info(detail)"><h4>资源使用</h4><div class="detail-grid"><div class="detail-item"><div class="label">CPU</div><div class="value mono">{{info(detail).cpu_cores||'-'}} 核</div></div><div class="detail-item"><div class="label">内存</div><div class="metric"><div class="metric-bar" style="max-width:100%"><div class="fill" :class="memCls(detail)" :style="{width:memPct(detail)+'%'}"></div></div><span class="metric-value">{{memPct(detail)}}%</span></div></div><div class="detail-item" style="grid-column:span 2"><div class="label">磁盘</div><div class="metric"><div class="metric-bar" style="max-width:100%"><div class="fill" :class="diskCls(detail)" :style="{width:diskPct(detail)+'%'}"></div></div><span class="metric-value">{{diskPct(detail)}}%</span></div></div></div></div>
+    <div class="detail-section"><h4>基本信息</h4><div class="detail-grid"><div class="detail-item"><div class="label">IP</div><div class="value mono">{{detail.ip}}</div></div><div class="detail-item"><div class="label">端口</div><div class="value mono">{{detail.port}}</div></div><div class="detail-item"><div class="label">标签</div><div class="value">{{detail.tag || '其他'}}</div></div><div class="detail-item"><div class="label">状态</div><div class="value"><span class="status-badge" :class="detail.status"><span class="dot"></span>{{statusText(detail.status)}}</span></div></div></div></div>
+    <div class="detail-section" v-if="info(detail)"><h4>系统信息</h4><div class="detail-grid"><div class="detail-item"><div class="label">主机名</div><div class="value mono">{{info(detail).hostname||'-'}}</div></div><div class="detail-item"><div class="label">操作系统</div><div class="value">{{info(detail).os||'-'}}</div></div><div class="detail-item"><div class="label">内核</div><div class="value mono">{{info(detail).kernel||'-'}}</div></div><div class="detail-item"><div class="label">运行时长</div><div class="value mono">{{info(detail).uptime||'-'}}</div></div></div></div>
+    <div class="detail-section" v-if="info(detail)"><h4>资源使用</h4><div class="detail-grid"><div class="detail-item"><div class="label">CPU</div><div class="value mono">{{info(detail).cpu_cores||'-'}} 核</div></div><div class="detail-item"><div class="label">内存</div><div class="metric"><div class="metric-bar" style="max-width:100%"><div class="fill" :class="memCls(detail)" :style="{width:memPct(detail)+'%'}"></div></div><span class="metric-value">{{memPct(detail)}}%</span></div></div><div class="detail-item" style="grid-column:span 2"><div class="label">磁盘</div><div class="metric"><div class="metric-bar" style="max-width:100%"><div class="fill" :class="diskCls(detail)" :style="{width:diskPct(detail)+'%'}"></div></div><span class="metric-value">{{diskPct(detail)}}%</span></div></div></div></div>
+    <div class="detail-section"><h4>已执行安装 <span v-if="installs.length" style="color:var(--text-faint);font-size:11px;font-weight:400">（{{installs.length}} 项）</span></h4>
+      <div v-if="installsLoading" style="color:#94A3B8;font-size:12px">加载中…</div>
+      <div v-else-if="!installs.length" style="color:#94A3B8;font-size:12px">该主机尚未通过部署中心执行过安装</div>
+      <div v-else class="host-install-list">
+        <div v-for="it in installs" :key="it.id" class="host-install-item">
+          <span class="tag-badge k8s">{{it.template_name}}</span>
+          <span class="mono host-install-time">{{it.updated_at}}</span>
+        </div>
+      </div>
     </div>
   </el-drawer>
   <el-dialog v-model="dialog" :title="form.id?'编辑主机':'新增主机'" width="640px">
     <el-form :model="form" label-position="top">
       <div class="form-grid">
-        <el-form-item label="主机名称" required><el-input v-model="form.name" /></el-form-item>
         <el-form-item label="IP" required><el-input v-model="form.ip" /></el-form-item>
         <el-form-item label="端口"><el-input-number v-model="form.port" :min="1" :max="65535" style="width:100%" /></el-form-item>
         <el-form-item label="标签"><el-input v-model="form.tag" placeholder="请输入标签，支持中英文和数字" clearable /></el-form-item>
@@ -127,7 +140,7 @@ window.HostsPage = {
   </el-dialog>
 </div>`,
   data() {
-    return { list: [], loading: false, pg: 1, total: 0, filter: { tag: '', status: '', name: '', ip: '' }, viewMode: localStorage.getItem('hosts-view-mode') || 'table', drawer: false, detail: null, dialog: false, form: {}, creds: [], credLoading: false, credsLoaded: false, saving: false, eventSource: null, batchDialog: false, batchForm: { credential_id: null, ips: '', port: 22, tag: 'other', remark: '', auto_test: true }, batchSubmitting: false, batchTimer: null, preview: { count: 0, dup: 0, err: '' }, result: { show: false, created: 0, failed: 0, skipped: 0, results: [] } }
+    return { list: [], loading: false, pg: 1, total: 0, filter: { tag: '', status: '', name: '', ip: '' }, sort: JSON.parse(localStorage.getItem('hosts-sort') || '{"field":"name","order":"asc"}'), viewMode: localStorage.getItem('hosts-view-mode') || 'table', drawer: false, detail: null, installs: [], installsLoading: false, dialog: false, form: {}, creds: [], credLoading: false, credsLoaded: false, saving: false, eventSource: null, batchDialog: false, batchForm: { credential_id: null, ips: '', port: 22, tag: 'other', remark: '', auto_test: true }, batchSubmitting: false, batchTimer: null, preview: { count: 0, dup: 0, err: '' }, result: { show: false, created: 0, failed: 0, skipped: 0, results: [] } }
   },
   mounted() { this.connectSSE() },
   beforeUnmount() { if (this.eventSource) this.eventSource.close() },
@@ -136,11 +149,14 @@ window.HostsPage = {
     'filter.name'() { this.pg = 1; this.connectSSE() },
     'filter.ip'() { this.pg = 1; this.connectSSE() },
     'filter.tag'() { this.pg = 1; this.connectSSE() },
+    'sort.field'() { this.pg = 1; localStorage.setItem('hosts-sort', JSON.stringify(this.sort)); this.connectSSE() },
+    'sort.order'() { this.pg = 1; localStorage.setItem('hosts-sort', JSON.stringify(this.sort)); this.connectSSE() },
     viewMode(value) { localStorage.setItem('hosts-view-mode', value) }
   },
   methods: {
+    toggleSortOrder() { this.sort = { ...this.sort, order: this.sort.order === 'asc' ? 'desc' : 'asc' } },
     sseUrl() {
-      const params = new URLSearchParams({ page: this.pg, page_size: 20 })
+      const params = new URLSearchParams({ page: this.pg, page_size: 20, sort: this.sort.field || 'name', order: this.sort.order || 'asc' })
       if (this.filter.tag) params.set('tag', this.filter.tag)
       if (this.filter.status) params.set('status', this.filter.status)
       if (this.filter.name) params.set('name', this.filter.name)
@@ -261,6 +277,8 @@ window.HostsPage = {
      errText(code) { return { 1001: 'SSH 连接失败', 1002: 'SSH 认证失败', 1003: 'host key 发生变化', 1004: '信息采集失败' }[code] || ('错误 ' + code) },
     closeResultRefresh() { this.result.show = false; this.connectSSE() },
     info(row) { if (!row.info_json || row.info_json === '{}') return null; try { return typeof row.info_json === 'string' ? JSON.parse(row.info_json) : row.info_json } catch (e) { return null } },
+    // 展示名优先用系统主机名（巡检采集），无则回退平台名称
+    displayName(row) { const h = this.info(row)?.hostname; return (h && String(h).trim()) || row.name },
     specText(row) { const i = this.info(row); if (!i) return '-'; const mem = i.mem_total_mb ? (i.mem_total_mb >= 1024 ? Math.round(i.mem_total_mb/1024)+'G' : i.mem_total_mb+'M') : '?'; return (i.cpu_cores||'?')+'C/'+mem },
     loadPct(row) { const i = this.info(row); if (!i || !i.load1 || !i.cpu_cores) return 0; return Math.round(i.load1/i.cpu_cores*100) },
     memPct(row) { const i = this.info(row); return i?.mem_used_percent ? Math.round(i.mem_used_percent) : 0 },
@@ -273,7 +291,11 @@ window.HostsPage = {
     tagType() { return 'info' },
     handleCardCommand(command, row) { if (command === 'detail') this.openDetail(row); else if (command === 'test') this.testConn(row); else if (command === 'edit') this.openForm(row); else if (command === 'delete') this.delHost(row) },
      statusText(s) { return s==='online'?'在线':s==='offline'?'离线':'未验证'} ,
-    openDetail(row) { this.detail = row; this.drawer = true },
+    openDetail(row) {
+      this.detail = row; this.drawer = true
+      this.installs = []; this.installsLoading = true
+      api.get('/hosts/' + row.id + '/installs').then(r => { this.installs = r.data || [] }).catch(() => {}).finally(() => { this.installsLoading = false })
+    },
     openForm(row) { this.form = row ? {...row} : { name:'', ip:'', port:22, tag:'other', credential_id:null, remark:'' }; this.dialog = true },
     async save() {
       this.saving = true

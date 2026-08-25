@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
 	"infra-ops/common/crypto"
 	"infra-ops/common/eventbus"
 	"infra-ops/common/sshx"
+	"infra-ops/common/sysutil"
 	"infra-ops/model"
 	"infra-ops/store"
 )
@@ -55,7 +57,11 @@ func New(deps Deps) *Probe {
 // Start 启动巡检协程。
 func (p *Probe) Start() {
 	go p.loop()
-	log.Printf("probe started: interval=%ds concurrency=%d", p.intervalSec, p.concurrency)
+	if p.concurrency <= 0 {
+		log.Printf("probe started: interval=%ds concurrency=auto", p.intervalSec)
+	} else {
+		log.Printf("probe started: interval=%ds concurrency=%d", p.intervalSec, p.concurrency)
+	}
 }
 
 // Stop 停止巡检。
@@ -84,7 +90,12 @@ func (p *Probe) runOnce() {
 		return
 	}
 
-	sem := make(chan struct{}, p.concurrency)
+	concurrency := p.concurrency
+	if concurrency <= 0 {
+		concurrency = sysutil.AdaptiveConcurrency(len(hosts)) // 每轮按当前主机数自适应
+	}
+
+	sem := make(chan struct{}, concurrency)
 	var wg sync.WaitGroup
 
 	for i := range hosts {
@@ -140,6 +151,14 @@ func (p *Probe) probeHost(h *model.Host) {
 	infoJSON, _ := json.Marshal(result.Info)
 	if err := p.hostRepo.UpdateProbeResult(h.ID, "online", int(result.LatencyMs), string(infoJSON)); err != nil {
 		log.Printf("probe: update %s: %v", addr, err)
+	}
+	// 台账名自动跟随系统主机名（重名冲突时跳过，保留原名）
+	if hn := strings.TrimSpace(result.Info.Hostname); hn != "" && hn != h.Name {
+		if err := p.hostRepo.Rename(h.ID, hn); err != nil {
+			log.Printf("probe: 同步主机名 %s -> %s: %v", h.Name, hn, err)
+		} else {
+			h.Name = hn
+		}
 	}
 	// 发布状态更新事件
 	if p.bus != nil {

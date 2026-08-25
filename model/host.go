@@ -36,3 +36,14 @@ type DiskInfo struct {
 	SizeGB      float64 `json:"size_gb"`
 	UsedPercent int     `json:"used_percent"`
 }
+
+// HostInstall 主机安装标记：该主机成功执行过的安装模板（每模板一条，重复执行刷新时间）。
+type HostInstall struct {
+	ID           int64  `json:"id"`
+	HostID       int64  `json:"host_id"`
+	TemplateID   int64  `json:"template_id"`
+	TemplateName string `json:"template_name"`
+	TaskID       int64  `json:"task_id"`
+	CreatedAt    string `json:"created_at"` // 首次安装时间
+	UpdatedAt    string `json:"updated_at"` // 最近一次执行时间
+}

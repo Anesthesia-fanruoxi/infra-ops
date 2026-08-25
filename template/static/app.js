@@ -20,6 +20,23 @@ api.interceptors.response.use(
 )
 window.api = api
 
+// 主机排序比较器：主机名字典序（忽略大小写）；IP 按数值八位组比较，非法段排最后
+window.cmpHostName = (a, b) => {
+  const x = String(a?.name || '').toLowerCase(), y = String(b?.name || '').toLowerCase()
+  if (x === y) return (a?.id || 0) - (b?.id || 0)
+  return x < y ? -1 : 1
+}
+window.cmpHostIP = (a, b) => {
+  const pa = String(a?.ip || '').trim().split('.')
+  const pb = String(b?.ip || '').trim().split('.')
+  const octet = s => (/^\d+$/.test(s) && +s < 256) ? +s : 999
+  for (let i = 0; i < 4; i++) {
+    const d = octet(pa[i] ?? '') - octet(pb[i] ?? '')
+    if (d) return d
+  }
+  return (a?.id || 0) - (b?.id || 0)
+}
+
 // 图标库
 const ICONS = {
   overview: '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>',
@@ -108,7 +125,7 @@ const app = createApp({
 
     window.addEventListener('force-change-password', openChangePassword)
 
-    return { currentPage, user, version, versionData, pwdDialog, pwdForced, pwdOld, openChangePassword, onPwdDone, handleRoute, navigate, logout, loadUser, ICONS }
+    return { currentPage, user, version, versionData, pwdDialog, pwdForced, pwdOld, openChangePassword, onPwdDone, handleRoute, navigate, logout, loadUser, loadVersion, ICONS }
   }
 })
 

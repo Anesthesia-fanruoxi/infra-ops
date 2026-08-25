@@ -15,6 +15,47 @@ var migrations = []migration{
 	{5, migrateV5},
 	{6, migrateV6},
 	{7, migrateV7},
+	{8, migrateV8},
+	{9, migrateV9},
+	{10, migrateV10},
+}
+
+// migrateV8 并发配置改为自适应：存量库中未改过的旧引导默认值 5 归一为 auto。
+func migrateV8(db *sql.DB) error {
+	_, err := db.Exec(`UPDATE settings SET value='auto' WHERE key='probe.concurrency' AND value='5'`)
+	return err
+}
+
+// migrateV9 主机安装标记表：记录每台主机执行过哪些安装模板；主机删除时级联清理。
+func migrateV9(db *sql.DB) error {
+	_, err := db.Exec(`CREATE TABLE IF NOT EXISTS host_installs (
+		id            INTEGER PRIMARY KEY AUTOINCREMENT,
+		host_id       INTEGER NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+		template_id   INTEGER NOT NULL DEFAULT 0,
+		template_name TEXT NOT NULL,
+		task_id       INTEGER NOT NULL DEFAULT 0,
+		created_at    TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+		updated_at    TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+		UNIQUE(host_id, template_name)
+	)`)
+	if err != nil {
+		return err
+	}
+	_, err = db.Exec(`CREATE INDEX IF NOT EXISTS idx_host_installs_host ON host_installs(host_id)`)
+	return err
+}
+
+// migrateV10 主机唯一身份调整为 ip+port：name 退化为自动维护的显示字段
+// （初始=IP，巡检后跟随系统 hostname）。清理历史重复项后建唯一索引，新旧库统一生效。
+func migrateV10(db *sql.DB) error {
+	// 同 ip+port 保留最早登记的一条（级联清理其部署记录/安装标记）
+	if _, err := db.Exec(`DELETE FROM hosts WHERE id NOT IN (
+		SELECT MIN(id) FROM hosts GROUP BY ip, port
+	)`); err != nil {
+		return err
+	}
+	_, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_hosts_ip_port ON hosts(ip, port)`)
+	return err
 }
 
 // migrateV5 创建 settings 表：全部运行配置以 KV 形式持久化于此。

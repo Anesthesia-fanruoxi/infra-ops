@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
+	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,14 +20,14 @@ import (
 	"infra-ops/common/eventbus"
 	"infra-ops/common/resp"
 	"infra-ops/common/sshx"
+	"infra-ops/common/sysutil"
 	"infra-ops/model"
 	"infra-ops/store"
 )
 
 const (
-	execTimeout   = 600 * time.Second // 单台执行超时（安装类脚本耗时较长）
-	outputLimit   = 64 << 10          // 单台输出上限 64KB
-	runConcurrent = 5                 // 并发执行数
+	execTimeout = 600 * time.Second // 单台执行超时（安装类脚本耗时较长）
+	outputLimit = 64 << 10          // 单台输出上限 64KB
 )
 
 // deployHandler 部署执行与任务查询。
@@ -38,6 +41,7 @@ type deployHandler struct {
 	bus       *eventbus.Bus
 	auditRepo *store.AuditRepo
 	sched     *deployScheduler
+	conc      int // 执行并发数；<=0 表示按主机数自适应
 }
 
 // StartScheduler 启动定时任务调度器（随进程生命周期运行）。
@@ -48,9 +52,9 @@ func (h *deployHandler) StartScheduler() {
 
 func NewDeployHandler(tplRepo *store.DeployRepo, schedRepo *store.DeployScheduleRepo, hostRepo *store.HostRepo,
 	credRepo *store.CredentialRepo, cryptoS *icrypto.Service, sshC *sshx.Client,
-	bus *eventbus.Bus, auditRepo *store.AuditRepo) *deployHandler {
+	bus *eventbus.Bus, auditRepo *store.AuditRepo, concurrency int) *deployHandler {
 	return &deployHandler{tplRepo: tplRepo, schedRepo: schedRepo, hostRepo: hostRepo, credRepo: credRepo,
-		cryptoS: cryptoS, sshC: sshC, bus: bus, auditRepo: auditRepo}
+		cryptoS: cryptoS, sshC: sshC, bus: bus, auditRepo: auditRepo, conc: concurrency}
 }
 
 type runReq struct {
@@ -232,6 +236,7 @@ func (h *deployHandler) execute(taskID int64, script string) {
 		_, _ = h.tplRepo.FinishTask(taskID)
 		return
 	}
+	task, _ := h.tplRepo.GetTask(taskID) // 用于成功后写入主机安装标记
 
 	var mu sync.Mutex
 	successCnt, failCnt := 0, 0
@@ -248,17 +253,27 @@ func (h *deployHandler) execute(taskID int64, script string) {
 			Total: len(records), TaskStatus: "running"}
 		mu.Unlock()
 
+		if status == "success" && task != nil {
+			if err := h.tplRepo.MarkHostInstalled(rec.HostID, task.TemplateID, task.TemplateName, taskID); err != nil {
+				log.Printf("deploy: 标记安装记录失败 host=%d: %v", rec.HostID, err)
+			}
+		}
 		_ = h.tplRepo.UpdateHostStatus(rec.RecID, status, output, errMsg)
 		if h.bus != nil {
 			h.bus.Publish(eventbus.TopicDeployProgress, p)
 		}
 	}
 
-	sem := make(chan struct{}, runConcurrent)
+	concurrency := h.conc
+	if concurrency <= 0 {
+		concurrency = sysutil.AdaptiveConcurrency(len(records)) // 按本轮主机数自适应
+	}
+
+	sem := make(chan struct{}, concurrency)
 	var wg sync.WaitGroup
-	for _, rec := range records {
+	for i := range records {
 		wg.Add(1)
-		go func(rec store.HostRecord) {
+		go func(rec store.HostRecord, seq int) {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
@@ -270,13 +285,34 @@ func (h *deployHandler) execute(taskID int64, script string) {
 				})
 			}
 
-			output, execErr := h.execOnHost(rec.HostID, script)
+			// 执行过程中增量推送日志片段（SSE 实时输出）
+			onLog := func(chunk string) {
+				if chunk == "" || h.bus == nil {
+					return
+				}
+				h.bus.Publish(eventbus.TopicDeployProgress, deployProgress{
+					TaskID: taskID, HostID: rec.HostID, Status: "output",
+					Output: chunk, Total: len(records), TaskStatus: "running",
+				})
+			}
+
+			output, execErr := h.execOnHost(rec.HostID, applyHostVars(script, i+1, rec), onLog)
 			status, errMsg := "success", ""
 			if execErr != nil {
 				status, errMsg = "failed", execErr.Error()
 			}
+			// 成功任务支持脚本自报：infra-ops:set-name=xxx 自动同步平台台账主机名
+			if status == "success" {
+				if newName := extractSelfReportedName(output); newName != "" {
+					if err := h.hostRepo.Rename(rec.HostID, newName); err != nil {
+						log.Printf("deploy: 同步主机名失败 host=%d name=%s: %v", rec.HostID, newName, err)
+					} else {
+						rec.HostName = newName
+					}
+				}
+			}
 			publish(rec, status, output, errMsg)
-		}(rec)
+		}(records[i], i+1)
 	}
 	wg.Wait()
 
@@ -292,8 +328,8 @@ func (h *deployHandler) execute(taskID int64, script string) {
 	}
 }
 
-// execOnHost 解密凭据→SSH 拨号→执行渲染后脚本，返回合并输出。
-func (h *deployHandler) execOnHost(hostID int64, script string) (string, error) {
+// execOnHost 解密凭据→SSH 拨号→执行渲染后脚本；onLog 在执行过程中接收增量输出。
+func (h *deployHandler) execOnHost(hostID int64, script string, onLog func(string)) (string, error) {
 	host, err := h.hostRepo.GetByID(hostID)
 	if err != nil || host == nil {
 		return "", fmt.Errorf("主机不存在")
@@ -322,34 +358,94 @@ func (h *deployHandler) execOnHost(hostID int64, script string) (string, error) 
 	}
 	defer client.Close()
 
-	return runRemoteScript(client, script)
+	return runRemoteScript(client, script, onLog)
 }
 
-// runRemoteScript 在连接上执行脚本，捕获合并输出（上限 64KB），超时 300s。
-func runRemoteScript(client *ssh.Client, script string) (string, error) {
+// runRemoteScript 在连接上执行脚本：合并输出落缓冲（上限 64KB），
+// 同时按 ~400ms 节流把增量输出回调给 onLog（SSE 实时日志），超时 600s。
+func runRemoteScript(client *ssh.Client, script string, onLog func(string)) (string, error) {
 	session, err := client.NewSession()
 	if err != nil {
 		return "", fmt.Errorf("new session: %w", err)
 	}
 	defer session.Close()
 
-	var buf limitedBuffer
-	session.Stdout = &buf
-	session.Stderr = &buf
+	tw := &streamTee{onLog: onLog}
+	session.Stdout = tw
+	session.Stderr = tw
 
 	done := make(chan error, 1)
 	go func() { done <- session.Run(script) }()
 
-	select {
-	case err := <-done:
-		if err != nil {
-			return buf.String(), fmt.Errorf("exit: %w", err)
+	flushTicker := time.NewTicker(400 * time.Millisecond)
+	stop := make(chan struct{})
+	defer func() { close(stop); flushTicker.Stop() }()
+	go func() {
+		for {
+			select {
+			case <-flushTicker.C:
+				tw.Flush()
+			case <-stop:
+				return
+			}
 		}
-		return buf.String(), nil
+	}()
+
+	var execErr error
+	select {
+	case execErr = <-done:
+		tw.Flush() // 收尾冲刷残余输出
 	case <-time.After(execTimeout):
 		_ = session.Close()
-		return buf.String(), fmt.Errorf("执行超时(%s)", execTimeout)
+		tw.Flush()
+		return tw.Snapshot(), fmt.Errorf("执行超时(%s)", execTimeout)
 	}
+	if execErr != nil {
+		return tw.Snapshot(), fmt.Errorf("exit: %w", execErr)
+	}
+	return tw.Snapshot(), nil
+}
+
+// streamTee 把 SSH 输出同时写入全量快照与待发送增量区；Flush 由节流器周期调用。
+type streamTee struct {
+	mu      sync.Mutex
+	all     limitedBuffer // 全量快照，最终落库
+	pending []byte        // 待推送增量
+	onLog   func(string)
+}
+
+func (w *streamTee) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.all.Write(p)
+	// 待发送区将溢出时先同步冲刷一次，保证输出顺序
+	if len(w.pending)+len(p) > 16<<10 && len(w.pending) > 0 && w.onLog != nil {
+		w.onLog(string(w.pending))
+		w.pending = nil
+	}
+	if remain := (16 << 10) - len(w.pending); len(p) > remain {
+		p = p[:remain]
+	}
+	w.pending = append(w.pending, p...)
+	return len(p), nil
+}
+
+// Flush 把当前累积的增量输出推送给回调。
+func (w *streamTee) Flush() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if len(w.pending) == 0 || w.onLog == nil {
+		return
+	}
+	w.onLog(string(w.pending))
+	w.pending = nil
+}
+
+// Snapshot 返回全量输出快照。
+func (w *streamTee) Snapshot() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.all.String()
 }
 
 // limitedBuffer 带写入上限的缓冲，防止超长输出撑爆内存。
@@ -366,6 +462,42 @@ func (w *limitedBuffer) Write(p []byte) (int, error) {
 }
 
 func (w *limitedBuffer) String() string { return string(w.b) }
+
+// setNameMarkerRE 脚本自报主机名约定行：infra-ops:set-name=新名字（取最后一次出现）。
+var setNameMarkerRE = regexp.MustCompile(`(?m)^\s*infra-ops:set-name=(\S[^\r\n]*)$`)
+
+// extractSelfReportedName 从脚本输出中提取自报的新主机名；无则返回空串。
+func extractSelfReportedName(output string) string {
+	matches := setNameMarkerRE.FindAllStringSubmatch(output, -1)
+	if len(matches) == 0 {
+		return ""
+	}
+	name := strings.TrimSpace(matches[len(matches)-1][1])
+	name = strings.Trim(name, "\"'")
+	if name == "" || len(name) > 64 {
+		return ""
+	}
+	return name
+}
+
+// applyHostVars 替换内置主机变量：{{__seq}} 任务内序号（1 起）、
+// {{__ip}} 主机 IP、{{__ip_last}} IP 末段、{{__name}} 当前主机名。
+func applyHostVars(script string, seq int, rec store.HostRecord) string {
+	return strings.NewReplacer(
+		"{{__seq}}", strconv.Itoa(seq),
+		"{{__ip}}", rec.HostIP,
+		"{{__ip_last}}", lastOctet(rec.HostIP),
+		"{{__name}}", rec.HostName,
+	).Replace(script)
+}
+
+// lastOctet 取点分 IPv4 的末段；非标准格式原样返回。
+func lastOctet(ip string) string {
+	if i := strings.LastIndexByte(ip, '.'); i >= 0 {
+		return ip[i+1:]
+	}
+	return ip
+}
 
 func dedupInt64(in []int64) []int64 {
 	seen := map[int64]bool{}

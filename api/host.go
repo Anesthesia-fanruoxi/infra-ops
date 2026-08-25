@@ -22,6 +22,7 @@ type hostHandler struct {
 	cryptoS  *crypto.Service
 	sshC     *sshx.Client
 	bus      *eventbus.Bus
+	tplRepo  *store.DeployRepo
 }
 
 type HostDeps struct {
@@ -30,6 +31,7 @@ type HostDeps struct {
 	CryptoS  *crypto.Service
 	SSHC     *sshx.Client
 	Bus      *eventbus.Bus
+	TplRepo  *store.DeployRepo
 }
 
 func NewHostHandler(deps HostDeps) *hostHandler {
@@ -39,11 +41,12 @@ func NewHostHandler(deps HostDeps) *hostHandler {
 		cryptoS:  deps.CryptoS,
 		sshC:     deps.SSHC,
 		bus:      deps.Bus,
+		tplRepo:  deps.TplRepo,
 	}
 }
 
 type hostCreateReq struct {
-	Name         string `json:"name" binding:"required"`
+	Name         string `json:"name"` // 可选；缺省用 IP 作为初始名（巡检后会自动跟随系统主机名）
 	IP           string `json:"ip" binding:"required"`
 	Port         int    `json:"port"`
 	Tag          string `json:"tag"`
@@ -53,7 +56,7 @@ type hostCreateReq struct {
 }
 
 type hostUpdateReq struct {
-	Name         string `json:"name" binding:"required"`
+	Name         string `json:"name"` // 留空保持原名
 	IP           string `json:"ip" binding:"required"`
 	Port         int    `json:"port"`
 	Tag          string `json:"tag"`
@@ -75,8 +78,16 @@ func (h *hostHandler) List(c *gin.Context) {
 		name, ip = keyword, keyword
 	}
 	page, pageSize := parsePage(c)
+	sortBy := c.Query("sort")
+	if sortBy != "" && sortBy != "name" && sortBy != "ip" {
+		sortBy = "name"
+	}
+	order := c.Query("order")
+	if order != "desc" {
+		order = "asc"
+	}
 
-	items, total, err := h.hostRepo.List(tag, status, name, ip, page, pageSize)
+	items, total, err := h.hostRepo.List(tag, status, name, ip, sortBy, order, page, pageSize)
 	if err != nil {
 		resp.ErrHTTP(c, 500, resp.CodeInternal, "查询主机失败")
 		return
@@ -113,6 +124,9 @@ func (h *hostHandler) Create(c *gin.Context) {
 		req.Port = 22
 	}
 	req.Tag = normalizeHostTag(req.Tag, req.LegacyRole)
+	if strings.TrimSpace(req.Name) == "" {
+		req.Name = strings.TrimSpace(req.IP) // 初始名 = IP，巡检后自动跟随系统主机名
+	}
 
 	// 校验凭据存在
 	cred, err := h.credRepo.GetByID(req.CredentialID)
@@ -132,7 +146,7 @@ func (h *hostHandler) Create(c *gin.Context) {
 	id, err := h.hostRepo.Create(host)
 	if err != nil {
 		if isDuplicateErr(err) {
-			resp.Fail(c, resp.CodeConflict, "主机名称已存在")
+			resp.Fail(c, resp.CodeConflict, "主机已存在（IP:端口 重复，或名称与他人冲突）")
 			return
 		}
 		resp.ErrHTTP(c, 500, resp.CodeInternal, "创建主机失败")
@@ -166,6 +180,9 @@ func (h *hostHandler) Update(c *gin.Context) {
 		req.Port = existing.Port
 	}
 	req.Tag = normalizeHostTag(req.Tag, req.LegacyRole)
+	if strings.TrimSpace(req.Name) == "" {
+		req.Name = existing.Name // 留空保持原名
+	}
 
 	// 校验凭据存在
 	cred, err := h.credRepo.GetByID(req.CredentialID)
@@ -176,7 +193,7 @@ func (h *hostHandler) Update(c *gin.Context) {
 
 	if err := h.hostRepo.Update(id, req.Name, req.IP, req.Port, req.Tag, req.Remark, req.CredentialID); err != nil {
 		if isDuplicateErr(err) {
-			resp.Fail(c, resp.CodeConflict, "主机名称已存在")
+			resp.Fail(c, resp.CodeConflict, "主机已存在（IP:端口 重复，或名称与他人冲突）")
 			return
 		}
 		resp.ErrHTTP(c, 500, resp.CodeInternal, "更新主机失败")
@@ -203,6 +220,24 @@ func (h *hostHandler) Delete(c *gin.Context) {
 		h.bus.Publish(eventbus.TopicHostChanged, map[string]interface{}{"id": id, "action": "delete"})
 	}
 	resp.OK(c, nil)
+}
+
+// Installs GET /api/hosts/:id/installs 主机已执行过的安装记录。
+func (h *hostHandler) Installs(c *gin.Context) {
+	id := parseID(c)
+	if id == 0 {
+		resp.Fail(c, resp.CodeBadRequest, "无效的主机 ID")
+		return
+	}
+	items, err := h.tplRepo.HostInstalls(id)
+	if err != nil {
+		resp.ErrHTTP(c, 500, resp.CodeInternal, "查询安装记录失败")
+		return
+	}
+	if items == nil {
+		items = []model.HostInstall{}
+	}
+	resp.OK(c, items)
 }
 
 // Test POST /api/v1/hosts/{id}/test 连接测试 + 信息采集

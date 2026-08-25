@@ -18,11 +18,12 @@ import (
 
 // Deps 路由所需依赖。
 type Deps struct {
-	Settings      *store.SettingsRepo
-	CryptoService *crypto.Service
-	SSHClient     *sshx.Client
-	Sessions      *middleware.SessionStore
-	Bus           *eventbus.Bus
+	Settings          *store.SettingsRepo
+	CryptoService     *crypto.Service
+	SSHClient         *sshx.Client
+	Sessions          *middleware.SessionStore
+	Bus               *eventbus.Bus
+	DeployConcurrency int // <=0 表示按主机数自适应
 }
 
 // Setup 装配路由并返回 gin.Engine。
@@ -82,6 +83,7 @@ func Setup(staticFS fs.FS, deps Deps) *gin.Engine {
 		CryptoS:  deps.CryptoService,
 		SSHC:     deps.SSHClient,
 		Bus:      deps.Bus,
+		TplRepo:  store.NewDeployRepo(),
 	})
 	hosts := protected.Group("/hosts")
 	{
@@ -92,6 +94,7 @@ func Setup(staticFS fs.FS, deps Deps) *gin.Engine {
 		hosts.PUT("/:id", hostHandler.Update)
 		hosts.DELETE("/:id", hostHandler.Delete)
 		hosts.POST("/:id/test", hostHandler.Test)
+		hosts.GET("/:id/installs", hostHandler.Installs)
 	}
 
 	// 部署中心
@@ -106,7 +109,7 @@ func Setup(staticFS fs.FS, deps Deps) *gin.Engine {
 		tpl.DELETE("/:id", deployTplHandler.Delete)
 	}
 	deployTaskHandler := api.NewDeployHandler(deployRepo, scheduleRepo, hostRepo, credRepo,
-		deps.CryptoService, deps.SSHClient, deps.Bus, auditRepo)
+		deps.CryptoService, deps.SSHClient, deps.Bus, auditRepo, deps.DeployConcurrency)
 	deployTaskHandler.StartScheduler()
 	deploySchedHandler := api.NewDeployScheduleHandler(scheduleRepo, deployRepo, deployTaskHandler)
 	protected.POST("/deploy/run", deployTaskHandler.Run)
@@ -138,12 +141,18 @@ func Setup(staticFS fs.FS, deps Deps) *gin.Engine {
 		// 启动时读取 index.html
 		indexHTML, _ := fs.ReadFile(staticFS, "index.html")
 		r.GET("/", func(c *gin.Context) {
+			c.Header("Cache-Control", "no-cache")
 			c.Data(200, "text/html; charset=utf-8", indexHTML)
 		})
 		// embed FS 中文件在 static/... 下，需要取子目录
 		staticSub, err := fs.Sub(staticFS, "static")
 		if err == nil {
-			r.StaticFS("/static", http.FS(staticSub))
+			// no-cache 强制浏览器每次升级后重新校验（配合 Last-Modified 返回 304），避免新旧 JS 混用
+			staticServer := http.StripPrefix("/static", http.FileServer(http.FS(staticSub)))
+			r.GET("/static/*filepath", func(c *gin.Context) {
+				c.Header("Cache-Control", "no-cache")
+				staticServer.ServeHTTP(c.Writer, c.Request)
+			})
 		}
 	}
 

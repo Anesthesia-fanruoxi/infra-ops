@@ -152,7 +152,7 @@ func (h *sseHandler) emitHostOverview(c *gin.Context) {
 	if h.hostRepo == nil {
 		return
 	}
-	items, total, err := h.hostRepo.List("", "", "", "", 1, 6)
+	items, total, err := h.hostRepo.List("", "", "", "", "name", "asc", 1, 6)
 	if err != nil {
 		return
 	}
@@ -218,9 +218,17 @@ func (h *sseHandler) HostStatus(c *gin.Context) {
 		name, ip = keyword, keyword
 	}
 	page, pageSize := parsePage(c)
+	sortBy := c.Query("sort")
+	if sortBy != "" && sortBy != "name" && sortBy != "ip" {
+		sortBy = "name"
+	}
+	order := c.Query("order")
+	if order != "desc" {
+		order = "asc"
+	}
 
 	c.SSEvent("connected", time.Now().Format(time.RFC3339))
-	h.emitHostsPage(c, tag, status, name, ip, page, pageSize)
+	h.emitHostsPage(c, tag, status, name, ip, sortBy, order, page, pageSize)
 	if flusher, ok := c.Writer.(http.Flusher); ok {
 		flusher.Flush()
 	}
@@ -344,11 +352,11 @@ func matchAuditQuery(a model.AuditLog, q store.AuditQuery) bool {
 	return true
 }
 
-func (h *sseHandler) emitHostsPage(c *gin.Context, tag, status, name, ip string, page, pageSize int) {
+func (h *sseHandler) emitHostsPage(c *gin.Context, tag, status, name, ip, sortBy, order string, page, pageSize int) {
 	if h.hostRepo == nil {
 		return
 	}
-	items, total, err := h.hostRepo.List(tag, status, name, ip, page, pageSize)
+	items, total, err := h.hostRepo.List(tag, status, name, ip, sortBy, order, page, pageSize)
 	if err != nil {
 		return
 	}

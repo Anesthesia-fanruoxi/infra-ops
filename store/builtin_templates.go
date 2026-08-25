@@ -1,7 +1,10 @@
 // 内置部署模板预置数据：首次迁移时写入，is_builtin=1 不可删除。
 package store
 
-import "database/sql"
+import (
+	"database/sql"
+	"strings"
+)
 
 type builtinTemplate struct {
 	name        string
@@ -26,9 +29,34 @@ echo "用户 {{username}} 创建成功"
 id "{{username}}"`,
 	},
 	{
+		name:        "批量修改主机名",
+		description: "按「前缀+序号」批量命名：如前缀 node-、起始编号 1，选中 10 台则依次命名为 node-1 ~ node-10。序号按任务内主机清单顺序分配（页面上可先按主机名或 IP 排序再全选）。同时持久化 hostname、更新 /etc/hosts，并自动同步平台台账中的主机名。",
+		variables:   `[{"name":"prefix","label":"主机名前缀（含连接符）","default":"node-","required":true},{"name":"start_num","label":"起始编号","default":"1","required":true}]`,
+		script: `#!/bin/bash
+set -e
+PREFIX="{{prefix}}"
+START_NUM="{{start_num}}"
+SEQ={{__seq}}
+case "${START_NUM}" in ''|*[!0-9]*) echo "起始编号必须是数字: ${START_NUM}"; exit 1 ;; esac
+if [ -z "${PREFIX}" ]; then echo "主机名前缀不能为空"; exit 1; fi
+NEW_NAME="$(printf '%s%d' "${PREFIX}" $((SEQ + START_NUM - 1)))"
+if ! echo "${NEW_NAME}" | grep -qE '^([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)*[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$'; then
+  echo "非法主机名: ${NEW_NAME}（仅允许字母、数字、- 和 .）"; exit 1
+fi
+OLD=$(hostname)
+hostnamectl set-hostname "${NEW_NAME}"
+# 更新 /etc/hosts 中 127.0.1.1 的旧主机名映射（如存在）
+if grep -qE '^127\.0\.1\.1[[:space:]]' /etc/hosts 2>/dev/null; then
+  sed -i "s/^\\(127\\.0\\.1\\.1[[:space:]]\\+\\).*/\\1${NEW_NAME}/" /etc/hosts
+fi
+echo "本机序号=${SEQ}，系统主机名已由 ${OLD} 修改为: ${NEW_NAME}"
+# 自报新名字给平台，自动同步台账
+echo "infra-ops:set-name=${NEW_NAME}"`,
+	},
+	{
 		name:        "安装 Docker",
-		description: "适配 Rocky/CentOS 9/10：阿里云源安装 Docker CE（含 buildx/compose 插件），写入 daemon.json（镜像加速/日志轮转/数据目录）。版本填 latest 装最新版，或指定版本号（如 26.1.4）。已安装则跳过。",
-		variables:   `[{"name":"docker_version","label":"Docker 版本","default":"latest","required":true}]`,
+		description: "适配 Rocky/CentOS 9/10：阿里云源安装最新版 Docker CE（含 buildx/compose 插件），写入 daemon.json（镜像加速/日志轮转/数据目录）。已安装则跳过。",
+		variables:   `[]`,
 		script: `#!/bin/bash
 set -e
 
@@ -58,22 +86,14 @@ gpgcheck=1
 gpgkey=https://mirrors.aliyun.com/docker-ce/linux/centos/gpg
 REPOEOF
 
-# 先解析要安装的版本号（完整 NEVRA）：latest 取最新，否则校验指定版本是否存在
-DOCKER_VERSION="{{docker_version}}"
-AVAIL=$(dnf -q --showduplicates list available docker-ce | awk '/^docker-ce\./{print $2}')
-if [ -z "${DOCKER_VERSION}" ] || [ "${DOCKER_VERSION}" = "latest" ]; then
-  FULL_VER=$(echo "${AVAIL}" | sort -V | tail -1)
-else
-  FULL_VER=$(echo "${AVAIL}" | grep -E "(^|[:.])${DOCKER_VERSION}([-:.]|$)" | sort -V | tail -1)
-fi
+# 安装仓库中的最新版本
+FULL_VER=$(dnf -q --showduplicates list available docker-ce | awk '/^docker-ce\./{print $2}' | sort -V | tail -1)
 if [ -z "${FULL_VER}" ]; then
-  echo "未找到 docker-ce 版本: ${DOCKER_VERSION}，可用版本（最近 15 个）:"
-  echo "${AVAIL}" | sort -V | tail -15
-  exit 1
+  echo "未找到可用的 docker-ce 版本"; exit 1
 fi
 echo "将安装 docker-ce ${FULL_VER}"
 
-# 安装（docker-ce 与 cli 锁定同版本；两者 epoch 不同，去掉 epoch 按版本匹配）
+# docker-ce 与 cli 锁定同版本；两者 epoch 不同，去掉 epoch 按版本匹配
 VER="${FULL_VER#*:}"
 if ! dnf install -y "docker-ce-${VER}" "docker-ce-cli-${VER}" containerd.io docker-buildx-plugin docker-compose-plugin; then
   echo "常规安装失败，使用 --nogpgcheck 重试核心包"
@@ -109,8 +129,8 @@ docker info 2>/dev/null | grep -E "Server Version|Docker Root Dir" || true`,
 	},
 	{
 		name:        "安装 OpenResty",
-		description: "OpenResty 官方源安装（Rocky/EL 8/9；Rocky 10 自动回退 el9 源）。版本填 latest 装最新版，或指定版本号（如 1.25.3.1）。已安装则跳过。",
-		variables:   `[{"name":"openresty_version","label":"OpenResty 版本","default":"latest","required":true}]`,
+		description: "OpenResty 官方源安装最新版（Rocky/EL 8/9；Rocky 10 自动回退 el9 源）。已安装则跳过。",
+		variables:   `[]`,
 		script: `#!/bin/bash
 set -e
 
@@ -118,8 +138,6 @@ if command -v openresty &>/dev/null; then
   echo "OpenResty 已安装: $(openresty -v 2>&1)"
   exit 0
 fi
-
-OPENRESTY_VERSION="{{openresty_version}}"
 
 # 仅支持 RHEL 系发行版
 if [ ! -f /etc/os-release ]; then
@@ -157,17 +175,10 @@ else
   fi
 fi
 
-# 先解析要安装的版本号（完整 NEVRA）：latest 取最新，否则校验指定版本是否存在
-AVAIL=$(dnf -q --showduplicates list available openresty | awk '/^openresty\./{print $2}')
-if [ -z "${OPENRESTY_VERSION}" ] || [ "${OPENRESTY_VERSION}" = "latest" ]; then
-  FULL_VER=$(echo "${AVAIL}" | sort -V | tail -1)
-else
-  FULL_VER=$(echo "${AVAIL}" | grep -E "(^|[:.])${OPENRESTY_VERSION}([-:.]|$)" | sort -V | tail -1)
-fi
+# 安装仓库中的最新版本
+FULL_VER=$(dnf -q --showduplicates list available openresty | awk '/^openresty\./{print $2}' | sort -V | tail -1)
 if [ -z "${FULL_VER}" ]; then
-  echo "未找到 openresty 版本: ${OPENRESTY_VERSION}，可用版本（最近 15 个）:"
-  echo "${AVAIL}" | sort -V | tail -15
-  exit 1
+  echo "未找到可用的 openresty 版本"; exit 1
 fi
 echo "将安装 openresty ${FULL_VER}"
 
@@ -251,16 +262,30 @@ echo "警告：请先用新端口验证可连通，再关闭当前会话！"` ,
 }
 
 // seedBuiltinTemplates 预置内置模板（幂等，按 name 去重）。
-// 内置模板随版本演进：脚本有变化时原地刷新（内置模板 UI 只读，不存在覆盖用户修改的问题）。
+// 内置模板随版本演进：脚本有变化时原地刷新（内置模板 UI 只读，不存在覆盖用户修改的问题）；
+// 已不在当前内置列表中的历史内置模板会被清理。
 func seedBuiltinTemplates(db *sql.DB) error {
+	// 清理历史版本遗留的内置模板
+	names := make([]string, len(builtinTemplates))
+	args := make([]interface{}, len(builtinTemplates))
+	for i, t := range builtinTemplates {
+		names[i] = t.name
+		args[i] = t.name
+	}
+	if _, err := db.Exec(
+		`DELETE FROM deploy_templates WHERE is_builtin=1 AND name NOT IN (`+strings.Repeat("?,", len(args)-1)+"?)", args...,
+	); err != nil {
+		return err
+	}
+
 	for _, t := range builtinTemplates {
 		var exists int
 		if err := db.QueryRow(`SELECT COUNT(*) FROM deploy_templates WHERE name=?`, t.name).Scan(&exists); err != nil {
 			return err
 		}
 		if exists > 0 {
-			var curScript string
-			if err := db.QueryRow(`SELECT script FROM deploy_templates WHERE name=? AND is_builtin=1`, t.name).Scan(&curScript); err == nil && curScript != t.script {
+			var curScript, curVars string
+			if err := db.QueryRow(`SELECT script, variables FROM deploy_templates WHERE name=? AND is_builtin=1`, t.name).Scan(&curScript, &curVars); err == nil && (curScript != t.script || curVars != t.variables) {
 				if _, err := db.Exec(
 					`UPDATE deploy_templates SET description=?, script=?, variables=?, updated_at=datetime('now','localtime') WHERE name=? AND is_builtin=1`,
 					t.description, t.script, t.variables, t.name,

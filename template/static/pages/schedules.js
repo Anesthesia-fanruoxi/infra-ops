@@ -100,6 +100,8 @@ window.SchedulesPage = {
           <p class="sched-dlg-hint">不选择主机时任务仅保存配置，不会执行</p>
           <div class="sched-host-toolbar">
             <el-input v-model="hostFilter" placeholder="搜索主机名 / IP" clearable size="small" style="width:200px" prefix-icon="Search" />
+            <el-select v-model="hostSort.field" size="small" style="width:100px"><el-option label="按主机名" value="name" /><el-option label="按 IP" value="ip" /></el-select>
+            <el-button size="small" @click="toggleHostSortOrder">{{hostSort.order==='asc' ? '↑ 升序' : '↓ 降序'}}</el-button>
             <el-button size="small" @click="toggleSelectAll">{{ selectedHostIds.size === filteredHosts.length ? '取消全选' : '全选' }}</el-button>
           </div>
           <div class="sched-host-list" v-loading="hostsLoading">
@@ -164,7 +166,7 @@ window.SchedulesPage = {
     return {
       list: [], loading: false, saving: false, dlgVisible: false,
       editing: { name: '', template_id: null, host_ids: [], cron: '', cron_desc: '', params: {} },
-      templates: [], hosts: [], hostsLoading: false, hostFilter: '', selectedHostIds: new Set(),
+      templates: [], hosts: [], hostsLoading: false, hostFilter: '', hostSort: { field: 'name', order: 'asc' }, selectedHostIds: new Set(),
       drawerVisible: false, drawerTask: null, runs: [], runsLoading: false,
       cronPresets: [
         { label: '每小时', expr: '0 * * * *', desc: '每小时整点' },
@@ -187,9 +189,14 @@ window.SchedulesPage = {
       return t?.variables || []
     },
     filteredHosts() {
-      if (!this.hostFilter) return this.hosts
-      const kw = this.hostFilter.toLowerCase()
-      return this.hosts.filter(h => (h.name||'').toLowerCase().includes(kw) || (h.ip||'').toLowerCase().includes(kw))
+      let list = this.hosts
+      if (this.hostFilter) {
+        const kw = this.hostFilter.toLowerCase()
+        list = list.filter(h => (h.name||'').toLowerCase().includes(kw) || (h.ip||'').toLowerCase().includes(kw))
+      }
+      const desc = this.hostSort.order === 'desc'
+      const cmp = this.hostSort.field === 'ip' ? cmpHostIP : cmpHostName
+      return [...list].sort((a, b) => desc ? cmp(b, a) : cmp(a, b))
     }
   },
   mounted() { this.load(); this.loadTemplates(); this.loadHosts() },
@@ -222,6 +229,7 @@ window.SchedulesPage = {
       this.dlgVisible = true
     },
     onTplChange() { this.editing.params = {} },
+    toggleHostSortOrder() { this.hostSort = { ...this.hostSort, order: this.hostSort.order === 'asc' ? 'desc' : 'asc' } },
     toggleHost(id) {
       const s = new Set(this.selectedHostIds)
       s.has(id) ? s.delete(id) : s.add(id)

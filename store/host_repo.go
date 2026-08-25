@@ -3,6 +3,8 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"net"
+	"sort"
 	"strings"
 
 	"infra-ops/model"
@@ -34,8 +36,8 @@ func (r *HostRepo) GetByID(id int64) (*model.Host, error) {
 	return h, nil
 }
 
-// List ???????????????????? IP ?????
-func (r *HostRepo) List(tag, status, name, ip string, page, pageSize int) ([]model.Host, int64, error) {
+// List 主机列表：支持按主机名/IP 排序（IP 按数值八位组比较），默认主机名升序。
+func (r *HostRepo) List(tag, status, name, ip, sortBy, order string, page, pageSize int) ([]model.Host, int64, error) {
 	where, args := buildHostWhere(tag, status, name, ip)
 
 	var total int64
@@ -43,18 +45,16 @@ func (r *HostRepo) List(tag, status, name, ip string, page, pageSize int) ([]mod
 		return nil, 0, fmt.Errorf("host count: %w", err)
 	}
 
-	offset := (page - 1) * pageSize
+	// 规模为几十~几百台：过滤后取全量，内存排序再分页，保证 IP 数值序
 	query := `SELECT id,name,ip,port,tag,remark,credential_id,status,latency_ms,info_json,last_check_at,created_at,updated_at
-	          FROM hosts ` + where + " ORDER BY id DESC LIMIT ? OFFSET ?"
-	queryArgs := append(args, pageSize, offset)
-
-	rows, err := DB.Query(query, queryArgs...)
+	          FROM hosts ` + where
+	rows, err := DB.Query(query, args...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("host list: %w", err)
 	}
 	defer rows.Close()
 
-	var items []model.Host
+	items := make([]model.Host, 0, total)
 	for rows.Next() {
 		var h model.Host
 		if err := scanHost(rows, &h); err != nil {
@@ -62,7 +62,65 @@ func (r *HostRepo) List(tag, status, name, ip string, page, pageSize int) ([]mod
 		}
 		items = append(items, h)
 	}
-	return items, total, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+
+	SortHosts(items, sortBy, order)
+
+	offset := (page - 1) * pageSize
+	if offset >= len(items) {
+		return []model.Host{}, total, nil
+	}
+	end := offset + pageSize
+	if end > len(items) {
+		end = len(items)
+	}
+	return items[offset:end], total, nil
+}
+
+// SortHosts 就地排序主机：sortBy 为 name（默认）或 ip；order 为 asc（默认）或 desc。
+func SortHosts(items []model.Host, sortBy, order string) {
+	desc := order == "desc"
+	less := func(a, b model.Host) bool { return a.ID < b.ID }
+	switch sortBy {
+	case "ip":
+		less = func(a, b model.Host) bool {
+			x, y := ipKey(a.IP), ipKey(b.IP)
+			if x == nil || y == nil {
+				return y == nil && x != nil // 非法 IP 排最后
+			}
+			for i := 0; i < 4; i++ {
+				if x[i] != y[i] {
+					return x[i] < y[i]
+				}
+			}
+			return a.ID < b.ID
+		}
+	default: // name
+		less = func(a, b model.Host) bool {
+			x, y := strings.ToLower(a.Name), strings.ToLower(b.Name)
+			if x == y {
+				return a.ID < b.ID
+			}
+			return x < y
+		}
+	}
+	sort.SliceStable(items, func(i, j int) bool {
+		if desc {
+			return less(items[j], items[i])
+		}
+		return less(items[i], items[j])
+	})
+}
+
+// ipKey 解析 IPv4 为 4 字节键；非法返回 nil。
+func ipKey(s string) []byte {
+	ip := net.ParseIP(strings.TrimSpace(s))
+	if ip == nil || ip.To4() == nil {
+		return nil
+	}
+	return ip.To4()
 }
 
 // Create ???????? ID?

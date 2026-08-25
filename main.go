@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -57,6 +58,9 @@ func main() {
 	if firstInit {
 		log.Printf("首次启动已完成初始化，默认账号 %s / %s，请登录后立即修改密码", defaultAdminUser, defaultAdminPass)
 	}
+	if err := settingsRepo.EnsureRuntimeDefaults(); err != nil {
+		log.Fatalf("补齐运行配置失败: %v", err)
+	}
 
 	// 从 settings 构建运行配置
 	m, err := settingsRepo.GetAll()
@@ -99,12 +103,16 @@ func main() {
 
 	// 装配路由
 	r := router.Setup(template.FS, router.Deps{
-		CryptoService: cryptoSvc,
-		SSHClient:     sshClient,
-		Sessions:      sessions,
-		Bus:           bus,
-		Settings:      settingsRepo,
+		CryptoService:     cryptoSvc,
+		SSHClient:         sshClient,
+		Sessions:          sessions,
+		Bus:               bus,
+		Settings:          settingsRepo,
+		DeployConcurrency: cfg.Deploy.Concurrency,
 	})
+
+	// 部署日志保留清理：启动时立即执行一次，此后每 24h 一轮
+	go runRetentionLoop(settingsRepo)
 
 	// 启动 HTTP 服务
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
@@ -132,4 +140,34 @@ func logNetworkInfo() {
 	case <-time.After(5 * time.Second):
 		log.Printf("[net] 公网IP探测超时，已跳过")
 	}
+}
+
+// runRetentionLoop 周期清理超过保留期的部署任务及其日志（外键级联删除主机记录）。
+func runRetentionLoop(settingsRepo *store.SettingsRepo) {
+	run := func() {
+		days, err := strconv.Atoi(mustSetting(settingsRepo, store.SettingLogRetentionDays))
+		if err != nil || days <= 0 {
+			return
+		}
+		n, err := store.NewDeployRepo().CleanupFinishedBefore(days)
+		if err != nil {
+			log.Printf("[retention] 清理部署历史失败: %v", err)
+			return
+		}
+		if n > 0 {
+			log.Printf("[retention] 已清理 %d 天前的部署任务 %d 个", days, n)
+		}
+	}
+
+	run()
+	ticker := time.NewTicker(24 * time.Hour)
+	defer ticker.Stop()
+	for range ticker.C {
+		run()
+	}
+}
+
+func mustSetting(r *store.SettingsRepo, key string) string {
+	v, _ := r.Get(key)
+	return v
 }

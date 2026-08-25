@@ -19,11 +19,12 @@ window.DeployPage = {
       <div class="deploy-step-num"><span>1</span></div>
       <div class="deploy-step-body">
         <h3>选择模板</h3>
-        <el-select v-model="selectedTemplateId" placeholder="请选择部署模板" style="width:100%" @change="onTemplateChange" :disabled="running">
+        <el-select v-model="selectedTemplateId" placeholder="请选择部署模板" style="width:100%" @change="onTemplateChange" :disabled="running" :loading="tplLoading" loading-text="模板加载中…" @visible-change="onTplDropdown">
           <el-option v-for="t in templates" :key="t.id" :label="t.name" :value="t.id">
             <span>{{t.name}}</span><span style="float:right;color:var(--text-faint);font-size:12px">{{(t.variables||[]).length}} 个变量</span>
           </el-option>
         </el-select>
+        <div v-if="tplLoading && !templates.length" class="deploy-placeholder">模板列表加载中…</div>
         <div v-if="selectedTemplate" class="deploy-tpl-desc">
           <p v-if="selectedTemplate.description">{{selectedTemplate.description}}</p>
           <span v-if="selectedTemplate.variables && selectedTemplate.variables.length" class="deploy-var-count">需要填写 {{selectedTemplate.variables.length}} 个参数</span>
@@ -58,6 +59,8 @@ window.DeployPage = {
         <div v-else>
           <div class="deploy-host-toolbar">
             <el-input v-model="hostFilter" placeholder="搜索主机名 / IP / 标签" clearable size="small" style="width:220px" />
+            <el-select v-model="hostSort.field" size="small" style="width:100px"><el-option label="按主机名" value="name" /><el-option label="按 IP" value="ip" /></el-select>
+            <el-button size="small" @click="toggleHostSortOrder">{{hostSort.order==='asc' ? '↑ 升序' : '↓ 降序'}}</el-button>
             <el-button size="small" @click="toggleSelectAll">{{ selectedHosts.length === filteredHosts.length ? '取消全选' : '全选' }}</el-button>
           </div>
           <div class="deploy-host-list" v-loading="hostsLoading">
@@ -111,8 +114,8 @@ window.DeployPage = {
       </el-table-column>
       <el-table-column label="输出" min-width="200">
         <template #default="{row}">
-          <el-button v-if="row.output || row.error" size="small" text @click="row._showOutput = !row._showOutput">{{row._showOutput ? '收起' : '查看'}}</el-button>
-          <div v-if="row._showOutput" class="deploy-output-pre"><pre>{{row.error || row.output || '无输出'}}</pre></div>
+          <el-button v-if="row.output || row.error" size="small" text type="primary" @click="row._showOutput = !row._showOutput">{{row._showOutput ? '收起日志' : (row.status === 'running' ? '实时日志' : '查看')}}</el-button>
+          <div v-if="row._showOutput" class="deploy-output-pre"><pre>{{ outputText(row) }}</pre></div>
         </template>
       </el-table-column>
     </el-table>
@@ -167,8 +170,8 @@ window.DeployPage = {
 
   data() {
     return {
-      step: 1, templates: [], selectedTemplateId: null, selectedTemplate: null,
-      params: {}, hosts: [], hostsLoading: false, selectedHostIds: new Set(), hostFilter: '',
+      step: 1, templates: [], tplLoading: false, tplLoaded: false, selectedTemplateId: null, selectedTemplate: null,
+      params: {}, hosts: [], hostsLoading: false, hostsLoaded: false, selectedHostIds: new Set(), hostFilter: '', hostSort: { field: 'name', order: 'asc' },
       deploying: false, running: false,
       taskDetail: null, taskHosts: [], taskSse: null,
       tasks: [], tasksLoading: false,
@@ -177,9 +180,12 @@ window.DeployPage = {
   },
   computed: {
     filteredHosts() {
-      if (!this.hostFilter) return this.hosts
-      const kw = this.hostFilter.toLowerCase()
-      return this.hosts.filter(h => (h.name||'').toLowerCase().includes(kw) || (h.ip||'').toLowerCase().includes(kw) || (h.tag||'').toLowerCase().includes(kw))
+      let list = this.hosts
+      if (this.hostFilter) {
+        const kw = this.hostFilter.toLowerCase()
+        list = list.filter(h => (h.name||'').toLowerCase().includes(kw) || (h.ip||'').toLowerCase().includes(kw) || (h.tag||'').toLowerCase().includes(kw))
+      }
+      return this.sortHostList(list, this.hostSort)
     },
     selectedHosts() { return this.hosts.filter(h => this.selectedHostIds.has(h.id)) },
     paramsValid() {
@@ -196,7 +202,7 @@ window.DeployPage = {
       return { running: '执行中', success: '已完成', partial: '部分成功', failed: '失败' }[this.taskDetail.status] || this.taskDetail.status
     }
   },
-  mounted() { this.loadTemplates(); this.loadHosts(); this.loadTasks() },
+  mounted() { this.loadTasks() },
   beforeUnmount() { this.closeSse() },
   watch: {
     selectedTemplateId(id) {
@@ -207,22 +213,37 @@ window.DeployPage = {
         this.selectedTemplate.variables.forEach(v => { this.params[v.name] = v.default || '' })
       }
     },
-    paramsValid(ok) { if (ok && this.step < 3) this.step = 3 }
+    paramsValid(ok) { if (ok && this.step < 3) this.step = 3 },
+    // 进入第三步时才按需加载主机列表
+    step(v) { if (v === 3 && !this.hostsLoaded && !this.hostsLoading) this.loadHosts() }
   },
   methods: {
-    /* ===== 加载 ===== */
+    /* ===== 加载（懒加载：模板下拉首次打开 / 首次进入第三步时触发） ===== */
     async loadTemplates() {
-      try { const r = await api.get('/deploy/templates'); if (r.code === 0) this.templates = r.data || [] } catch (e) { /* */ }
+      if (this.tplLoading || this.tplLoaded) return
+      this.tplLoading = true
+      try { const r = await api.get('/deploy/templates'); if (r.code === 0) { this.templates = r.data || []; this.tplLoaded = true } } catch (e) { /* */ } finally { this.tplLoading = false }
     },
+    onTplDropdown(visible) { if (visible) this.loadTemplates() },
     async loadHosts() {
+      if (this.hostsLoading || this.hostsLoaded) return
       this.hostsLoading = true
-      try { const r = await api.get('/hosts', { params: { page: 1, page_size: 200, status: 'online' } }); if (r.code === 0) this.hosts = r.data?.list || [] } catch (e) { /* */ } finally { this.hostsLoading = false }
+      try {
+        const r = await api.get('/hosts', { params: { page: 1, page_size: 200, status: 'online' } })
+        if (r.code === 0) { this.hosts = r.data?.list || []; this.hostsLoaded = true }
+      } catch (e) { /* */ } finally { this.hostsLoading = false }
     },
     async loadTasks() {
       this.tasksLoading = true
       try { const r = await api.get('/deploy/tasks', { params: { page: 1, page_size: 20 } }); if (r.code === 0) this.tasks = r.data?.list || [] } catch (e) { /* */ } finally { this.tasksLoading = false }
     },
     onTemplateChange() { /* handled by watcher */ },
+    toggleHostSortOrder() { this.hostSort = { ...this.hostSort, order: this.hostSort.order === 'asc' ? 'desc' : 'asc' } },
+    sortHostList(list, sort) {
+      const desc = sort.order === 'desc'
+      const cmp = sort.field === 'ip' ? cmpHostIP : cmpHostName
+      return [...list].sort((a, b) => desc ? cmp(b, a) : cmp(a, b))
+    },
     toggleHost(id) { const s = new Set(this.selectedHostIds); s.has(id) ? s.delete(id) : s.add(id); this.selectedHostIds = s; this.step = 3 },
     toggleSelectAll() {
       if (this.selectedHosts.length === this.filteredHosts.length) { this.selectedHostIds = new Set() }
@@ -241,7 +262,8 @@ window.DeployPage = {
       try {
         const r = await api.post('/deploy/run', {
           template_id: this.selectedTemplateId,
-          host_ids: this.selectedHosts.map(h => h.id),
+          // 按页面当前显示顺序提交（排序后全选时序号跟随该顺序，供 {{__seq}} 批量命名使用）
+          host_ids: this.filteredHosts.filter(h => this.selectedHostIds.has(h.id)).map(h => h.id),
           params: this.params
         })
         if (r.code === 0) {
@@ -264,13 +286,19 @@ window.DeployPage = {
         try {
           const d = JSON.parse(e.data)
           this.taskDetail.total = d.total || this.taskDetail.total
-          this.taskDetail.success_cnt = d.success_cnt
-          this.taskDetail.fail_cnt = d.fail_cnt
+          this.taskDetail.success_cnt = d.success_cnt ?? this.taskDetail.success_cnt
+          this.taskDetail.fail_cnt = d.fail_cnt ?? this.taskDetail.fail_cnt
           this.taskDetail.status = d.task_status || 'running'
           const h = this.taskHosts.find(x => x.host_id === d.host_id)
-          if (h) { h.status = d.status; h.output = d.output || ''; h.error = d.error || '' }
-          if (d.task_status === 'done' || d.task_status === 'success' || d.task_status === 'failed' || d.task_status === 'partial') {
-            this.running = false; this.closeSse(); this.loadTasks()
+          if (h) {
+            if (d.status === 'output') {
+              // 执行过程中的增量日志，实时追加
+              h.output = (h.output || '') + (d.output || '')
+            } else {
+              h.status = d.status
+              if (d.output) h.output = d.output  // 终态用全量输出覆盖，避免重复
+              h.error = d.error || ''
+            }
           }
         } catch (err) { /* */ }
       })
@@ -302,6 +330,7 @@ window.DeployPage = {
       } catch (e) { ElMessage.error('加载任务详情失败') }
     },
     hostStatusCls(s) { if (s === 'success') return 'online'; if (s === 'failed') return 'offline'; if (s === 'running') return 'running'; return 'unverified' },
+    outputText(row) { const txt = (row.error ? row.error + '\n' : '') + (row.output || ''); return txt || '无输出' },
     hostStatusText(s) { return { pending: '等待中', running: '执行中', success: '成功', failed: '失败' }[s] || s },
     taskTagType(s) { if (s === 'success') return 'success'; if (s === 'failed' || s === 'partial') return 'danger'; if (s === 'running') return 'warning'; return 'info' },
     taskStatusLabel(s) { return { running: '执行中', success: '已完成', partial: '部分成功', failed: '失败' }[s] || s },

@@ -175,6 +175,58 @@ func (r *DeployRepo) TaskHosts(taskID int64) ([]HostRecord, error) {
 	return items, rows.Err()
 }
 
+// CleanupFinishedBefore 删除 finished_at 早于保留期的已结束任务（级联删除主机记录与日志输出）。
+// 返回删除的任务数。
+func (r *DeployRepo) CleanupFinishedBefore(days int) (int64, error) {
+	res, err := DB.Exec(
+		`DELETE FROM deploy_tasks
+		WHERE finished_at IS NOT NULL
+		AND finished_at < datetime('now','localtime', ?)`,
+		fmt.Sprintf("-%d days", days),
+	)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// MarkHostInstalled 标记主机成功安装过某模板（每模板一条，重复执行刷新任务号与时间）。
+func (r *DeployRepo) MarkHostInstalled(hostID, templateID int64, templateName string, taskID int64) error {
+	_, err := DB.Exec(
+		`INSERT INTO host_installs(host_id,template_id,template_name,task_id) VALUES(?,?,?,?)
+		ON CONFLICT(host_id,template_name) DO UPDATE SET
+			template_id=excluded.template_id, task_id=excluded.task_id,
+			updated_at=datetime('now','localtime')`,
+		hostID, templateID, templateName, taskID,
+	)
+	if err != nil {
+		return fmt.Errorf("mark host install: %w", err)
+	}
+	return nil
+}
+
+// HostInstalls 主机已执行过的安装记录（按最近执行倒序）。
+func (r *DeployRepo) HostInstalls(hostID int64) ([]model.HostInstall, error) {
+	rows, err := DB.Query(
+		`SELECT id,host_id,template_id,template_name,task_id,created_at,updated_at
+		FROM host_installs WHERE host_id=? ORDER BY updated_at DESC`, hostID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var items []model.HostInstall
+	for rows.Next() {
+		var it model.HostInstall
+		if err := rows.Scan(&it.ID, &it.HostID, &it.TemplateID, &it.TemplateName, &it.TaskID, &it.CreatedAt, &it.UpdatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, it)
+	}
+	return items, rows.Err()
+}
+
 // FinishTask 汇总成败计数并落任务终态。
 func (r *DeployRepo) FinishTask(taskID int64) (string, error) {
 	var successCnt, failCnt, total int
