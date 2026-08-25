@@ -15,6 +15,8 @@ const (
 	TopicAuditCreated = "audit.created"
 	// TopicDeployProgress 在部署任务单台主机状态变化后发布。
 	TopicDeployProgress = "deploy.progress"
+	// TopicOrchestrationProgress 在编排运行步骤状态/输出变化后发布。
+	TopicOrchestrationProgress = "orchestration.progress"
 )
 
 // Event 事件。

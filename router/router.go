@@ -130,6 +130,22 @@ func Setup(staticFS fs.FS, deps Deps) *gin.Engine {
 		sched.GET("/:id/runs", deploySchedHandler.Runs)
 	}
 
+	// 任务编排
+	orchRepo := store.NewOrchestrationRepo()
+	orchHandler := api.NewOrchHandler(orchRepo, deployRepo, hostRepo, credRepo,
+		deps.CryptoService, deps.SSHClient, deps.Bus, auditRepo)
+	orch := protected.Group("/orchestrations")
+	{
+		orch.GET("", orchHandler.List)
+		orch.POST("", orchHandler.Save)
+		orch.GET("/:id", orchHandler.Get)
+		orch.PUT("/:id", orchHandler.Save)
+		orch.DELETE("/:id", orchHandler.Delete)
+		orch.POST("/:id/run", orchHandler.Run)
+	}
+	protected.GET("/orchestration/runs", orchHandler.RunsList)
+	protected.GET("/orchestration/runs/:id", orchHandler.RunsDetail)
+
 	// 总览 & 审计日志（审计日志统一走 /api/sse/audits 单一查询流）
 	miscHandler := api.NewMiscHandler(hostRepo, auditRepo)
 	protected.GET("/overview", miscHandler.Overview)
@@ -140,6 +156,7 @@ func Setup(staticFS fs.FS, deps Deps) *gin.Engine {
 	protected.GET("/sse/hosts", sseHandler.HostStatus)
 	protected.GET("/sse/audits", sseHandler.Audits)
 	protected.GET("/sse/deploy", deployTaskHandler.SSEProgress)
+	protected.GET("/sse/orchestration", orchHandler.SSEOrchestration)
 
 	// 前端静态资源
 	if staticFS != nil {

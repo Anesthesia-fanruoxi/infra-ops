@@ -375,15 +375,21 @@ func (h *deployHandler) execute(taskID int64) {
 
 // execOnHost 解密凭据→SSH 拨号→执行渲染后脚本；onLog 在执行过程中接收增量输出。
 func (h *deployHandler) execOnHost(hostID int64, script string, onLog func(string)) (string, error) {
-	host, err := h.hostRepo.GetByID(hostID)
+	return execHostWith(h.hostRepo, h.credRepo, h.cryptoS, h.sshC, hostID, script, onLog)
+}
+
+// execHostWith 部署与编排共用的单主机执行：解密凭据→SSH 拨号→运行脚本。
+func execHostWith(hostRepo *store.HostRepo, credRepo *store.CredentialRepo, cryptoS *icrypto.Service,
+	sshC *sshx.Client, hostID int64, script string, onLog func(string)) (string, error) {
+	host, err := hostRepo.GetByID(hostID)
 	if err != nil || host == nil {
 		return "", fmt.Errorf("主机不存在")
 	}
-	cred, err := h.credRepo.GetByID(host.CredentialID)
+	cred, err := credRepo.GetByID(host.CredentialID)
 	if err != nil || cred == nil {
 		return "", fmt.Errorf("凭据不存在")
 	}
-	secret, err := h.cryptoS.Decrypt(cred.EncryptedSecret)
+	secret, err := cryptoS.Decrypt(cred.EncryptedSecret)
 	if err != nil {
 		return "", fmt.Errorf("凭据解密失败: %w", err)
 	}
@@ -397,7 +403,7 @@ func (h *deployHandler) execOnHost(hostID int64, script string, onLog func(strin
 	} else {
 		dialCfg.Password = string(secret)
 	}
-	client, err := h.sshC.Dial(dialCfg)
+	client, err := sshC.Dial(dialCfg)
 	if err != nil {
 		return "", err
 	}

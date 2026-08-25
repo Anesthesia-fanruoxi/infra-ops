@@ -55,6 +55,7 @@ const routes = {
   audit: { title: '操作日志', sub: '关键操作审计追踪' },
   templates: { title: '部署模板', sub: '管理部署脚本与变量' },
   deploy: { title: '基础建设', sub: '批量部署与实时监控' },
+  orchestrations: { title: '任务编排', sub: '多模板顺序编排执行' },
   schedules: { title: '定时任务', sub: '周期性自动化执行' }
 }
 
@@ -185,6 +186,7 @@ app.component('app-layout', {
       <div class="nav-group">部署中心</div>
       <div class="nav-item" :class="{active:currentPage==='templates'}" @click="$emit('nav','templates')"><span class="nav-icon">` + ICONS.templates + `</span>部署模板</div>
       <div class="nav-item" :class="{active:currentPage==='deploy'}" @click="$emit('nav','deploy')"><span class="nav-icon">` + ICONS.deploy + `</span>基础建设</div>
+      <div class="nav-item" :class="{active:currentPage==='orchestrations'}" @click="$emit('nav','orchestrations')"><span class="nav-icon">` + ICONS.deploy + `</span>任务编排</div>
       <div class="nav-item" :class="{active:currentPage==='schedules'}" @click="$emit('nav','schedules')"><span class="nav-icon">` + ICONS.schedules + `</span>定时任务</div>
       <div class="nav-group">安全审计</div>
       <div class="nav-item" :class="{active:currentPage==='credentials'}" @click="$emit('nav','credentials')"><span class="nav-icon">` + ICONS.credentials + `</span>凭据管理</div>
@@ -231,6 +233,7 @@ app.component('page-credentials', window.CredentialsPage)
 app.component('page-audit', window.AuditPage)
 app.component('page-templates', window.TemplatesPage)
 app.component('page-deploy', window.DeployPage)
+app.component('page-orchestrations', window.OrchestrationsPage)
 app.component('page-schedules', window.SchedulesPage)
 app.component('change-password-dialog', window.ChangePasswordDialog)
 

@@ -19,6 +19,7 @@ var migrations = []migration{
 	{9, migrateV9},
 	{10, migrateV10},
 	{11, migrateV11},
+	{12, migrateV12},
 }
 
 // migrateV8 并发配置改为自适应：存量库中未改过的旧引导默认值 5 归一为 auto。
@@ -44,6 +45,93 @@ func migrateV9(db *sql.DB) error {
 	}
 	_, err = db.Exec(`CREATE INDEX IF NOT EXISTS idx_host_installs_host ON host_installs(host_id)`)
 	return err
+}
+
+// migrateV12 任务编排：定义/步骤/运行/运行明细（by_host 差异化链表一并建好，P2 启用）。
+func migrateV12(db *sql.DB) error {
+	stmts := []string{
+		`CREATE TABLE IF NOT EXISTS orchestrations (
+			id           INTEGER PRIMARY KEY AUTOINCREMENT,
+			name         TEXT NOT NULL UNIQUE,
+			description  TEXT NOT NULL DEFAULT '',
+			exec_mode    TEXT NOT NULL DEFAULT 'by_step' CHECK (exec_mode IN ('by_host','by_step')),
+			enabled      INTEGER NOT NULL DEFAULT 1,
+			created_at   TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+			updated_at   TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+		)`,
+		`CREATE TABLE IF NOT EXISTS orchestration_steps (
+			id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+			orchestration_id   INTEGER NOT NULL REFERENCES orchestrations(id) ON DELETE CASCADE,
+			seq                INTEGER NOT NULL,
+			template_id        INTEGER NOT NULL REFERENCES deploy_templates(id),
+			params_json        TEXT NOT NULL DEFAULT '{}',
+			host_scope         TEXT NOT NULL DEFAULT '',
+			continue_on_error  INTEGER NOT NULL DEFAULT 0,
+			retry_count        INTEGER NOT NULL DEFAULT 0,
+			retry_interval_sec INTEGER NOT NULL DEFAULT 30,
+			timeout_sec        INTEGER NOT NULL DEFAULT 0,
+			UNIQUE(orchestration_id, seq)
+		)`,
+		`CREATE TABLE IF NOT EXISTS orchestration_host_chains (
+			id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+			orchestration_id   INTEGER NOT NULL REFERENCES orchestrations(id) ON DELETE CASCADE,
+			host_id            INTEGER NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+			seq                INTEGER NOT NULL,
+			template_id        INTEGER NOT NULL REFERENCES deploy_templates(id),
+			params_json        TEXT NOT NULL DEFAULT '{}',
+			continue_on_error  INTEGER NOT NULL DEFAULT 0,
+			retry_count        INTEGER NOT NULL DEFAULT 0,
+			retry_interval_sec INTEGER NOT NULL DEFAULT 30,
+			UNIQUE(orchestration_id, host_id, seq)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_ohc_orch ON orchestration_host_chains(orchestration_id, host_id)`,
+		`CREATE TABLE IF NOT EXISTS orchestration_step_host_vars (
+			id               INTEGER PRIMARY KEY AUTOINCREMENT,
+			orchestration_id INTEGER NOT NULL REFERENCES orchestrations(id) ON DELETE CASCADE,
+			seq              INTEGER NOT NULL,
+			host_id          INTEGER NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+			params_json      TEXT NOT NULL DEFAULT '{}',
+			UNIQUE(orchestration_id, seq, host_id)
+		)`,
+		`CREATE TABLE IF NOT EXISTS orchestration_runs (
+			id               INTEGER PRIMARY KEY AUTOINCREMENT,
+			orchestration_id INTEGER NOT NULL,
+			name             TEXT NOT NULL DEFAULT '',
+			exec_mode        TEXT NOT NULL DEFAULT 'by_step',
+			status           TEXT NOT NULL DEFAULT 'running' CHECK (status IN ('running','success','partial','failed')),
+			total_hosts      INTEGER NOT NULL DEFAULT 0,
+			ok_hosts         INTEGER NOT NULL DEFAULT 0,
+			fail_hosts       INTEGER NOT NULL DEFAULT 0,
+			trigger_type     TEXT NOT NULL DEFAULT 'manual',
+			host_ids         TEXT NOT NULL DEFAULT '[]',
+			created_at       TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+			finished_at      TEXT
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_oruns_created ON orchestration_runs(created_at)`,
+		`CREATE TABLE IF NOT EXISTS orchestration_run_steps (
+			id            INTEGER PRIMARY KEY AUTOINCREMENT,
+			run_id        INTEGER NOT NULL REFERENCES orchestration_runs(id) ON DELETE CASCADE,
+			host_id       INTEGER NOT NULL,
+			host_name     TEXT NOT NULL DEFAULT '',
+			host_ip       TEXT NOT NULL DEFAULT '',
+			seq           INTEGER NOT NULL,
+			template_id   INTEGER NOT NULL DEFAULT 0,
+			template_name TEXT NOT NULL DEFAULT '',
+			status        TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','running','success','failed','skipped')),
+			attempt       INTEGER NOT NULL DEFAULT 1,
+			output        TEXT NOT NULL DEFAULT '',
+			error         TEXT NOT NULL DEFAULT '',
+			started_at    TEXT,
+			finished_at   TEXT
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_orun_steps_run ON orchestration_run_steps(run_id)`,
+	}
+	for _, s := range stmts {
+		if _, err := db.Exec(s); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // migrateV11 部署任务支持逐主机变量：任务级与主机级各存一份 params_json。
