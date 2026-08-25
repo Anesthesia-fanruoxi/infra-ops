@@ -1,26 +1,26 @@
 package model
 
-// Orchestration 任务编排定义：多个模板按步骤顺序执行。
+// Orchestration 任务编排定义：多个「部署单元」（模板+主机+逐台变量）按顺序串行的长任务。
 type Orchestration struct {
 	ID          int64  `json:"id"`
 	Name        string `json:"name"`
 	Description string `json:"description"`
-	ExecMode    string `json:"exec_mode"` // by_step（P1）/ by_host（P2）
+	ExecMode    string `json:"exec_mode"` // 固定 by_step（顺序串行）
 	Enabled     bool   `json:"enabled"`
 	StepCount   int    `json:"step_count"` // 列表联查
 	CreatedAt   string `json:"created_at"`
 	UpdatedAt   string `json:"updated_at"`
 }
 
-// OrchestrationStep 编排步骤：一个模板 + 步骤级默认参数。
+// OrchestrationStep 编排步骤 = 一个「部署单元」：模板 + 该步骤自己的主机集 + 逐台变量。
 type OrchestrationStep struct {
 	ID               int64  `json:"id"`
 	OrchestrationID  int64  `json:"orchestration_id"`
 	Seq              int    `json:"seq"`
 	TemplateID       int64  `json:"template_id"`
 	TemplateName     string `json:"template_name"` // 展示快照，落库在列表联查
-	ParamsJSON       string `json:"params_json"`
-	HostScope        string `json:"host_scope"` // 空=全部主机；JSON 数组 [hostID]（P1 固定空）
+	ParamsJSON       string `json:"params_json"`   // 步骤级默认参数
+	HostScope        string `json:"host_scope"`    // JSON 数组 [hostID...]，该步骤的目标主机
 	ContinueOnError  bool   `json:"continue_on_error"`
 	RetryCount       int    `json:"retry_count"`
 	RetryIntervalSec int    `json:"retry_interval_sec"`
@@ -59,4 +59,11 @@ type OrchestrationRunStep struct {
 	Error        string  `json:"error"`
 	StartedAt    *string `json:"started_at"`
 	FinishedAt   *string `json:"finished_at"`
+}
+
+// OrchestrationStepVar 步骤内某台主机的变量覆盖（主机级）。
+type OrchestrationStepVar struct {
+	Seq        int    `json:"seq"`
+	HostID     int64  `json:"host_id"`
+	ParamsJSON string `json:"params_json"`
 }

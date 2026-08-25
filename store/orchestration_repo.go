@@ -3,7 +3,6 @@ package store
 
 import (
 	"database/sql"
-	"encoding/json"
 	"fmt"
 
 	"infra-ops/model"
@@ -28,7 +27,8 @@ func (r *OrchestrationRepo) List() ([]model.Orchestration, error) {
 	var items []model.Orchestration
 	for rows.Next() {
 		var o model.Orchestration
-		if err := rows.Scan(&o.ID, &o.Name, &o.Description, &o.ExecMode, &o.Enabled, &o.CreatedAt, &o.UpdatedAt, &o.StepCount); err != nil {
+		if err := rows.Scan(&o.ID, &o.Name, &o.Description, &o.ExecMode, &o.Enabled,
+			&o.CreatedAt, &o.UpdatedAt, &o.StepCount); err != nil {
 			return nil, err
 		}
 		items = append(items, o)
@@ -36,16 +36,16 @@ func (r *OrchestrationRepo) List() ([]model.Orchestration, error) {
 	return items, rows.Err()
 }
 
-// Get 编排详情（含步骤，模板名联查）。
-func (r *OrchestrationRepo) Get(id int64) (*model.Orchestration, []model.OrchestrationStep, error) {
+// Get 编排详情（含步骤与步骤主机变量）。
+func (r *OrchestrationRepo) Get(id int64) (*model.Orchestration, []model.OrchestrationStep, []model.OrchestrationStepVar, error) {
 	var o model.Orchestration
 	err := DB.QueryRow(`SELECT `+orchCols+` FROM orchestrations o WHERE o.id=?`, id).
 		Scan(&o.ID, &o.Name, &o.Description, &o.ExecMode, &o.Enabled, &o.CreatedAt, &o.UpdatedAt, &o.StepCount)
 	if err == sql.ErrNoRows {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	rows, err := DB.Query(`
@@ -54,7 +54,7 @@ func (r *OrchestrationRepo) Get(id int64) (*model.Orchestration, []model.Orchest
 		FROM orchestration_steps s JOIN deploy_templates t ON t.id=s.template_id
 		WHERE s.orchestration_id=? ORDER BY s.seq`, id)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	defer rows.Close()
 
@@ -64,16 +64,45 @@ func (r *OrchestrationRepo) Get(id int64) (*model.Orchestration, []model.Orchest
 		var cont int
 		if err := rows.Scan(&st.ID, &st.OrchestrationID, &st.Seq, &st.TemplateID, &st.TemplateName,
 			&st.ParamsJSON, &st.HostScope, &cont, &st.RetryCount, &st.RetryIntervalSec, &st.TimeoutSec); err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		st.ContinueOnError = cont == 1
 		steps = append(steps, st)
 	}
-	return &o, steps, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, nil, nil, err
+	}
+
+	svars, err := r.stepVars(id)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return &o, steps, svars, nil
 }
 
-// Save 新建或更新编排（steps 全量替换）。返回编排 ID。
-func (r *OrchestrationRepo) Save(o *model.Orchestration, steps []model.OrchestrationStep) (int64, error) {
+// stepVars 步骤主机级变量覆盖。
+func (r *OrchestrationRepo) stepVars(id int64) ([]model.OrchestrationStepVar, error) {
+	rows, err := DB.Query(
+		`SELECT seq,host_id,params_json FROM orchestration_step_host_vars WHERE orchestration_id=? ORDER BY seq,host_id`, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	svars := []model.OrchestrationStepVar{}
+	for rows.Next() {
+		var sv model.OrchestrationStepVar
+		if err := rows.Scan(&sv.Seq, &sv.HostID, &sv.ParamsJSON); err != nil {
+			return nil, err
+		}
+		svars = append(svars, sv)
+	}
+	return svars, rows.Err()
+}
+
+// Save 新建或更新编排（步骤/步骤变量全量替换）。返回编排 ID。
+func (r *OrchestrationRepo) Save(o *model.Orchestration, steps []model.OrchestrationStep,
+	stepVars []model.OrchestrationStepVar) (int64, error) {
 	tx, err := DB.Begin()
 	if err != nil {
 		return 0, err
@@ -118,8 +147,19 @@ func (r *OrchestrationRepo) Save(o *model.Orchestration, steps []model.Orchestra
 		if _, err := tx.Exec(
 			`INSERT INTO orchestration_steps(orchestration_id,seq,template_id,params_json,host_scope,continue_on_error,retry_count,retry_interval_sec,timeout_sec)
 			 VALUES(?,?,?,?,?,?,?,?,?)`,
-			o.ID, i+1, st.TemplateID, orDefaultJSON(st.ParamsJSON), st.HostScope, cont, st.RetryCount, st.RetryIntervalSec, st.TimeoutSec); err != nil {
+			o.ID, i+1, st.TemplateID, orDefaultJSON(st.ParamsJSON), orDefaultJSON(st.HostScope), cont,
+			st.RetryCount, st.RetryIntervalSec, st.TimeoutSec); err != nil {
 			return 0, fmt.Errorf("save step %d: %w", i+1, err)
+		}
+	}
+	if _, err := tx.Exec(`DELETE FROM orchestration_step_host_vars WHERE orchestration_id=?`, o.ID); err != nil {
+		return 0, err
+	}
+	for _, sv := range stepVars {
+		if _, err := tx.Exec(
+			`INSERT INTO orchestration_step_host_vars(orchestration_id,seq,host_id,params_json) VALUES(?,?,?,?)`,
+			o.ID, sv.Seq, sv.HostID, orDefaultJSON(sv.ParamsJSON)); err != nil {
+			return 0, fmt.Errorf("save step var seq=%d host=%d: %w", sv.Seq, sv.HostID, err)
 		}
 	}
 	return o.ID, tx.Commit()
@@ -300,5 +340,3 @@ func (r *OrchestrationRepo) CleanupRunsBefore(days int) (int64, error) {
 	n, err := res.RowsAffected()
 	return n, err
 }
-
-var _ = json.Marshal // 保持 import（params_json 由上层序列化传入）

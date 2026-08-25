@@ -20,6 +20,7 @@ var migrations = []migration{
 	{10, migrateV10},
 	{11, migrateV11},
 	{12, migrateV12},
+	{13, migrateV13},
 }
 
 // migrateV8 并发配置改为自适应：存量库中未改过的旧引导默认值 5 归一为 auto。
@@ -44,6 +45,12 @@ func migrateV9(db *sql.DB) error {
 		return err
 	}
 	_, err = db.Exec(`CREATE INDEX IF NOT EXISTS idx_host_installs_host ON host_installs(host_id)`)
+	return err
+}
+
+// migrateV13 编排定义绑定目标主机（by_step 共享主机集；by_host 由主机链隐含）。
+func migrateV13(db *sql.DB) error {
+	_, err := db.Exec(`ALTER TABLE orchestrations ADD COLUMN host_ids TEXT NOT NULL DEFAULT '[]'`)
 	return err
 }
 

@@ -1,4 +1,4 @@
-// 任务编排：定义 CRUD、按步骤栅栏(by_step)执行引擎与运行进度 SSE。
+// 任务编排：编排 = 多个「部署单元」（模板+该步骤主机集+逐台变量）按顺序串行的长任务。
 package api
 
 import (
@@ -24,13 +24,13 @@ import (
 
 // orchHandler 任务编排。
 type orchHandler struct {
-	repo     *store.OrchestrationRepo
-	tplRepo  *store.DeployRepo
-	hostRepo *store.HostRepo
-	credRepo *store.CredentialRepo
-	cryptoS  *icrypto.Service
-	sshC     *sshx.Client
-	bus      *eventbus.Bus
+	repo      *store.OrchestrationRepo
+	tplRepo   *store.DeployRepo
+	hostRepo  *store.HostRepo
+	credRepo  *store.CredentialRepo
+	cryptoS   *icrypto.Service
+	sshC      *sshx.Client
+	bus       *eventbus.Bus
 	auditRepo *store.AuditRepo
 }
 
@@ -43,12 +43,21 @@ func NewOrchHandler(repo *store.OrchestrationRepo, tplRepo *store.DeployRepo, ho
 
 // ---------- 定义 CRUD ----------
 
+type orchStepReq struct {
+	TemplateID       int64                        `json:"template_id" binding:"required"`
+	Params           map[string]string            `json:"params"`   // 步骤级默认参数
+	HostIDs          []int64                      `json:"host_ids" binding:"required,min=1"` // 本步骤目标主机
+	HostVars         map[string]map[string]string `json:"host_vars"` // 主机覆盖: hostID -> {k:v}
+	ContinueOnError  bool                         `json:"continue_on_error"`
+	RetryCount       int                          `json:"retry_count"`
+	RetryIntervalSec int                          `json:"retry_interval_sec"`
+}
+
 type orchSaveReq struct {
-	Name        string                    `json:"name" binding:"required"`
-	Description string                    `json:"description"`
-	ExecMode    string                    `json:"exec_mode"`
-	Enabled     *bool                     `json:"enabled"`
-	Steps       []model.OrchestrationStep `json:"steps" binding:"required,min=1,dive"`
+	Name        string         `json:"name" binding:"required"`
+	Description string         `json:"description"`
+	Enabled     *bool          `json:"enabled"`
+	Steps       []orchStepReq  `json:"steps" binding:"required,min=1,dive"`
 }
 
 func (h *orchHandler) List(c *gin.Context) {
@@ -63,9 +72,40 @@ func (h *orchHandler) List(c *gin.Context) {
 	resp.OK(c, items)
 }
 
+// stepResp / varResp 构造对前端友好的响应结构（params/host_vars 为对象而非 JSON 字符串）。
+func (h *orchHandler) buildStepsResponse(steps []model.OrchestrationStep, svars []model.OrchestrationStepVar) []gin.H {
+	varsBySeqHost := map[int]map[int64]map[string]string{}
+	for _, sv := range svars {
+		m := map[string]string{}
+		_ = json.Unmarshal([]byte(sv.ParamsJSON), &m)
+		if varsBySeqHost[sv.Seq] == nil {
+			varsBySeqHost[sv.Seq] = map[int64]map[string]string{}
+		}
+		varsBySeqHost[sv.Seq][sv.HostID] = m
+	}
+	out := make([]gin.H, 0, len(steps))
+	for _, st := range steps {
+		var hostIDs []int64
+		_ = json.Unmarshal([]byte(st.HostScope), &hostIDs)
+		pm := map[string]string{}
+		_ = json.Unmarshal([]byte(st.ParamsJSON), &pm)
+		hv := map[string]map[string]string{}
+		for hid, m := range varsBySeqHost[st.Seq] {
+			hv[strconv.FormatInt(hid, 10)] = m
+		}
+		out = append(out, gin.H{
+			"seq": st.Seq, "template_id": st.TemplateID, "template_name": st.TemplateName,
+			"params": pm, "host_ids": hostIDs, "host_vars": hv,
+			"continue_on_error": st.ContinueOnError, "retry_count": st.RetryCount,
+			"retry_interval_sec": st.RetryIntervalSec,
+		})
+	}
+	return out
+}
+
 func (h *orchHandler) Get(c *gin.Context) {
 	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
-	o, steps, err := h.repo.Get(id)
+	o, steps, svars, err := h.repo.Get(id)
 	if err != nil {
 		resp.ErrHTTP(c, 500, resp.CodeInternal, "查询编排失败")
 		return
@@ -74,7 +114,7 @@ func (h *orchHandler) Get(c *gin.Context) {
 		resp.Fail(c, resp.CodeNotFound, "编排不存在")
 		return
 	}
-	resp.OK(c, gin.H{"orchestration": o, "steps": steps})
+	resp.OK(c, gin.H{"orchestration": o, "steps": h.buildStepsResponse(steps, svars)})
 }
 
 func (h *orchHandler) Save(c *gin.Context) {
@@ -83,32 +123,37 @@ func (h *orchHandler) Save(c *gin.Context) {
 		resp.Fail(c, resp.CodeBadRequest, "参数错误: "+err.Error())
 		return
 	}
-	mode := req.ExecMode
-	if mode == "" {
-		mode = "by_step"
-	}
-	if mode != "by_step" && mode != "by_host" {
-		resp.Fail(c, resp.CodeBadRequest, "exec_mode 仅支持 by_step / by_host")
-		return
-	}
 	enabled := true
 	if req.Enabled != nil {
 		enabled = *req.Enabled
 	}
-	o := &model.Orchestration{Name: req.Name, Description: req.Description, ExecMode: mode, Enabled: enabled}
+	o := &model.Orchestration{Name: req.Name, Description: req.Description, ExecMode: "by_step", Enabled: enabled}
 	if id, _ := strconv.ParseInt(c.Param("id"), 10, 64); id > 0 {
 		o.ID = id
 	}
-	// 步骤参数默认补全
-	for i := range req.Steps {
-		if req.Steps[i].ParamsJSON == "" {
-			req.Steps[i].ParamsJSON = "{}"
-		}
-		if req.Steps[i].RetryIntervalSec <= 0 {
-			req.Steps[i].RetryIntervalSec = 30
+
+	steps := make([]model.OrchestrationStep, 0, len(req.Steps))
+	svars := []model.OrchestrationStepVar{}
+	for i, sr := range req.Steps {
+		paramsJSON, _ := json.Marshal(sr.Params)
+		scopeJSON, _ := json.Marshal(dedupInt64(sr.HostIDs))
+		steps = append(steps, model.OrchestrationStep{
+			TemplateID: sr.TemplateID, ParamsJSON: string(paramsJSON), HostScope: string(scopeJSON),
+			ContinueOnError: sr.ContinueOnError, RetryCount: sr.RetryCount,
+			RetryIntervalSec: orSec(sr.RetryIntervalSec),
+		})
+		seq := i + 1
+		for hidStr, vars := range sr.HostVars {
+			hid, err := strconv.ParseInt(hidStr, 10, 64)
+			if err != nil || len(vars) == 0 {
+				continue
+			}
+			vj, _ := json.Marshal(vars)
+			svars = append(svars, model.OrchestrationStepVar{Seq: seq, HostID: hid, ParamsJSON: string(vj)})
 		}
 	}
-	savedID, err := h.repo.Save(o, req.Steps)
+
+	savedID, err := h.repo.Save(o, steps, svars)
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE") {
 			resp.Fail(c, resp.CodeConflict, "编排名称已存在")
@@ -124,6 +169,13 @@ func (h *orchHandler) Save(c *gin.Context) {
 	h.auditRepo.Create(&model.AuditLog{Action: action, TargetType: "orchestration",
 		TargetID: savedID, Detail: fmt.Sprintf("name=%s steps=%d", o.Name, len(req.Steps)), RemoteIP: c.ClientIP()})
 	resp.OK(c, gin.H{"id": savedID})
+}
+
+func orSec(v int) int {
+	if v <= 0 {
+		return 30
+	}
+	return v
 }
 
 func (h *orchHandler) Delete(c *gin.Context) {
@@ -142,14 +194,10 @@ func (h *orchHandler) Delete(c *gin.Context) {
 
 // ---------- 运行 ----------
 
-type orchRunReq struct {
-	HostIDs []int64 `json:"host_ids" binding:"required,min=1"`
-}
-
-// Run POST /api/orchestrations/:id/run：创建运行并异步执行（P1：by_step 栅栏语义）。
+// Run POST /api/orchestrations/:id/run：创建运行并异步执行（顺序串行各步骤，长任务）。
 func (h *orchHandler) Run(c *gin.Context) {
 	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
-	o, stepsDef, err := h.repo.Get(id)
+	o, _, _, err := h.repo.Get(id)
 	if err != nil || o == nil {
 		resp.Fail(c, resp.CodeNotFound, "编排不存在")
 		return
@@ -158,215 +206,198 @@ func (h *orchHandler) Run(c *gin.Context) {
 		resp.Fail(c, resp.CodeBadRequest, "编排已停用")
 		return
 	}
-	var req orchRunReq
-	if err := c.ShouldBindJSON(&req); err != nil {
-		resp.Fail(c, resp.CodeBadRequest, "参数错误")
-		return
-	}
-	hostIDs := dedupInt64(req.HostIDs)
-
-	var hosts []model.DeployTaskHost
-	for _, hid := range hostIDs {
-		hh, err := h.hostRepo.GetByID(hid)
-		if err != nil || hh == nil {
-			continue
-		}
-		hosts = append(hosts, model.DeployTaskHost{HostID: hh.ID, HostName: hh.Name, HostIP: hh.IP})
-	}
-	if len(hosts) == 0 {
-		resp.Fail(c, resp.CodeBadRequest, "没有有效主机")
-		return
-	}
-
-	runSteps := make([]model.OrchestrationRunStep, 0, len(hosts)*len(stepsDef))
-	for _, def := range stepsDef { // seq 升序（repo 已排序）
-		for _, hh := range hosts {
-			runSteps = append(runSteps, model.OrchestrationRunStep{
-				HostID: hh.HostID, HostName: hh.HostName, HostIP: hh.HostIP,
-				Seq: def.Seq, TemplateID: def.TemplateID, TemplateName: def.TemplateName,
-			})
-		}
-	}
-	hostIDsJSON, _ := json.Marshal(hostIDs)
-	run := &model.OrchestrationRun{OrchestrationID: id, Name: o.Name, ExecMode: o.ExecMode,
-		TotalHosts: len(hosts), TriggerType: "manual", HostIDs: string(hostIDsJSON)}
-	runID, err := h.repo.CreateRun(run, runSteps)
-	if err != nil {
-		resp.ErrHTTP(c, 500, resp.CodeInternal, "创建运行失败")
-		return
-	}
+	go h.executeRun(id)
 	h.auditRepo.Create(&model.AuditLog{Action: "orchestration.run", TargetType: "orchestration_run",
-		TargetID: runID, Detail: fmt.Sprintf("name=%s hosts=%d steps=%d", o.Name, len(hosts), len(stepsDef)), RemoteIP: c.ClientIP()})
-
-	go h.executeRun(runID)
-	resp.OK(c, gin.H{"run_id": runID})
+		Detail: fmt.Sprintf("name=%s", o.Name), RemoteIP: c.ClientIP()})
+	resp.OK(c, gin.H{"started": true})
 }
 
 // orchProgress SSE 推送的运行事件。
 type orchProgress struct {
 	RunID     int64  `json:"run_id"`
-	HostID    int64  `json:"host_id"`
-	Seq       int    `json:"seq"`
+	HostID    int64  `json:"host_id,omitempty"`
+	Seq       int    `json:"seq,omitempty"`
 	Status    string `json:"status"`
 	Output    string `json:"output,omitempty"`
 	Error     string `json:"error,omitempty"`
 	Attempt   int    `json:"attempt,omitempty"`
-	RunStatus string `json:"run_status"` // running 或终态
-	OkHosts   int    `json:"ok_hosts,omitempty"`
-	FailHosts int    `json:"fail_hosts,omitempty"`
-	Total     int    `json:"total,omitempty"`
+	RunStatus string `json:"run_status,omitempty"`
 }
 
-// executeRun 执行引擎：逐步骤推进，每步在全部目标主机完成后才进入下一步（栅栏）；
-// 主机之间并发，同一主机天然串行。失败且未开 continue_on_error 时该主机后续步骤置 skipped。
-func (h *orchHandler) executeRun(runID int64) {
-	run, err := h.repo.GetRun(runID)
-	if err == nil && run == nil {
+// executeRun 引擎：步骤严格串行；步骤内主机并行（自适应并发）。
+// 变量合并：模板默认 < 步骤默认 < 主机覆盖。某主机某步失败且未开「失败继续」时，
+// 该主机不再参与后续步骤（明细置 skipped），其余主机不受影响 —— 长任务可安全跑完。
+func (h *orchHandler) executeRun(orchID int64) {
+	o, stepsDef, svars, err := h.repo.Get(orchID)
+	if err != nil || o == nil || len(stepsDef) == 0 {
 		return
 	}
-	if run == nil {
+	override := map[int]map[int64]string{} // seq -> host -> paramsJSON
+	for _, sv := range svars {
+		if override[sv.Seq] == nil {
+			override[sv.Seq] = map[int64]string{}
+		}
+		override[sv.Seq][sv.HostID] = sv.ParamsJSON
+	}
+
+	// 展开为运行明细（pending）
+	runRows := make([]model.OrchestrationRunStep, 0)
+	distinctHosts := map[int64]bool{}
+	for _, def := range stepsDef {
+		var hostIDs []int64
+		_ = json.Unmarshal([]byte(def.HostScope), &hostIDs)
+		for _, hid := range dedupInt64(hostIDs) {
+			hh, herr := h.hostRepo.GetByID(hid)
+			name, ip := "", ""
+			if herr == nil && hh != nil {
+				name, ip = hh.Name, hh.IP
+			}
+			distinctHosts[hid] = true
+			tplName := ""
+			if t, terr := h.tplRepo.GetTemplate(def.TemplateID); terr == nil && t != nil {
+				tplName = t.Name
+			}
+			runRows = append(runRows, model.OrchestrationRunStep{HostID: hid, HostName: name,
+				HostIP: ip, Seq: def.Seq, TemplateID: def.TemplateID, TemplateName: tplName})
+		}
+	}
+	if len(runRows) == 0 {
 		return
 	}
-	_, stepsDef, err := h.repo.Get(run.OrchestrationID)
-	if err != nil || len(stepsDef) == 0 {
-		_, _ = h.repo.FinishRun(runID)
-		h.publishDone(runID, "failed", 0, 0, 0)
+	allIDs := make([]int64, 0, len(distinctHosts))
+	for hid := range distinctHosts {
+		allIDs = append(allIDs, hid)
+	}
+	tidsJSON, _ := json.Marshal(allIDs)
+	run := &model.OrchestrationRun{OrchestrationID: orchID, Name: o.Name, ExecMode: "by_step",
+		TotalHosts: len(distinctHosts), TriggerType: "manual", HostIDs: string(tidsJSON)}
+	runID, err := h.repo.CreateRun(run, runRows)
+	if err != nil {
+		fmt.Printf("orchestration: 创建运行失败: %v\n", err)
 		return
 	}
+
+	dead := map[int64]bool{} // 失败且未开「失败继续」的主机：不再参与后续步骤
+
+	publish := func(hostID int64, seq int, status, output, errMsg string, attempt int) {
+		if h.bus == nil {
+			return
+		}
+		h.bus.Publish(eventbus.TopicOrchestrationProgress, orchProgress{RunID: runID,
+			HostID: hostID, Seq: seq, Status: status, Output: output, Error: errMsg, Attempt: attempt, RunStatus: "running"})
+	}
+
+	execCell := func(cell store.RunStepRef, def *model.OrchestrationStep) {
+		attempts := def.RetryCount + 1
+		interval := def.RetryIntervalSec
+		if interval <= 0 {
+			interval = 30
+		}
+		var lastOut, lastErr string
+
+		for a := 1; a <= attempts; a++ {
+			_ = h.repo.UpdateRunStepStatus(cell.RecID, "running", a, "", "")
+			publish(cell.HostID, cell.Seq, "running", "", "", a)
+
+			tpl, terr := h.tplRepo.GetTemplate(def.TemplateID)
+			if terr != nil || tpl == nil {
+				lastErr = "模板不存在或已删除"
+				break
+			}
+			// 变量合并：模板默认 < 步骤默认 < 主机覆盖
+			stepParams := map[string]string{}
+			_ = json.Unmarshal([]byte(def.ParamsJSON), &stepParams)
+			hostParams := map[string]string{}
+			if ov, ok := override[cell.Seq][cell.HostID]; ok {
+				_ = json.Unmarshal([]byte(ov), &hostParams)
+			}
+			for k, v := range hostParams {
+				stepParams[k] = v
+			}
+			rendered, rerr := renderScript(tpl.Script, tpl.Variables, stepParams)
+			if rerr != nil {
+				lastErr = rerr.Error()
+				break // 渲染错误重试无意义
+			}
+			hr := store.HostRecord{DeployTaskHost: model.DeployTaskHost{
+				HostID: cell.HostID, HostName: cell.HostName, HostIP: cell.HostIP}}
+			rendered = applyHostVars(rendered, cell.Seq, hr)
+
+			onLog := func(chunk string) {
+				if chunk == "" || h.bus == nil {
+					return
+				}
+				h.bus.Publish(eventbus.TopicOrchestrationProgress, orchProgress{RunID: runID,
+					HostID: cell.HostID, Seq: cell.Seq, Status: "output", Output: chunk, Attempt: a, RunStatus: "running"})
+			}
+			out, execErr := execHostWith(h.hostRepo, h.credRepo, h.cryptoS, h.sshC, cell.HostID, rendered, onLog)
+			lastOut = out
+			if execErr != nil {
+				lastErr = execErr.Error()
+				if a < attempts {
+					time.Sleep(time.Duration(interval) * time.Second)
+				}
+				continue
+			}
+			lastErr = ""
+			break
+		}
+
+		status := "success"
+		if lastErr != "" {
+			status = "failed"
+		}
+		_ = h.repo.UpdateRunStepStatus(cell.RecID, status, attempts, lastOut, lastErr)
+		if status == "success" {
+			tname := cell.TemplateName
+			if t, _ := h.tplRepo.GetTemplate(def.TemplateID); t != nil {
+				tname = t.Name
+			}
+			if err := h.tplRepo.MarkHostInstalled(cell.HostID, def.TemplateID, tname, runID); err != nil {
+				fmt.Printf("orchestration: 标记安装失败 host=%d: %v\n", cell.HostID, err)
+			}
+		}
+		publish(cell.HostID, cell.Seq, status, lastOut, lastErr, attempts)
+
+		if status == "failed" && !def.ContinueOnError {
+			dead[cell.HostID] = true
+			_ = h.repo.SkipRemaining(runID, cell.HostID, cell.Seq)
+			publish(cell.HostID, 0, "skipped-refresh", "", "", 0)
+		}
+	}
+
 	allRows, err := h.repo.RunSteps(runID)
 	if err != nil || len(allRows) == 0 {
 		_, _ = h.repo.FinishRun(runID)
 		return
 	}
 
-	publishStep := func(rec store.RunStepRef, status string, output, errMsg string, attempt int, runStatus string) {
-		if h.bus == nil {
-			return
-		}
-		h.bus.Publish(eventbus.TopicOrchestrationProgress, orchProgress{RunID: runID,
-			HostID: rec.HostID, Seq: rec.Seq, Status: status, Output: output, Error: errMsg,
-			Attempt: attempt, RunStatus: runStatus})
-	}
-
-	concurrency := sysutil.AdaptiveConcurrency(run.TotalHosts)
+	concurrency := sysutil.AdaptiveConcurrency(len(distinctHosts))
 	sem := make(chan struct{}, concurrency)
 
-	// 按步骤序号推进（栅栏）
-	for _, def := range stepsDef {
-		var tpl *model.DeployTemplate
-		if t, terr := h.tplRepo.GetTemplate(def.TemplateID); terr == nil {
-			tpl = t
-		}
-		var batch []store.RunStepRef
-		for _, r := range allRows {
-			if r.Seq == def.Seq {
-				batch = append(batch, r)
-			}
-		}
-
+	// 步骤严格串行
+	for i := range stepsDef {
+		def := &stepsDef[i]
 		var wg sync.WaitGroup
-		for i := range batch {
-			cell := batch[i]
-			// 上一步失败已跳过的主机不再执行
-			if cell.Status == "skipped" {
+		for _, cell := range allRows {
+			if cell.Seq != def.Seq || cell.Status == "skipped" || dead[cell.HostID] {
 				continue
 			}
 			wg.Add(1)
-			go func(cell store.RunStepRef) {
+			go func(cell store.RunStepRef, def *model.OrchestrationStep) {
 				defer wg.Done()
 				sem <- struct{}{}
 				defer func() { <-sem }()
-
-				rec := cell // 可变副本（回填输出）
-				attempts := def.RetryCount + 1
-				if attempts < 1 {
-					attempts = 1
-				}
-				var lastOut, lastErr string
-
-				for a := 1; a <= attempts; a++ {
-					_ = h.repo.UpdateRunStepStatus(rec.RecID, "running", a, "", "")
-					publishStep(cell, "running", "", "", a, "running")
-
-					var rendered string
-					var rerr error
-					if tpl == nil {
-						rerr = fmt.Errorf("模板不存在或已删除")
-					} else {
-						var params map[string]string
-						_ = json.Unmarshal([]byte(def.ParamsJSON), &params)
-						rendered, rerr = renderScript(tpl.Script, tpl.Variables, params)
-						if rerr == nil {
-							hr := store.HostRecord{DeployTaskHost: model.DeployTaskHost{HostID: cell.HostID, HostName: cell.HostName, HostIP: cell.HostIP}}
-							rendered = applyHostVars(rendered, cell.Seq, hr)
-						}
-					}
-					if rerr != nil {
-						lastErr = rerr.Error()
-						break // 渲染错误重试无意义
-					}
-
-					onLog := func(chunk string) {
-						if chunk == "" || h.bus == nil {
-							return
-						}
-						h.bus.Publish(eventbus.TopicOrchestrationProgress, orchProgress{RunID: runID,
-							HostID: cell.HostID, Seq: cell.Seq, Status: "output", Output: chunk, Attempt: a, RunStatus: "running"})
-					}
-					out, execErr := execHostWith(h.hostRepo, h.credRepo, h.cryptoS, h.sshC, cell.HostID, rendered, onLog)
-					lastOut, lastErr = out, ""
-					if execErr != nil {
-						lastErr = execErr.Error()
-						if a < attempts {
-							time.Sleep(time.Duration(def.RetryIntervalSec) * time.Second)
-						}
-						continue
-					}
-					lastErr = ""
-					break
-				}
-
-				status := "success"
-				if lastErr != "" {
-					status = "failed"
-				}
-				_ = h.repo.UpdateRunStepStatus(rec.RecID, status, attempts, lastOut, lastErr)
-				if status == "success" && tpl != nil {
-					if err := h.tplRepo.MarkHostInstalled(cell.HostID, def.TemplateID, def.TemplateName, runID); err != nil {
-						fmt.Printf("orchestration: 标记安装失败 host=%d: %v\n", cell.HostID, err)
-					}
-				}
-				publishStep(cell, status, lastOut, lastErr, attempts, "running")
-
-				if status == "failed" && !def.ContinueOnError {
-					_ = h.repo.SkipRemaining(runID, cell.HostID, cell.Seq)
-					if h.bus != nil { // 通知前端该主机剩余步骤被跳过
-						h.bus.Publish(eventbus.TopicOrchestrationProgress, orchProgress{RunID: runID,
-							HostID: cell.HostID, Status: "skipped-refresh", RunStatus: "running"})
-					}
-				}
-			}(cell)
+				execCell(cell, def)
+			}(cell, def)
 		}
-		wg.Wait() // 栅栏：本步全员终态后才进入下一步
+		wg.Wait() // 本步骤全部主机终态后才进入下一步骤
 	}
 
 	finalStatus, _ := h.repo.FinishRun(runID)
-	if r2, e2 := h.repo.GetRun(runID); e2 == nil && r2 != nil {
-		if h.bus != nil {
-			h.bus.Publish(eventbus.TopicOrchestrationProgress, orchProgress{RunID: runID,
-				Status: "finished", RunStatus: finalStatus, OkHosts: r2.OkHosts, FailHosts: r2.FailHosts, Total: r2.TotalHosts})
-		}
-	} else {
-		h.publishDone(runID, finalStatus, 0, 0, run.TotalHosts)
+	if h.bus != nil {
+		h.bus.Publish(eventbus.TopicOrchestrationProgress, orchProgress{RunID: runID, Status: "finished", RunStatus: finalStatus})
 	}
-}
-
-func (h *orchHandler) publishDone(runID int64, status string, okN, failN, total int) {
-	if h.bus == nil {
-		return
-	}
-	h.bus.Publish(eventbus.TopicOrchestrationProgress, orchProgress{RunID: runID,
-		Status: "finished", RunStatus: status, OkHosts: okN, FailHosts: failN, Total: total})
 }
 
 // ---------- 运行历史 & 明细 ----------
