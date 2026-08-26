@@ -153,18 +153,9 @@ window.OrchestrationsPage = {
         </div>
       </div>
 
-      <template v-if="tplVars(editStep.template_id).length">
+      <template v-if="tplVars(editStep.template_id).length && (editStep.hostIds||[]).length">
         <div class="drawer-sec">
-          <div class="drawer-sec-title">步骤默认参数</div>
-          <div class="orch-step-params">
-            <div class="orch-param" v-for="v in tplVars(editStep.template_id)" :key="'d'+v.name">
-              <label>{{v.label || v.name}}<b v-if="v.required">*</b></label>
-              <el-input size="small" v-model="editStep.params[v.name]" :placeholder="v.default || '模板默认'" />
-            </div>
-          </div>
-        </div>
-        <div class="drawer-sec" v-if="(editStep.hostIds||[]).length">
-          <div class="drawer-sec-title">逐台覆盖变量
+          <div class="drawer-sec-title">变量 · 逐台填写
             <el-button size="small" text type="primary" @click="copyFirstHostVars(editStep)">复制首台到其他</el-button>
             <el-button size="small" text @click="clearHostVars(editStep)">清空覆盖</el-button>
           </div>
@@ -180,7 +171,7 @@ window.OrchestrationsPage = {
                 <div class="orch-param" v-for="v in tplVars(editStep.template_id)" :key="'hv'+hid+v.name">
                   <label>{{v.label || v.name}}<b v-if="v.required">*</b></label>
                   <el-input size="small" :model-value="hostVarValue(editStep,hid,v)" @input="val => setHostVar(editStep,hid,v,val)"
-                    :placeholder="'继承: ' + stepParam(editStep, v)" />
+                    :placeholder="v.default ? ('默认: ' + v.default) : '必填'" />
                 </div>
               </div>
             </div>
@@ -311,7 +302,7 @@ window.OrchestrationsPage = {
             id: o.id, name: o.name, description: o.description,
             steps: (r.data.steps || []).map(s => ({
               uid: this.uidSeed++, template_id: s.template_id, template_name: s.template_name,
-              params: s.params || {}, hostIds: s.host_ids || [], hostVars: s.host_vars || {},
+              hostIds: s.host_ids || [], hostVars: s.host_vars || {},
               continue_on_error: !!s.continue_on_error,
               retry_count: s.retry_count || 0, retry_interval_sec: s.retry_interval_sec || 30,
               hostFilter: ''
@@ -332,7 +323,7 @@ window.OrchestrationsPage = {
     pickTemplate(t) {
       this.form.steps.push({
         uid: this.uidSeed++, template_id: t.id, template_name: t.name,
-        params: {}, hostIds: [], hostVars: {},
+        hostIds: [], hostVars: {},
         continue_on_error: false, retry_count: 0, retry_interval_sec: 30, hostFilter: ''
       })
       this.editIdx = this.form.steps.length - 1
@@ -369,10 +360,6 @@ window.OrchestrationsPage = {
       else list.forEach(h => { if (!(s.hostIds||[]).includes(h.id)) s.hostIds.push(h.id) })
     },
     /* ===== 抽屉内：变量 ===== */
-    stepParam(s, v) {
-      if (s.params && s.params[v.name] !== undefined && s.params[v.name] !== '') return s.params[v.name]
-      return v.default || '空'
-    },
     hostVarValue(s, hid, v) {
       const hv = (s.hostVars || {})[String(hid)] || {}
       return hv[v.name] !== undefined ? hv[v.name] : ''
@@ -401,7 +388,6 @@ window.OrchestrationsPage = {
         name: this.form.name, description: this.form.description, enabled: true,
         steps: this.form.steps.map(s => ({
           template_id: s.template_id,
-          params: s.params || {},
           host_ids: s.hostIds || [],
           host_vars: s.hostVars || {},
           continue_on_error: !!s.continue_on_error,

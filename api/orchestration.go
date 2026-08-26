@@ -135,7 +135,7 @@ func (h *orchHandler) Save(c *gin.Context) {
 	steps := make([]model.OrchestrationStep, 0, len(req.Steps))
 	svars := []model.OrchestrationStepVar{}
 	for i, sr := range req.Steps {
-		paramsJSON, _ := json.Marshal(sr.Params)
+		paramsJSON := mustJSONObj(sr.Params)
 		scopeJSON, _ := json.Marshal(dedupInt64(sr.HostIDs))
 		steps = append(steps, model.OrchestrationStep{
 			TemplateID: sr.TemplateID, ParamsJSON: string(paramsJSON), HostScope: string(scopeJSON),
@@ -176,6 +176,18 @@ func orSec(v int) int {
 		return 30
 	}
 	return v
+}
+
+// mustJSONObj 序列化对象；nil 输出 "{}"（json.Marshal(nil map) 会得到 "null"，反序列化后为 nil map 导致赋值 panic）。
+func mustJSONObj(m map[string]string) string {
+	if m == nil {
+		return "{}"
+	}
+	b, err := json.Marshal(m)
+	if err != nil || string(b) == "null" {
+		return "{}"
+	}
+	return string(b)
 }
 
 func (h *orchHandler) Delete(c *gin.Context) {
@@ -304,9 +316,12 @@ func (h *orchHandler) executeRun(orchID int64) {
 				lastErr = "模板不存在或已删除"
 				break
 			}
-			// 变量合并：模板默认 < 步骤默认 < 主机覆盖
+			// 变量合并：模板默认 < 主机覆盖
 			stepParams := map[string]string{}
 			_ = json.Unmarshal([]byte(def.ParamsJSON), &stepParams)
+			if stepParams == nil {
+				stepParams = map[string]string{}
+			}
 			hostParams := map[string]string{}
 			if ov, ok := override[cell.Seq][cell.HostID]; ok {
 				_ = json.Unmarshal([]byte(ov), &hostParams)
