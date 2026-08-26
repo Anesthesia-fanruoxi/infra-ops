@@ -83,7 +83,7 @@ window.OrchestrationsPage = {
   </div>
 
   <!-- 编辑编排：大弹框 + 流水线 -->
-  <el-dialog v-model="editorVisible" :title="(form.id ? '编辑编排' : '新建编排')" width="980px" top="6vh"
+  <el-dialog v-model="editorVisible" :title="(form.id ? '编辑编排' : '新建编排')" width="85%" top="10vh"
     :close-on-click-modal="false" @open="onEditorOpen">
     <el-form label-position="top">
       <div class="form-grid">
@@ -121,7 +121,7 @@ window.OrchestrationsPage = {
   </el-dialog>
 
   <!-- 步骤编辑抽屉 -->
-  <el-drawer v-model="drawerVisible" :title="drawerTitle" size="620px" :close-on-click-modal="false">
+  <el-drawer v-model="drawerVisible" :title="drawerTitle" size="50%" :close-on-click-modal="false">
     <!-- 新增模式：选模板 -->
     <div v-if="drawerMode==='add'" v-loading="templatesLoading">
       <div class="drawer-tip">选择一个模板作为新步骤：</div>
@@ -161,11 +161,13 @@ window.OrchestrationsPage = {
           </div>
           <div class="orch-hostvars-rows">
             <div class="orch-hostvar-row" v-for="hid in (editStep.hostIds||[])" :key="'hv'+hid">
-              <div class="orch-hostvar-head">
+              <div class="orch-hostvar-side">
                 <span class="deploy-host-name">{{hostName(hid)}}</span>
                 <span class="mono deploy-host-ip">{{hostIP(hid)}}</span>
-                <span v-if="hostVarCount(editStep,hid)" class="deploy-var-hint">已覆盖 {{hostVarCount(editStep,hid)}} 项</span>
-                <el-button size="small" text type="primary" @click="clearHostVar(editStep,hid)">重置</el-button>
+                <span class="orch-hv-meta">
+                  <span v-if="hostVarCount(editStep,hid)" class="deploy-var-hint">覆盖{{hostVarCount(editStep,hid)}}项</span>
+                  <el-button size="small" text type="primary" @click="clearHostVar(editStep,hid)">重置</el-button>
+                </span>
               </div>
               <div class="orch-step-params">
                 <div class="orch-param" v-for="v in tplVars(editStep.template_id)" :key="'hv'+hid+v.name">
@@ -189,6 +191,13 @@ window.OrchestrationsPage = {
             间隔 <el-input-number v-model="editStep.retry_interval_sec" size="small" :min="5" :max="600" controls-position="right" style="width:110px" /> 秒
           </span>
         </div>
+      </div>
+    </template>
+
+    <template #footer>
+      <div style="display:flex;justify-content:flex-end;gap:8px">
+        <el-button @click="drawerVisible=false">关闭</el-button>
+        <el-button type="primary" :loading="saving" :disabled="!formValid" @click="saveFromDrawer">保存</el-button>
       </div>
     </template>
   </el-drawer>
@@ -232,7 +241,7 @@ window.OrchestrationsPage = {
       form: { id: 0, name: '', description: '', steps: [] },
       uidSeed: 1,
       drawerVisible: false, drawerMode: 'edit', editIdx: -1,
-      runs: [], runsLoading: false,
+      runs: [], runsLoading: false, saving: false,
       detailVisible: false, activeRun: null, runSteps: [], matrixRows: [], stepSeqs: [],
       logCell: null, logRow: null, sse: null
     }
@@ -383,7 +392,12 @@ window.OrchestrationsPage = {
       ids.slice(1).forEach(hid => { s.hostVars[String(hid)] = { ...src } })
     },
     /* ===== 保存 / 删除 ===== */
-    async saveOrch() {
+    async saveOrch() { const ok = await this.doSave(); if (ok) { this.editorVisible = false } },
+    async saveFromDrawer() {
+      this.saving = true
+      try { const ok = await this.doSave(); if (ok) { this.drawerVisible = false } } finally { this.saving = false }
+    },
+    async doSave() {
       const payload = {
         name: this.form.name, description: this.form.description, enabled: true,
         steps: this.form.steps.map(s => ({
@@ -396,8 +410,9 @@ window.OrchestrationsPage = {
       }
       try {
         const r = this.form.id ? await api.put('/orchestrations/' + this.form.id, payload) : await api.post('/orchestrations', payload)
-        if (r.code === 0) { ElMessage.success('已保存'); this.editorVisible = false; this.loadList() }
-      } catch(e) {}
+        if (r.code === 0) { ElMessage.success('已保存'); this.loadList(); return true }
+        return false
+      } catch(e) { return false }
     },
     removeOrch(row) {
       ElMessageBox.confirm('确认删除编排「' + row.name + '」？历史运行记录将保留。', '提示', { type: 'warning' })

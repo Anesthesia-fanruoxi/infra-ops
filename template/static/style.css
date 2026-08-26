@@ -950,9 +950,14 @@ a { text-decoration: none; }
 .orch-step-seq { width: 22px; height: 22px; border-radius: 50%; background: var(--brand); color: #fff; font-size: 12px; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
 .orch-step-name { font-weight: 600; }
 .orch-step-tools { margin-left: auto; display: inline-flex; }
-.orch-step-params { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 6px 14px; margin-top: 8px; }
-.orch-param { display: flex; flex-direction: column; gap: 2px; }
+/* 变量横排：主机名在左，变量向右铺开，多主机时高度恒定 */
+.orch-step-params { flex: 1; display: flex; flex-wrap: wrap; gap: 8px 18px; }
+.orch-param { flex: 1 1 180px; min-width: 160px; max-width: 320px; display: flex; flex-direction: column; gap: 2px; }
 .orch-param label { font-size: 11px; color: var(--text-sub); }
+.orch-hostvar-row { display: flex; align-items: flex-start; gap: 16px; border-top: 1px dashed var(--border); padding: 10px 0; }
+.orch-hostvar-row:first-child { border-top: none; }
+.orch-hostvar-side { width: 150px; flex-shrink: 0; display: flex; flex-direction: column; gap: 2px; font-size: 12px; }
+.orch-hv-meta { display: flex; align-items: center; justify-content: space-between; gap: 4px; }
 .orch-step-opts { display: flex; align-items: center; gap: 16px; margin-top: 8px; font-size: 12px; color: var(--text-sub); }
 .orch-retry { display: inline-flex; align-items: center; gap: 4px; }
 .orch-run-meta { display: flex; align-items: center; gap: 14px; margin-bottom: 12px; font-size: 13px; }
@@ -1005,10 +1010,6 @@ a { text-decoration: none; }
 .drawer-sec-title { font-weight: 600; font-size: 13px; margin-bottom: 8px; display: flex; align-items: center; gap: 8px; }
 .deploy-host-list--unit { max-height: 240px; }
 .orch-hostvars-rows { border: 1px solid var(--border); border-radius: var(--radius-btn); padding: 4px 12px; max-height: 300px; overflow-y: auto; }
-.orch-hostvar-row { border-top: 1px dashed var(--border); padding: 8px 0; }
-.orch-hostvar-row:first-child { border-top: none; }
-.orch-hostvar-head { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
-.orch-hostvar-head .el-button { margin-left: auto; }
 .orch-fail-row { display: flex; flex-direction: column; gap: 10px; }
 .deploy-step-next { display: flex; justify-content: flex-end; margin-top: 10px; }
 .deploy-var-missing { font-size: 11px; color: var(--danger); font-weight: 600; }
