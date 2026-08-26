@@ -116,6 +116,7 @@ window.OrchestrationsPage = {
 
     <template #footer>
       <el-button @click="editorVisible=false">取消</el-button>
+      <span v-if="invalidReason" class="save-block-reason">{{invalidReason}}</span>
       <el-button type="primary" :disabled="!formValid" @click="saveOrch">保存</el-button>
     </template>
   </el-dialog>
@@ -202,6 +203,7 @@ window.OrchestrationsPage = {
     <template #footer>
       <div style="display:flex;justify-content:flex-end;gap:8px">
         <el-button @click="drawerVisible=false">关闭</el-button>
+        <span v-if="invalidReason" class="save-block-reason">{{invalidReason}}</span>
         <el-button type="primary" :loading="saving" :disabled="!formValid" @click="saveFromDrawer">保存</el-button>
       </div>
     </template>
@@ -257,9 +259,16 @@ window.OrchestrationsPage = {
       this.hostOptions.forEach(h => set.add(h.tag || 'other'))
       return [...set].sort()
     },
-    formValid() {
-      if (!this.form.name || !this.form.steps.length) return false
-      return this.form.steps.every(s => s.template_id && (s.hostIds || []).length > 0)
+    formValid() { return !this.invalidReason },
+    invalidReason() {
+      if (!this.form.name) return '请填写编排名称'
+      if (!this.form.steps.length) return '请至少添加一个步骤'
+      for (let i = 0; i < this.form.steps.length; i++) {
+        const s = this.form.steps[i]
+        if (!s.template_id) return '步骤 ' + (i+1) + ' 未选择模板'
+        if (!(s.hostIds || []).length) return '步骤 ' + (i+1) + '（' + s.template_name + '）尚未选择主机'
+      }
+      return ''
     },
     editStep() {
       if (this.drawerMode !== 'edit' || this.editIdx < 0) return null
@@ -422,7 +431,11 @@ window.OrchestrationsPage = {
       }
       try {
         const r = this.form.id ? await api.put('/orchestrations/' + this.form.id, payload) : await api.post('/orchestrations', payload)
-        if (r.code === 0) { ElMessage.success('已保存'); this.loadList(); return true }
+        if (r.code === 0) {
+          if (!this.form.id && r.data?.id) this.form.id = r.data.id // 新建后回写，避免再次保存撞重名
+          ElMessage.success('已保存'); this.loadList(); return true
+        }
+        ElMessage.error(r.message || '保存失败')
         return false
       } catch(e) { return false }
     },

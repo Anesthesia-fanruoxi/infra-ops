@@ -1011,6 +1011,7 @@ a { text-decoration: none; }
 .deploy-host-list--unit { max-height: 240px; }
 .orch-hostvars-rows { border: 1px solid var(--border); border-radius: var(--radius-btn); padding: 4px 12px; max-height: 300px; overflow-y: auto; }
 .orch-fail-row { display: flex; flex-direction: column; gap: 10px; }
+.save-block-reason { font-size: 12px; color: var(--danger); margin-right: auto; }
 .deploy-step-next { display: flex; justify-content: flex-end; margin-top: 10px; }
 .deploy-var-missing { font-size: 11px; color: var(--danger); font-weight: 600; }
 .deploy-action-bar { position: relative; }
