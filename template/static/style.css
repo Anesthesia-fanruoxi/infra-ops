@@ -934,6 +934,16 @@ a { text-decoration: none; }
 .deploy-hero-content { display: flex; }
 .deploy-hero-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; width: 100%; }
 .deploy-new-btn { height: 42px; padding: 0 22px; font-size: 14px; }
+/* 编排编辑器大弹框：宽85%，上下各留10%（高80vh），body内部滚动 */
+.orch-editor-dialog { margin-top: 10vh !important; height: 80vh; display: flex; flex-direction: column; }
+.orch-editor-dialog .el-dialog__header { flex-shrink: 0; }
+.orch-editor-dialog .el-dialog__body { flex: 1; overflow-y: auto; }
+.orch-editor-dialog .el-dialog__footer { flex-shrink: 0; }
+/* 流水线拖拽 */
+.pipe-node { cursor: grab; }
+.pipe-node.dragging { opacity: .45; cursor: grabbing; }
+.pipe-node.drag-over { border-color: var(--brand); box-shadow: inset 0 0 0 2px var(--brand); }
+.drawer-save-hint { font-size: 11px; color: var(--text-faint); text-align: right; margin-top: 6px; }
 .deploy-host-list--dialog { max-height: 320px; }
 .deploy-host-vars-list { max-height: 380px; overflow-y: auto; border: 1px solid var(--border); border-radius: var(--radius-btn); padding: 4px 14px; background: var(--bg-soft); }
 .deploy-wizard-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; }

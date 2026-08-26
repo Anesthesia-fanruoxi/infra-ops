@@ -82,8 +82,22 @@ window.OrchestrationsPage = {
     <div v-if="!runsLoading && !runs.length" class="empty-state"><p>暂无运行记录</p></div>
   </div>
 
+  <!-- 新建第一步：设定编排名称 -->
+  <el-dialog v-model="nameDialogVisible" title="新建编排" width="440px" :close-on-click-modal="false">
+    <el-form label-position="top" @submit.prevent>
+      <el-form-item label="编排名称" required>
+        <el-input v-model="nameDraft" placeholder="如：新机初始化" maxlength="50" show-word-limit
+          @keydown.enter="confirmName" />
+      </el-form-item>
+    </el-form>
+    <template #footer>
+      <el-button @click="nameDialogVisible=false">取消</el-button>
+      <el-button type="primary" :disabled="!nameDraft.trim()" @click="confirmName">下一步：编排模板</el-button>
+    </template>
+  </el-dialog>
+
   <!-- 编辑编排：大弹框 + 流水线 -->
-  <el-dialog v-model="editorVisible" :title="(form.id ? '编辑编排' : '新建编排')" width="85%" top="10vh"
+  <el-dialog v-model="editorVisible" :title="'编排：' + form.name" width="85%" top="10vh" class="orch-editor-dialog"
     :close-on-click-modal="false" @open="onEditorOpen">
     <el-form label-position="top">
       <div class="form-grid">
@@ -95,16 +109,19 @@ window.OrchestrationsPage = {
     <!-- 流水线 -->
     <div class="pipe-wrap">
       <div class="pipe-flow">
-        <div v-for="(s,i) in form.steps" :key="s.uid" class="pipe-node" :class="{active: editIdx===i}" @click="openDrawer(i)">
+        <div v-for="(s,i) in form.steps" :key="s.uid" class="pipe-node"
+          :class="{active: editIdx===i, dragging: dragIdx===i, 'drag-over': dragOver===i && dragIdx!==i}"
+          draggable="true"
+          @dragstart="onDragStart(i,$event)" @dragover.prevent="dragOver=i"
+          @dragleave="dragOver=null" @dragend="onDragEnd" @drop.prevent="onDropTo(i)"
+          @click="openDrawer(i)">
           <span class="pipe-seq">{{i+1}}</span>
           <div class="pipe-info">
             <b>{{s.template_name}}</b>
             <small>{{(s.hostIds||[]).length}} 台主机<template v-if="hostVarTotal(s)"> · {{hostVarTotal(s)}} 台覆盖变量</template></small>
           </div>
-          <span class="pipe-tools" @click.stop>
-            <el-icon class="pipe-tool" title="上移" @click="moveAt(i,-1)"><Top /></el-icon>
-            <el-icon class="pipe-tool" title="下移" @click="moveAt(i,1)"><Bottom /></el-icon>
-            <el-icon class="pipe-tool pipe-tool-danger" title="移除" @click="removeStep(i)"><Close /></el-icon>
+          <span class="pipe-tools" title="拖动节点调整顺序" @click.stop>
+            <el-icon class="pipe-tool pipe-tool-danger" title="移除本步骤" @click="removeStep(i)"><Close /></el-icon>
           </span>
         </div>
         <div class="pipe-add" @click="addClick">
@@ -201,11 +218,14 @@ window.OrchestrationsPage = {
     </template>
 
     <template #footer>
-      <div style="display:flex;justify-content:flex-end;gap:8px">
-        <el-button @click="drawerVisible=false">关闭</el-button>
-        <span v-if="invalidReason" class="save-block-reason">{{invalidReason}}</span>
-        <el-button type="primary" :loading="saving" :disabled="!formValid" @click="saveFromDrawer">保存</el-button>
+      <div style="display:flex;align-items:center;gap:8px">
+        <el-button v-if="drawerMode==='edit'" type="danger" text @click="removeStep(editIdx)">删除本步骤</el-button>
+        <span v-if="invalidReason && drawerMode==='edit'" class="save-block-reason">{{invalidReason}}</span>
+        <span style="flex:1"></span>
+        <el-button @click="drawerVisible=false">取消</el-button>
+        <el-button type="primary" @click="saveStep">保存步骤</el-button>
       </div>
+      <div class="drawer-save-hint">「保存步骤」仅应用到当前流水线；点击外层「保存」才会写入数据库</div>
     </template>
   </el-drawer>
 
@@ -245,6 +265,8 @@ window.OrchestrationsPage = {
       detailCache: {}, // orchId -> [templateName...] 列表页流水线预览
       templates: [], templatesLoading: false, hostOptions: [], hostLoading: false,
       editorVisible: false,
+      nameDialogVisible: false, nameDraft: '',
+      dragIdx: null, dragOver: null, editSnapshot: null, stepSaved: false,
       form: { id: 0, name: '', description: '', steps: [] },
       uidSeed: 1,
       drawerVisible: false, drawerMode: 'edit', editIdx: -1,
@@ -278,6 +300,18 @@ window.OrchestrationsPage = {
       if (this.drawerMode === 'add') return '添加步骤 · 选择模板'
       const s = this.editStep
       return s ? ('步骤 ' + (this.editIdx + 1) + ' · ' + s.template_name) : ''
+    }
+  },
+  watch: {
+    drawerVisible(v) {
+      if (!v && !this.stepSaved && this.editSnapshot) {
+        try {
+          const snap = JSON.parse(this.editSnapshot)
+          const cur = this.form.steps[this.editIdx]
+          if (cur && cur.uid === snap.uid) this.form.steps.splice(this.editIdx, 1, snap)
+        } catch(e) {}
+      }
+      if (!v) { this.editSnapshot = null; this.stepSaved = false }
     }
   },
   mounted() { this.loadList(); this.loadRuns() },
@@ -340,13 +374,19 @@ window.OrchestrationsPage = {
           this.editorVisible = true
         })
       } else {
-        this.form = { id: 0, name: '', description: '', steps: [] }
-        this.editIdx = -1
-        this.editorVisible = true
+        this.nameDraft = ''
+        this.nameDialogVisible = true
       }
     },
+    confirmName() {
+      const name = this.nameDraft.trim()
+      if (!name) return
+      this.form = { id: 0, name, description: '', steps: [] }
+      this.editIdx = -1
+      this.nameDialogVisible = false
+      this.editorVisible = true
+    },
     /* ===== 流水线节点 ===== */
-    openDrawer(i) { this.editIdx = i; this.drawerMode = 'edit'; this.drawerVisible = true },
     addClick() { this.editIdx = -1; this.drawerMode = 'add'; this.drawerVisible = true },
     pickTemplate(t) {
       this.form.steps.push({
@@ -356,16 +396,38 @@ window.OrchestrationsPage = {
       })
       this.editIdx = this.form.steps.length - 1
       this.drawerMode = 'edit'
+      this.stepSaved = true
     },
-    removeStep(i) { this.form.steps.splice(i, 1); if (this.editIdx === i) this.drawerVisible = false; else if (this.editIdx > i) this.editIdx-- },
-    moveAt(i, dir) {
-      const arr = this.form.steps, j = i + dir
-      if (j < 0 || j >= arr.length) return
-      ;[arr[i], arr[j]] = [arr[j], arr[i]]
-      if (this.editIdx === i) this.editIdx = j
-      else if (this.editIdx === j) this.editIdx = i
+    removeStep(i) {
+      if (this.editIdx === i) { this.stepSaved = true; this.drawerVisible = false }
+      this.form.steps.splice(i, 1)
+      if (this.editIdx > i) this.editIdx--
+      else if (this.editIdx === i) this.editIdx = -1
     },
-    moveStep(i, dir) { this.moveAt(i, dir) }, // 兼容旧调用
+    onDragStart(i, e) { this.dragIdx = i; e.dataTransfer.effectAllowed = 'move' },
+    onDragEnd() { this.dragIdx = null; this.dragOver = null },
+    onDropTo(i) {
+      const from = this.dragIdx
+      this.dragIdx = null; this.dragOver = null
+      if (from == null || from === i) return
+      const arr = this.form.steps
+      const editedUid = this.editIdx >= 0 ? arr[this.editIdx]?.uid : null
+      const [m] = arr.splice(from, 1)
+      arr.splice(i, 0, m)
+      if (editedUid != null) this.editIdx = arr.findIndex(s => s.uid === editedUid)
+    },
+    openDrawer(i) {
+      this.editIdx = i; this.drawerMode = 'edit'
+      this.editSnapshot = JSON.stringify(this.form.steps[i])
+      this.stepSaved = false
+      this.drawerVisible = true
+    },
+    saveStep() {
+      if (!this.editStep) return
+      this.stepSaved = true
+      this.drawerVisible = false
+      ElMessage.success('步骤已应用，点击外层「保存」写入数据库')
+    },
     /* ===== 抽屉内：主机 ===== */
     unitHosts(s) {
       const kw = (s.hostFilter || '').toLowerCase()
@@ -414,10 +476,6 @@ window.OrchestrationsPage = {
     },
     /* ===== 保存 / 删除 ===== */
     async saveOrch() { const ok = await this.doSave(); if (ok) { this.editorVisible = false } },
-    async saveFromDrawer() {
-      this.saving = true
-      try { const ok = await this.doSave(); if (ok) { this.drawerVisible = false } } finally { this.saving = false }
-    },
     async doSave() {
       const payload = {
         name: this.form.name, description: this.form.description, enabled: true,
