@@ -950,10 +950,10 @@ a { text-decoration: none; }
 .orch-step-seq { width: 22px; height: 22px; border-radius: 50%; background: var(--brand); color: #fff; font-size: 12px; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
 .orch-step-name { font-weight: 600; }
 .orch-step-tools { margin-left: auto; display: inline-flex; }
-/* 变量横排：主机名在左，变量向右铺开，多主机时高度恒定 */
-.orch-step-params { flex: 1; display: flex; flex-wrap: wrap; gap: 8px 18px; }
-.orch-param { flex: 1 1 180px; min-width: 160px; max-width: 320px; display: flex; flex-direction: column; gap: 2px; }
-.orch-param label { font-size: 11px; color: var(--text-sub); }
+/* 变量横排：主机名在左，变量向右铺开；网格自适应，一行至少容纳 4 个 */
+.orch-step-params { flex: 1; display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px 14px; }
+.orch-param { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.orch-param label { font-size: 11px; color: var(--text-sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .orch-hostvar-row { display: flex; align-items: flex-start; gap: 16px; border-top: 1px dashed var(--border); padding: 10px 0; }
 .orch-hostvar-row:first-child { border-top: none; }
 .orch-hostvar-side { width: 150px; flex-shrink: 0; display: flex; flex-direction: column; gap: 2px; font-size: 12px; }
@@ -983,9 +983,9 @@ a { text-decoration: none; }
 .pipe-info { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .pipe-info b { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pipe-info small { font-size: 11px; color: var(--text-faint); white-space: nowrap; }
-.pipe-tools { position: absolute; top: -10px; right: -6px; display: none; gap: 2px;
-  background: var(--bg-card, #fff); border: 1px solid var(--border); border-radius: 6px; padding: 1px 3px; box-shadow: 0 2px 6px rgba(0,0,0,.08); }
-.pipe-node:hover .pipe-tools { display: inline-flex; }
+.pipe-tools { position: absolute; top: -11px; right: -6px; display: inline-flex; gap: 2px;
+  background: var(--bg-card, #fff); border: 1px solid var(--border); border-radius: 6px; padding: 1px 3px;
+  box-shadow: 0 2px 6px rgba(0,0,0,.08); z-index: 2; }
 .pipe-tool { font-size: 12px; padding: 2px; border-radius: 3px; color: var(--text-sub); cursor: pointer; }
 .pipe-tool:hover { color: var(--brand); background: var(--bg-hover); }
 .pipe-tool-danger:hover { color: var(--danger); }

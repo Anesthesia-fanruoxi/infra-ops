@@ -138,8 +138,13 @@ window.OrchestrationsPage = {
       <div class="drawer-sec">
         <div class="drawer-sec-title">目标主机 <span class="deploy-sel-count">已选 {{(editStep.hostIds||[]).length}} 台</span></div>
         <div class="orch-unit-hosts">
-          <el-input v-model="editStep.hostFilter" placeholder="搜索主机名 / IP" clearable size="small" style="width:200px" />
+          <el-input v-model="editStep.hostFilter" placeholder="搜索主机名 / IP" clearable size="small" style="width:180px" />
+          <el-select v-model="editStep.tagFilter" multiple collapse-tags placeholder="按标签过滤" size="small"
+            style="width:200px" :teleported="false" clearable>
+            <el-option v-for="tg in allTags" :key="tg" :label="tg" :value="tg" />
+          </el-select>
           <el-button size="small" @click="toggleAllUnitHosts(editStep)">{{ unitAllSelected(editStep) ? '取消全选' : '全选' }}</el-button>
+          <span class="deploy-sel-count">已选 {{(editStep.hostIds||[]).length}} 台</span>
         </div>
         <div class="deploy-host-list deploy-host-list--unit" v-loading="hostLoading">
           <label v-for="h in unitHosts(editStep)" :key="h.id" class="deploy-host-item"
@@ -247,6 +252,11 @@ window.OrchestrationsPage = {
     }
   },
   computed: {
+    allTags() {
+      const set = new Set()
+      this.hostOptions.forEach(h => set.add(h.tag || 'other'))
+      return [...set].sort()
+    },
     formValid() {
       if (!this.form.name || !this.form.steps.length) return false
       return this.form.steps.every(s => s.template_id && (s.hostIds || []).length > 0)
@@ -332,7 +342,7 @@ window.OrchestrationsPage = {
     pickTemplate(t) {
       this.form.steps.push({
         uid: this.uidSeed++, template_id: t.id, template_name: t.name,
-        hostIds: [], hostVars: {},
+        hostIds: [], hostVars: {}, tagFilter: [],
         continue_on_error: false, retry_count: 0, retry_interval_sec: 30, hostFilter: ''
       })
       this.editIdx = this.form.steps.length - 1
@@ -350,8 +360,10 @@ window.OrchestrationsPage = {
     /* ===== 抽屉内：主机 ===== */
     unitHosts(s) {
       const kw = (s.hostFilter || '').toLowerCase()
+      const tags = s.tagFilter || []
       let list = this.hostOptions
       if (kw) list = list.filter(h => (h.name||'').toLowerCase().includes(kw) || (h.ip||'').includes(kw))
+      if (tags.length) list = list.filter(h => tags.includes(h.tag || 'other'))
       return list
     },
     unitAllSelected(s) {
