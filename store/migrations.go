@@ -21,6 +21,29 @@ var migrations = []migration{
 	{11, migrateV11},
 	{12, migrateV12},
 	{13, migrateV13},
+	{14, migrateV14},
+}
+
+// migrateV14 运行日志表：按步骤落库，供详情流快照重放；run 删除时级联清理。
+func migrateV14(db *sql.DB) error {
+	stmts := []string{
+		`CREATE TABLE IF NOT EXISTS orchestration_run_logs (
+			id         INTEGER PRIMARY KEY AUTOINCREMENT,
+			run_id     INTEGER NOT NULL REFERENCES orchestration_runs(id) ON DELETE CASCADE,
+			seq        INTEGER NOT NULL,
+			host_id    INTEGER NOT NULL,
+			host_ip    TEXT NOT NULL DEFAULT '',
+			text       TEXT NOT NULL,
+			created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_orch_run_logs ON orchestration_run_logs(run_id, seq, id)`,
+	}
+	for _, s := range stmts {
+		if _, err := db.Exec(s); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // migrateV8 并发配置改为自适应：存量库中未改过的旧引导默认值 5 归一为 auto。

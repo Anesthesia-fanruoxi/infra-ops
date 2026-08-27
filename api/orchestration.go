@@ -4,12 +4,8 @@ package api
 import (
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"strconv"
 	"strings"
-	"sync"
-	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -17,7 +13,6 @@ import (
 	"infra-ops/common/eventbus"
 	"infra-ops/common/resp"
 	"infra-ops/common/sshx"
-	"infra-ops/common/sysutil"
 	"infra-ops/model"
 	"infra-ops/store"
 )
@@ -32,13 +27,14 @@ type orchHandler struct {
 	sshC      *sshx.Client
 	bus       *eventbus.Bus
 	auditRepo *store.AuditRepo
+	logRepo   *store.OrchestrationLogRepo
 }
 
 func NewOrchHandler(repo *store.OrchestrationRepo, tplRepo *store.DeployRepo, hostRepo *store.HostRepo,
 	credRepo *store.CredentialRepo, cryptoS *icrypto.Service, sshC *sshx.Client,
-	bus *eventbus.Bus, auditRepo *store.AuditRepo) *orchHandler {
+	bus *eventbus.Bus, auditRepo *store.AuditRepo, logRepo *store.OrchestrationLogRepo) *orchHandler {
 	return &orchHandler{repo: repo, tplRepo: tplRepo, hostRepo: hostRepo, credRepo: credRepo,
-		cryptoS: cryptoS, sshC: sshC, bus: bus, auditRepo: auditRepo}
+		cryptoS: cryptoS, sshC: sshC, bus: bus, auditRepo: auditRepo, logRepo: logRepo}
 }
 
 // ---------- 定义 CRUD ----------
@@ -54,14 +50,15 @@ type orchStepReq struct {
 }
 
 type orchSaveReq struct {
-	Name        string         `json:"name" binding:"required"`
-	Description string         `json:"description"`
-	Enabled     *bool          `json:"enabled"`
-	Steps       []orchStepReq  `json:"steps" binding:"required,min=1,dive"`
+	Name        string        `json:"name" binding:"required"`
+	Description string        `json:"description"`
+	Enabled     *bool         `json:"enabled"`
+	Steps       []orchStepReq `json:"steps" binding:"required,min=1,dive"`
 }
 
 func (h *orchHandler) List(c *gin.Context) {
-	items, err := h.repo.List()
+	// state 可选：running / not_started / finished；不带参数返回全部。
+	items, err := h.repo.List(c.Query("state"))
 	if err != nil {
 		resp.ErrHTTP(c, 500, resp.CodeInternal, "查询编排失败")
 		return
@@ -130,6 +127,15 @@ func (h *orchHandler) Save(c *gin.Context) {
 	o := &model.Orchestration{Name: req.Name, Description: req.Description, ExecMode: "by_step", Enabled: enabled}
 	if id, _ := strconv.ParseInt(c.Param("id"), 10, 64); id > 0 {
 		o.ID = id
+		hasRun, herr := h.repo.HasRun(id)
+		if herr != nil {
+			resp.ErrHTTP(c, 500, resp.CodeInternal, "查询任务记录失败")
+			return
+		}
+		if hasRun {
+			resp.Fail(c, resp.CodeBadRequest, "已开始执行的任务记录不可编辑")
+			return
+		}
 	}
 
 	steps := make([]model.OrchestrationStep, 0, len(req.Steps))
@@ -209,50 +215,44 @@ func (h *orchHandler) Delete(c *gin.Context) {
 // Run POST /api/orchestrations/:id/run：创建运行并异步执行（顺序串行各步骤，长任务）。
 func (h *orchHandler) Run(c *gin.Context) {
 	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
-	o, _, _, err := h.repo.Get(id)
-	if err != nil || o == nil {
-		resp.Fail(c, resp.CodeNotFound, "编排不存在")
+	runID, err := h.createRun(id)
+	if err != nil {
+		resp.Fail(c, resp.CodeBadRequest, err.Error())
 		return
+	}
+	go h.executeRun(id, runID)
+	h.auditRepo.Create(&model.AuditLog{Action: "orchestration.run", TargetType: "orchestration_run",
+		Detail: fmt.Sprintf("orchestration_id=%d run_id=%d", id, runID), RemoteIP: c.ClientIP()})
+	resp.OK(c, gin.H{"started": true, "run_id": runID})
+}
+
+// createRun 同步创建运行记录（含 pending 步骤），返回 runID。
+// 同步创建便于前端立即拿到 run_id 订阅 SSE 进度；真正的执行在 goroutine 中异步进行。
+func (h *orchHandler) createRun(orchID int64) (int64, error) {
+	o, stepsDef, svars, err := h.repo.Get(orchID)
+	if err != nil || o == nil {
+		return 0, fmt.Errorf("编排不存在")
 	}
 	if !o.Enabled {
-		resp.Fail(c, resp.CodeBadRequest, "编排已停用")
-		return
+		return 0, fmt.Errorf("编排已停用")
 	}
-	go h.executeRun(id)
-	h.auditRepo.Create(&model.AuditLog{Action: "orchestration.run", TargetType: "orchestration_run",
-		Detail: fmt.Sprintf("name=%s", o.Name), RemoteIP: c.ClientIP()})
-	resp.OK(c, gin.H{"started": true})
-}
-
-// orchProgress SSE 推送的运行事件。
-type orchProgress struct {
-	RunID     int64  `json:"run_id"`
-	HostID    int64  `json:"host_id,omitempty"`
-	Seq       int    `json:"seq,omitempty"`
-	Status    string `json:"status"`
-	Output    string `json:"output,omitempty"`
-	Error     string `json:"error,omitempty"`
-	Attempt   int    `json:"attempt,omitempty"`
-	RunStatus string `json:"run_status,omitempty"`
-}
-
-// executeRun 引擎：步骤严格串行；步骤内主机并行（自适应并发）。
-// 变量合并：模板默认 < 步骤默认 < 主机覆盖。某主机某步失败且未开「失败继续」时，
-// 该主机不再参与后续步骤（明细置 skipped），其余主机不受影响 —— 长任务可安全跑完。
-func (h *orchHandler) executeRun(orchID int64) {
-	o, stepsDef, svars, err := h.repo.Get(orchID)
-	if err != nil || o == nil || len(stepsDef) == 0 {
-		return
+	hasRun, herr := h.repo.HasRun(orchID)
+	if herr != nil {
+		return 0, fmt.Errorf("查询运行记录失败")
 	}
-	override := map[int]map[int64]string{} // seq -> host -> paramsJSON
+	if hasRun {
+		return 0, fmt.Errorf("该任务记录已执行过，不可重复执行")
+	}
+	if len(stepsDef) == 0 {
+		return 0, fmt.Errorf("编排没有步骤")
+	}
+	override := map[int]map[int64]string{}
 	for _, sv := range svars {
 		if override[sv.Seq] == nil {
 			override[sv.Seq] = map[int64]string{}
 		}
 		override[sv.Seq][sv.HostID] = sv.ParamsJSON
 	}
-
-	// 展开为运行明细（pending）
 	runRows := make([]model.OrchestrationRunStep, 0)
 	distinctHosts := map[int64]bool{}
 	for _, def := range stepsDef {
@@ -274,7 +274,7 @@ func (h *orchHandler) executeRun(orchID int64) {
 		}
 	}
 	if len(runRows) == 0 {
-		return
+		return 0, fmt.Errorf("没有可执行的步骤（请为步骤选择主机）")
 	}
 	allIDs := make([]int64, 0, len(distinctHosts))
 	for hid := range distinctHosts {
@@ -285,222 +285,9 @@ func (h *orchHandler) executeRun(orchID int64) {
 		TotalHosts: len(distinctHosts), TriggerType: "manual", HostIDs: string(tidsJSON)}
 	runID, err := h.repo.CreateRun(run, runRows)
 	if err != nil {
-		fmt.Printf("orchestration: 创建运行失败: %v\n", err)
-		return
+		return 0, fmt.Errorf("创建运行失败: %v", err)
 	}
-
-	dead := map[int64]bool{} // 失败且未开「失败继续」的主机：不再参与后续步骤
-
-	publish := func(hostID int64, seq int, status, output, errMsg string, attempt int) {
-		if h.bus == nil {
-			return
-		}
-		h.bus.Publish(eventbus.TopicOrchestrationProgress, orchProgress{RunID: runID,
-			HostID: hostID, Seq: seq, Status: status, Output: output, Error: errMsg, Attempt: attempt, RunStatus: "running"})
-	}
-
-	execCell := func(cell store.RunStepRef, def *model.OrchestrationStep) {
-		attempts := def.RetryCount + 1
-		interval := def.RetryIntervalSec
-		if interval <= 0 {
-			interval = 30
-		}
-		var lastOut, lastErr string
-
-		for a := 1; a <= attempts; a++ {
-			_ = h.repo.UpdateRunStepStatus(cell.RecID, "running", a, "", "")
-			publish(cell.HostID, cell.Seq, "running", "", "", a)
-
-			tpl, terr := h.tplRepo.GetTemplate(def.TemplateID)
-			if terr != nil || tpl == nil {
-				lastErr = "模板不存在或已删除"
-				break
-			}
-			// 变量合并：模板默认 < 主机覆盖
-			stepParams := map[string]string{}
-			_ = json.Unmarshal([]byte(def.ParamsJSON), &stepParams)
-			if stepParams == nil {
-				stepParams = map[string]string{}
-			}
-			hostParams := map[string]string{}
-			if ov, ok := override[cell.Seq][cell.HostID]; ok {
-				_ = json.Unmarshal([]byte(ov), &hostParams)
-			}
-			for k, v := range hostParams {
-				stepParams[k] = v
-			}
-			rendered, rerr := renderScript(tpl.Script, tpl.Variables, stepParams)
-			if rerr != nil {
-				lastErr = rerr.Error()
-				break // 渲染错误重试无意义
-			}
-			hr := store.HostRecord{DeployTaskHost: model.DeployTaskHost{
-				HostID: cell.HostID, HostName: cell.HostName, HostIP: cell.HostIP}}
-			rendered = applyHostVars(rendered, cell.Seq, hr)
-
-			onLog := func(chunk string) {
-				if chunk == "" || h.bus == nil {
-					return
-				}
-				h.bus.Publish(eventbus.TopicOrchestrationProgress, orchProgress{RunID: runID,
-					HostID: cell.HostID, Seq: cell.Seq, Status: "output", Output: chunk, Attempt: a, RunStatus: "running"})
-			}
-			out, execErr := execHostWith(h.hostRepo, h.credRepo, h.cryptoS, h.sshC, cell.HostID, rendered, onLog)
-			lastOut = out
-			if execErr != nil {
-				lastErr = execErr.Error()
-				if a < attempts {
-					time.Sleep(time.Duration(interval) * time.Second)
-				}
-				continue
-			}
-			lastErr = ""
-			break
-		}
-
-		status := "success"
-		if lastErr != "" {
-			status = "failed"
-		}
-		_ = h.repo.UpdateRunStepStatus(cell.RecID, status, attempts, lastOut, lastErr)
-		if status == "success" {
-			tname := cell.TemplateName
-			if t, _ := h.tplRepo.GetTemplate(def.TemplateID); t != nil {
-				tname = t.Name
-			}
-			if err := h.tplRepo.MarkHostInstalled(cell.HostID, def.TemplateID, tname, runID); err != nil {
-				fmt.Printf("orchestration: 标记安装失败 host=%d: %v\n", cell.HostID, err)
-			}
-		}
-		publish(cell.HostID, cell.Seq, status, lastOut, lastErr, attempts)
-
-		if status == "failed" && !def.ContinueOnError {
-			dead[cell.HostID] = true
-			_ = h.repo.SkipRemaining(runID, cell.HostID, cell.Seq)
-			publish(cell.HostID, 0, "skipped-refresh", "", "", 0)
-		}
-	}
-
-	allRows, err := h.repo.RunSteps(runID)
-	if err != nil || len(allRows) == 0 {
-		_, _ = h.repo.FinishRun(runID)
-		return
-	}
-
-	concurrency := sysutil.AdaptiveConcurrency(len(distinctHosts))
-	sem := make(chan struct{}, concurrency)
-
-	// 步骤严格串行
-	for i := range stepsDef {
-		def := &stepsDef[i]
-		var wg sync.WaitGroup
-		for _, cell := range allRows {
-			if cell.Seq != def.Seq || cell.Status == "skipped" || dead[cell.HostID] {
-				continue
-			}
-			wg.Add(1)
-			go func(cell store.RunStepRef, def *model.OrchestrationStep) {
-				defer wg.Done()
-				sem <- struct{}{}
-				defer func() { <-sem }()
-				execCell(cell, def)
-			}(cell, def)
-		}
-		wg.Wait() // 本步骤全部主机终态后才进入下一步骤
-	}
-
-	finalStatus, _ := h.repo.FinishRun(runID)
-	if h.bus != nil {
-		h.bus.Publish(eventbus.TopicOrchestrationProgress, orchProgress{RunID: runID, Status: "finished", RunStatus: finalStatus})
-	}
+	return runID, nil
 }
 
-// ---------- 运行历史 & 明细 ----------
-
-func (h *orchHandler) RunsList(c *gin.Context) {
-	page, pageSize := parsePage(c)
-	items, total, err := h.repo.ListRuns(page, pageSize)
-	if err != nil {
-		resp.ErrHTTP(c, 500, resp.CodeInternal, "查询运行历史失败")
-		return
-	}
-	resp.OK(c, resp.PageData{List: items, Total: total, Page: page, PageSize: pageSize})
-}
-
-func (h *orchHandler) RunsDetail(c *gin.Context) {
-	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
-	run, err := h.repo.GetRun(id)
-	if err != nil {
-		resp.ErrHTTP(c, 500, resp.CodeInternal, "查询运行失败")
-		return
-	}
-	if run == nil {
-		resp.Fail(c, resp.CodeNotFound, "运行不存在")
-		return
-	}
-	rows, err := h.repo.RunSteps(id)
-	if err != nil {
-		resp.ErrHTTP(c, 500, resp.CodeInternal, "查询运行明细失败")
-		return
-	}
-	steps := make([]model.OrchestrationRunStep, 0, len(rows))
-	for _, r := range rows {
-		steps = append(steps, r.OrchestrationRunStep)
-	}
-	resp.OK(c, gin.H{"run": run, "steps": steps})
-}
-
-// SSEOrchestration GET /api/sse/orchestration?run_id=N：单次运行的实时进度流。
-func (h *orchHandler) SSEOrchestration(c *gin.Context) {
-	runID, err := strconv.ParseInt(c.Query("run_id"), 10, 64)
-	if err != nil || runID <= 0 {
-		resp.Fail(c, resp.CodeBadRequest, "run_id 无效")
-		return
-	}
-	c.Header("Content-Type", "text/event-stream")
-	c.Header("Cache-Control", "no-cache")
-	c.Header("Connection", "keep-alive")
-	flusher, ok := c.Writer.(http.Flusher)
-	if !ok {
-		resp.ErrHTTP(c, http.StatusInternalServerError, resp.CodeInternal, "streaming not supported")
-		return
-	}
-
-	ch := make(chan orchProgress, 128)
-	var subID int
-	if h.bus != nil {
-		subID = h.bus.Subscribe(eventbus.TopicOrchestrationProgress, func(ev eventbus.Event) {
-			if p, ok := ev.Data.(orchProgress); ok && p.RunID == runID {
-				select {
-				case ch <- p:
-				default:
-				}
-			}
-		})
-		defer h.bus.Unsubscribe(eventbus.TopicOrchestrationProgress, subID)
-	}
-
-	c.SSEvent("connected", runID)
-	flusher.Flush()
-
-	ticker := time.NewTicker(10 * time.Second)
-	defer ticker.Stop()
-	c.Stream(func(w io.Writer) bool {
-		select {
-		case p := <-ch:
-			data, _ := json.Marshal(p)
-			if p.Status == "finished" {
-				c.SSEvent("done", string(data))
-				flusher.Flush()
-				return false
-			}
-			c.SSEvent("progress", string(data))
-		case <-ticker.C:
-			_, _ = io.WriteString(w, ": ping\n\n")
-		case <-c.Request.Context().Done():
-			return false
-		}
-		flusher.Flush()
-		return true
-	})
-}
+// ---------- 运行明细（RunsDetail 见 orchestration_sse.go，与运行详情/抽屉同域） ----------

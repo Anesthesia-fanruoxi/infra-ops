@@ -159,11 +159,11 @@ func runRetentionLoop(settingsRepo *store.SettingsRepo) {
 		}
 		m, err := store.NewOrchestrationRepo().CleanupRunsBefore(days)
 		if err != nil {
-			log.Printf("[retention] 清理编排运行历史失败: %v", err)
+			log.Printf("[retention] 清理任务记录失败: %v", err)
 			return
 		}
 		if m > 0 {
-			log.Printf("[retention] 已清理 %d 天前的编排运行 %d 次", days, m)
+			log.Printf("[retention] 已清理 %d 天前的任务记录 %d 条", days, m)
 		}
 	}
 

@@ -1,5 +1,6 @@
 window.OrchestrationsPage = {
   props: ['page', 'user', 'versionData'],
+  mixins: [window.OrchDrawerMixin],
   template: `
 <div class="orch-page">
   <section class="deploy-hero">
@@ -13,19 +14,25 @@ window.OrchestrationsPage = {
           <p>流水线式编排多个部署单元 · 顺序串行 · 支持长任务</p>
         </div>
         <el-button type="primary" size="large" class="deploy-new-btn" @click="openEditor()">
-          <el-icon style="margin-right:6px"><Plus /></el-icon>新建编排
+          <el-icon style="margin-right:6px"><Plus /></el-icon>新建任务
         </el-button>
       </div>
     </div>
   </section>
 
-  <!-- 编排列表 -->
+  <!-- 任务记录列表 -->
   <div class="page-card">
     <div class="card-header">
-      <span class="title">编排定义</span>
+      <span class="title">任务记录</span>
       <el-button size="small" text @click="loadList"><el-icon style="margin-right:4px"><Refresh /></el-icon>刷新</el-button>
     </div>
-    <el-table :data="list" style="width:100%" v-loading="loading">
+    <div class="orch-state-tabs">
+      <span class="orch-state-tab" :class="{active: activeState===''}" @click="activeState=''">全部 <em>{{stateCounts.all}}</em></span>
+      <span class="orch-state-tab" :class="{active: activeState==='running'}" @click="activeState='running'">运行中 <em>{{stateCounts.running}}</em></span>
+      <span class="orch-state-tab" :class="{active: activeState==='not_started'}" @click="activeState='not_started'">未开始 <em>{{stateCounts.not_started}}</em></span>
+      <span class="orch-state-tab" :class="{active: activeState==='finished'}" @click="activeState='finished'">已结束 <em>{{stateCounts.finished}}</em></span>
+    </div>
+    <el-table :data="displayList" style="width:100%" v-loading="loading" @row-click="rowClick">
       <el-table-column label="名称" min-width="180">
         <template #default="{row}"><span style="font-weight:600">{{row.name}}</span>
           <div v-if="row.description" style="font-size:11px;color:var(--text-faint)">{{row.description}}</div></template>
@@ -43,49 +50,46 @@ window.OrchestrationsPage = {
       <el-table-column label="步骤数" width="80">
         <template #default="{row}"><span class="mono">{{row.step_count}}</span></template>
       </el-table-column>
-      <el-table-column label="启用" width="70">
-        <template #default="{row}"><span class="status-badge" :class="row.enabled?'online':'offline'"><span class="dot"></span>{{row.enabled?'是':'否'}}</span></template>
+      <el-table-column label="状态" width="110">
+        <template #default="{row}"><span class="status-badge" :class="stateClass(row.state)"><span class="dot"></span>{{stateLabel(row.state)}}</span></template>
+      </el-table-column>
+      <el-table-column label="结果" width="220">
+        <template #default="{row}">
+          <template v-if="row.state==='finished'">
+            <span class="status-badge" :class="resultClass(row.result)"><span class="dot"></span>{{resultLabel(row.result)}}</span>
+            <span class="mono orch-prog"><span class="ok">{{row.ok_hosts}}</span> 成功 · <span class="fail">{{row.fail_hosts}}</span> 失败 · 共 {{row.total_hosts}}</span>
+          </template>
+          <span v-else style="color:var(--text-faint)">-</span>
+        </template>
       </el-table-column>
       <el-table-column label="更新时间" width="160">
         <template #default="{row}"><span class="mono" style="font-size:12px;color:var(--text-faint)">{{formatTime(row.updated_at)}}</span></template>
       </el-table-column>
-      <el-table-column label="操作" width="170" fixed="right">
+      <el-table-column label="操作" width="200" fixed="right">
         <template #default="{row}">
-          <el-button size="small" type="primary" @click="startRun(row)">运行</el-button>
-          <el-button size="small" @click="openEditor(row)">编辑</el-button>
-          <el-button size="small" type="danger" text @click="removeOrch(row)">删除</el-button>
+          <template v-if="row.state==='not_started'">
+            <el-button size="small" type="primary" @click="startRun(row)">运行</el-button>
+            <el-button size="small" @click="openEditor(row)">编辑</el-button>
+            <el-button size="small" type="danger" text @click="removeOrch(row)">删除</el-button>
+          </template>
+          <template v-else-if="row.state==='running'">
+            <el-button size="small" type="primary" @click="openRunDrawer(row.last_run_id)">进度</el-button>
+            <el-button size="small" type="danger" text @click="removeOrch(row)">删除</el-button>
+          </template>
+          <template v-else>
+            <el-button size="small" @click="openRunDrawer(row.last_run_id)">详情</el-button>
+            <el-button size="small" type="danger" text @click="removeOrch(row)">删除</el-button>
+          </template>
         </template>
       </el-table-column>
     </el-table>
-    <div v-if="!loading && !list.length" class="empty-state"><p>还没有编排，点击右上角「新建编排」创建</p></div>
+    <div v-if="!loading && !displayList.length" class="empty-state"><p>还没有任务记录，点击右上角「新建任务」创建</p></div>
   </div>
 
-  <!-- 历史运行 -->
-  <div class="page-card">
-    <div class="card-header">
-      <span class="title">历史运行</span>
-      <el-button size="small" text @click="loadRuns"><el-icon style="margin-right:4px"><Refresh /></el-icon>刷新</el-button>
-    </div>
-    <el-table :data="runs" style="width:100%" v-loading="runsLoading" @row-click="openRunDetailById">
-      <el-table-column label="运行 ID" width="90"><template #default="{row}"><span class="mono">#{{row.id}}</span></template></el-table-column>
-      <el-table-column label="编排" min-width="140" prop="name" />
-      <el-table-column label="状态" width="100">
-        <template #default="{row}"><el-tag :type="statusTagType(row.status)" size="small">{{statusLabel(row.status)}}</el-tag></template>
-      </el-table-column>
-      <el-table-column label="主机进度" width="130">
-        <template #default="{row}"><span class="mono orch-prog"><span class="ok">{{row.ok_hosts}}</span> 成功 · <span class="fail">{{row.fail_hosts}}</span> 失败 · 共 {{row.total_hosts}}</span></template>
-      </el-table-column>
-      <el-table-column label="开始时间" width="170">
-        <template #default="{row}"><span class="mono" style="font-size:12px;color:var(--text-faint)">{{formatTime(row.created_at)}}</span></template>
-      </el-table-column>
-    </el-table>
-    <div v-if="!runsLoading && !runs.length" class="empty-state"><p>暂无运行记录</p></div>
-  </div>
-
-  <!-- 新建第一步：设定编排名称 -->
-  <el-dialog v-model="nameDialogVisible" title="新建编排" width="440px" :close-on-click-modal="false">
+  <!-- 新建第一步：设定任务名称 -->
+  <el-dialog v-model="nameDialogVisible" title="新建任务" width="440px" :close-on-click-modal="false">
     <el-form label-position="top" @submit.prevent>
-      <el-form-item label="编排名称" required>
+      <el-form-item label="任务名称" required>
         <el-input v-model="nameDraft" placeholder="如：新机初始化" maxlength="50" show-word-limit
           @keydown.enter="confirmName" />
       </el-form-item>
@@ -96,12 +100,12 @@ window.OrchestrationsPage = {
     </template>
   </el-dialog>
 
-  <!-- 编辑编排：大弹框 + 流水线 -->
-  <el-dialog v-model="editorVisible" :title="'编排：' + form.name" width="85%" top="10vh" class="orch-editor-dialog"
+  <!-- 编辑任务：大弹框 + 流水线 -->
+  <el-dialog v-model="editorVisible" :title="'任务：' + form.name" width="85%" top="10vh" class="orch-editor-dialog"
     :close-on-click-modal="false" @open="onEditorOpen">
     <el-form label-position="top">
       <div class="form-grid">
-        <el-form-item label="编排名称" required><el-input v-model="form.name" placeholder="如：新机初始化" style="max-width:360px" /></el-form-item>
+        <el-form-item label="任务名称" required><el-input v-model="form.name" placeholder="如：新机初始化" style="max-width:360px" /></el-form-item>
         <el-form-item label="说明"><el-input v-model="form.description" placeholder="可选" style="max-width:420px" /></el-form-item>
       </div>
     </el-form>
@@ -229,39 +233,72 @@ window.OrchestrationsPage = {
     </template>
   </el-drawer>
 
-  <!-- 运行详情（矩阵） -->
-  <el-dialog v-model="detailVisible" :title="'运行详情 #' + (activeRun?.id || '')" width="920px" top="6vh">
-    <div v-if="activeRun" class="orch-run-meta">
-      <span>{{activeRun.name}}</span>
-      <el-tag :type="statusTagType(activeRun.status)" size="small">{{statusLabel(activeRun.status)}}</el-tag>
-      <span class="mono orch-prog">成功 <b class="ok">{{activeRun.ok_hosts}}</b> · 失败 <b class="fail">{{activeRun.fail_hosts}}</b> · 共 {{activeRun.total_hosts}} 台</span>
-      <span class="mono" style="font-size:12px;color:var(--text-faint)">{{formatTime(activeRun.created_at)}}</span>
-    </div>
-    <el-table :data="matrixRows" size="small" border>
-      <el-table-column label="主机" min-width="150" fixed="left">
-        <template #default="{row}"><span style="font-weight:500">{{row.host_name}}</span><br/><span class="mono" style="font-size:11px;color:var(--text-faint)">{{row.host_ip}}</span></template>
-      </el-table-column>
-      <el-table-column v-for="sq in stepSeqs" :key="sq" :label="seqLabel(sq)" min-width="120">
-        <template #default="{row}">
-          <span v-if="row.cells[sq]" class="orch-cell" :class="'st-' + row.cells[sq].status" @click="showLog(row, sq)">
-            {{cellText(row.cells[sq])}}
+  <!-- 运行抽屉：三层结构（只读监控） -->
+  <el-drawer v-model="runDrawerVisible" size="50%" :with-header="false" @close="closeRunDrawer">
+    <div class="orch-run-drawer" v-loading="drawerLoading">
+      <!-- 头部：run 元信息 -->
+      <div class="orch-rd-head" v-if="runMeta">
+        <div class="orch-rd-title">{{ runMeta.name }} <span class="mono">#{{ runMeta.id }}</span></div>
+        <div class="orch-rd-meta">
+          <span class="status-badge" :class="runStatusCls(runStatus)"><span class="dot"></span>{{ runBadgeLabel }}</span>
+          <span class="mono orch-prog"><span class="ok">{{ runMeta.ok_hosts }}</span> 成功 · <span class="fail">{{ runMeta.fail_hosts }}</span> 失败 · 共 {{ runMeta.total_hosts }} 台</span>
+          <span class="mono orch-rd-time">{{ formatTime(runMeta.created_at) }}</span>
+          <template v-if="runStatus === 'running'">
+            <span v-if="followMode" class="orch-rd-follow">● 自动追踪中</span>
+            <span v-else class="orch-rd-follow orch-rd-follow--paused">已暂停自动追踪，点击执行中步骤恢复</span>
+          </template>
+        </div>
+      </div>
+      <!-- L1 步骤条 -->
+      <div class="orch-rd-l1">
+        <template v-for="(s, i) in drawerSteps" :key="s.seq">
+          <span v-if="i>0" class="orch-rd-arrow">→</span>
+          <span class="orch-rd-step" :class="stepCls(s)" :title="s.name" @click="selectStep(s.seq)">
+            <span class="orch-rd-step-no">{{ s.seq }}</span>
+            <span class="orch-rd-step-name">{{ s.name }}</span>
+            <span class="orch-rd-step-mark">{{ stepMark(s) }}</span>
+            <span v-if="stepIsActive(s)" class="orch-rd-step-active"></span>
           </span>
         </template>
-      </el-table-column>
-    </el-table>
-    <div v-if="logCell" class="deploy-output-pre" style="margin-top:10px">
-      <div class="orch-log-head">
-        <b>{{logRow.host_name}}</b> · 步骤{{logCell.seq}} {{logCell.template_name}}
-        <el-button size="small" text @click="logCell=null">收起</el-button>
+        <div v-if="!drawerSteps.length" class="orch-rd-empty">暂无步骤</div>
       </div>
-      <pre>{{ logText(logCell) }}</pre>
+      <!-- L2 主机层 -->
+      <div class="orch-rd-l2">
+        <div class="orch-rd-sec-title">步骤 {{ selectedSeq }} · 主机</div>
+        <div class="orch-rd-hosts">
+          <div v-for="h in drawerHosts" :key="h.host_id" class="orch-rd-host">
+            <span class="mono orch-rd-host-ip">{{ h.host_ip }}</span>
+            <span class="orch-rd-host-name">{{ h.host_name }}</span>
+            <span class="status-badge" :class="hostStatusCls(h.status)"><span class="dot"></span>{{ hostStatusLabel(h.status) }}</span>
+          </div>
+          <div v-if="!drawerHosts.length" class="orch-rd-empty">该步骤暂无主机</div>
+        </div>
+      </div>
+      <!-- L3 日志层 -->
+      <div class="orch-rd-l3">
+        <div class="orch-rd-sec-title">
+          <span>日志 · 步骤 {{ selectedSeq }}</span>
+          <el-select v-model="logFilterIp" size="small" clearable placeholder="全部主机" style="width:190px" :teleported="false">
+            <el-option v-for="h in drawerHosts" :key="'lf'+h.host_id"
+              :label="h.host_ip + (h.host_name ? ' · ' + h.host_name : '')" :value="h.host_ip" />
+          </el-select>
+        </div>
+        <div class="orch-rd-logs" ref="orchLogBox" @scroll="onLogScroll">
+          <div v-for="l in filteredLogs" :key="l.id" class="orch-rd-log">
+            <span class="mono orch-rd-log-time">{{ logTime(l.ts) }}</span>
+            <span class="mono orch-rd-log-ip">{{ l.ip }}</span>
+            <span class="orch-rd-log-text">{{ l.text }}</span>
+          </div>
+          <div v-if="!filteredLogs.length" class="orch-rd-empty">{{ drawerLogs.length ? '当前过滤条件下无日志' : '暂无日志' }}</div>
+        </div>
+      </div>
     </div>
-  </el-dialog>
+  </el-drawer>
 </div>`,
 
   data() {
     return {
-      list: [], loading: false,
+      allList: [], activeState: '', loading: false,
       detailCache: {}, // orchId -> [templateName...] 列表页流水线预览
       templates: [], templatesLoading: false, hostOptions: [], hostLoading: false,
       editorVisible: false,
@@ -270,9 +307,7 @@ window.OrchestrationsPage = {
       form: { id: 0, name: '', description: '', steps: [] },
       uidSeed: 1,
       drawerVisible: false, drawerMode: 'edit', editIdx: -1,
-      runs: [], runsLoading: false, saving: false,
-      detailVisible: false, activeRun: null, runSteps: [], matrixRows: [], stepSeqs: [],
-      logCell: null, logRow: null, sse: null
+      saving: false
     }
   },
   computed: {
@@ -283,7 +318,7 @@ window.OrchestrationsPage = {
     },
     formValid() { return !this.invalidReason },
     invalidReason() {
-      if (!this.form.name) return '请填写编排名称'
+      if (!this.form.name) return '请填写任务名称'
       if (!this.form.steps.length) return '请至少添加一个步骤'
       for (let i = 0; i < this.form.steps.length; i++) {
         const s = this.form.steps[i]
@@ -300,6 +335,21 @@ window.OrchestrationsPage = {
       if (this.drawerMode === 'add') return '添加步骤 · 选择模板'
       const s = this.editStep
       return s ? ('步骤 ' + (this.editIdx + 1) + ' · ' + s.template_name) : ''
+    },
+    displayList() {
+      let arr = this.allList
+      if (this.activeState) arr = arr.filter(o => o.state === this.activeState)
+      const pri = { running: 0, not_started: 1, finished: 2 }
+      return [...arr].sort((a, b) => {
+        const pa = pri[a.state] ?? 9, pb = pri[b.state] ?? 9
+        if (pa !== pb) return pa - pb
+        return (b.updated_at || '').localeCompare(a.updated_at || '')
+      })
+    },
+    stateCounts() {
+      const c = { all: this.allList.length, running: 0, not_started: 0, finished: 0 }
+      this.allList.forEach(o => { if (c[o.state] !== undefined) c[o.state]++ })
+      return c
     }
   },
   watch: {
@@ -314,16 +364,16 @@ window.OrchestrationsPage = {
       if (!v) { this.editSnapshot = null; this.stepSaved = false }
     }
   },
-  mounted() { this.loadList(); this.loadRuns() },
-  beforeUnmount() { this.closeSse() },
+  mounted() { this.loadList() },
+  beforeUnmount() { this.disconnectRunSse() },
   methods: {
     async loadList() {
       this.loading = true
       try {
         const r = await api.get('/orchestrations')
         if (r.code === 0) {
-          this.list = r.data || []
-          this.list.forEach(o => this.fetchPipePreview(o))
+          this.allList = r.data || []
+          this.allList.forEach(o => this.fetchPipePreview(o))
         }
       } catch(e) {} finally { this.loading = false }
     },
@@ -334,10 +384,6 @@ window.OrchestrationsPage = {
       } catch(e) {}
     },
     pipePreview(id) { return this.detailCache[id] || [] },
-    async loadRuns() {
-      this.runsLoading = true
-      try { const r = await api.get('/orchestration/runs', { params: { page:1, page_size:20 } }); if (r.code === 0) this.runs = r.data?.list || [] } catch(e) {} finally { this.runsLoading = false }
-    },
     async onEditorOpen() {
       if (!this.templates.length) {
         this.templatesLoading = true
@@ -498,96 +544,35 @@ window.OrchestrationsPage = {
       } catch(e) { return false }
     },
     removeOrch(row) {
-      ElMessageBox.confirm('确认删除编排「' + row.name + '」？历史运行记录将保留。', '提示', { type: 'warning' })
+      ElMessageBox.confirm('确认删除任务「' + row.name + '」？将同时删除其运行记录与执行明细。', '提示', { type: 'warning' })
         .then(async () => { const r = await api.delete('/orchestrations/' + row.id); if (r.code === 0) { ElMessage.success('已删除'); this.loadList() } })
         .catch(() => {})
     },
     /* ===== 运行 ===== */
     startRun(row) {
       ElMessageBox.confirm(
-        '按顺序执行编排「' + row.name + '」共 ' + row.step_count + ' 个步骤？长任务可在历史运行中随时查看进度。',
+        '按顺序执行任务「' + row.name + '」共 ' + row.step_count + ' 个步骤？任务记录仅执行一次，结束后不可重跑。',
         '确认执行', { type: 'warning', confirmButtonText: '开始执行', cancelButtonText: '取消' })
       .then(async () => {
         try {
-          const before = this.runs[0]?.id || 0
           const r = await api.post('/orchestrations/' + row.id + '/run', {})
           if (r.code === 0) {
-            ElMessage.success('编排已开始执行')
-            setTimeout(() => { this.loadRuns().then(() => {
-              const fresh = this.runs.find(x => x.id > before && x.orchestration_id === row.id)
-              if (fresh) this.openRunDetailById(fresh.id)
-            }) }, 500)
+            ElMessage.success('任务已开始执行')
+            const runId = r.data?.run_id
+            if (runId) this.openRunDrawer(runId)
+          } else {
+            ElMessage.error(r.message || '执行失败')
           }
         } catch(e) {}
       }).catch(() => {})
     },
-    /* ===== 运行详情 ===== */
-    openRunDetailById(row) {
-      const id = typeof row === 'object' ? row.id : row
-      if (!id) { this.loadRuns(); return }
-      setTimeout(async () => {
-        try {
-          const r = await api.get('/orchestration/runs/' + id)
-          if (r.code !== 0) return
-          this.applyDetail(r.data)
-          this.detailVisible = true
-          if (this.activeRun?.status === 'running') this.connectSse(id)
-          else this.closeSse()
-        } catch(e) {}
-      }, 300)
+    stateLabel(s) { return { running:'运行中', not_started:'未开始', finished:'已结束' }[s] || '未开始' },
+    stateClass(s) { return { running:'running', not_started:'unverified', finished:'completed' }[s] || 'unverified' },
+    resultLabel(s) { return { success:'成功', partial:'部分成功', failed:'失败' }[s] || s },
+    resultClass(s) { return { success:'online', partial:'warning', failed:'offline' }[s] || 'unverified' },
+    rowClick(row) {
+      if (row.state === 'running' || row.state === 'finished') this.openRunDrawer(row.last_run_id)
     },
-    applyDetail(data) {
-      this.activeRun = data.run
-      this.runSteps = data.steps || []
-      const map = {}, order = []
-      this.runSteps.forEach(r => {
-        if (!map[r.host_id]) { map[r.host_id] = { host_id:r.host_id, host_name:r.host_name, host_ip:r.host_ip, cells:{} }; order.push(r.host_id) }
-        map[r.host_id].cells[r.seq] = r
-      })
-      this.matrixRows = order.map(h => map[h])
-      this.stepSeqs = [...new Set(this.runSteps.map(r => r.seq))].sort((a,b)=>a-b)
-    },
-    seqLabel(sq) {
-      const any = this.runSteps.find(r => r.seq === sq)
-      return sq + '. ' + (any?.template_name || '')
-    },
-    showLog(row, sq) { this.logRow = row; this.logCell = row.cells[sq] },
-    cellText(c) {
-      return { pending:'等待', running:'执行中', success:'成功', failed:'失败', skipped:'跳过' }[c.status] || c.status
-    },
-    logText(c) { return (c.error ? c.error + '\n' : '') + (c.output || '') || '无输出' },
-    connectSse(runId) {
-      this.closeSse()
-      const source = new EventSource('/api/sse/orchestration?run_id=' + runId, { withCredentials: true })
-      this.sse = source
-      source.addEventListener('progress', (e) => {
-        try { this.onProgress(JSON.parse(e.data)) } catch(err) {}
-      })
-      source.addEventListener('done', () => {
-        this.closeSse()
-        this.openRunDetailById(runId)
-        this.loadRuns()
-      })
-      source.onerror = () => {}
-    },
-    closeSse() { if (this.sse) { this.sse.close(); this.sse = null } },
-    onProgress(d) {
-      if (!d.host_id) return
-      const row = this.matrixRows.find(r => r.host_id === d.host_id)
-      if (d.status === 'skipped-refresh') { this.openRunDetailById(d.run_id); return }
-      if (!row) return
-      const cell = row.cells[d.seq]
-      if (!cell) return
-      if (d.status === 'output') { cell.output = (cell.output || '') + (d.output || '') }
-      else {
-        cell.status = d.status
-        if (d.attempt) cell.attempt = d.attempt
-        if (d.output) cell.output = d.output
-        if (d.error) cell.error = d.error
-      }
-    },
-    statusTagType(s) { return { success:'success', running:'warning', partial:'danger', failed:'danger' }[s] || 'info' },
-    statusLabel(s) { return { running:'执行中', success:'成功', partial:'部分成功', failed:'失败' }[s] || s },
     formatTime(t) {
       if (!t) return '-'
       const d = new Date(t.replace(' ', 'T') + (t.includes('Z') ? '' : 'Z'))

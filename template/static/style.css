@@ -91,7 +91,17 @@ a { text-decoration: none; }
 .status-badge.online { background: var(--ok-soft); color: var(--ok); } .status-badge.online .dot { background: var(--ok); }
 .status-badge.offline { background: var(--danger-soft); color: var(--danger); } .status-badge.offline .dot { background: var(--danger); }
 .status-badge.unverified { background: var(--neutral-soft); color: var(--neutral); } .status-badge.unverified .dot { background: var(--neutral); }
+.status-badge.warning { background: var(--warn-soft); color: var(--warn); } .status-badge.warning .dot { background: var(--warn); }
 .status-badge.running { background: var(--info-soft); color: var(--info); } .status-badge.running .dot { background: var(--info); animation: pulse 1.2s infinite; }
+.status-badge.completed { background: var(--purple-soft); color: var(--purple); } .status-badge.completed .dot { background: var(--purple); }
+
+/* 任务编排：状态筛选标签页 */
+.orch-state-tabs { display: flex; gap: 8px; padding: 14px 16px 6px; flex-wrap: wrap; }
+.orch-state-tab { cursor: pointer; user-select: none; padding: 5px 14px; border-radius: 999px; font-size: 13px; font-weight: 500; color: var(--text-sub); background: var(--neutral-soft); border: 1px solid transparent; transition: all .15s; }
+.orch-state-tab:hover { color: var(--brand); }
+.orch-state-tab.active { color: #fff; background: var(--brand); }
+.orch-state-tab em { font-style: normal; margin-left: 6px; font-size: 11px; opacity: .85; background: rgba(255,255,255,.22); padding: 1px 7px; border-radius: 999px; }
+.orch-state-tab:not(.active) em { background: #fff; color: var(--neutral); }
 @keyframes pulse { 0%,100% { opacity:1 } 50% { opacity:.3 } }
 
 /* ===== 角色徽章（§2.1） ===== */
@@ -1164,3 +1174,118 @@ a { text-decoration: none; }
   .sched-dlg-two-col { grid-template-columns: 1fr; }
   .sched-dlg .el-dialog { width: 95vw !important; margin: 16px auto !important; }
 }
+
+/* ===== 运行抽屉（三层结构） ===== */
+.orch-run-drawer { display: flex; flex-direction: column; height: 100%; padding: 4px 6px 0; }
+.orch-rd-head { padding: 12px 14px; border-bottom: 1px solid var(--border); }
+.orch-rd-title { font-size: 16px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+.orch-rd-title .mono { font-size: 12px; color: var(--text-faint); }
+.orch-rd-meta { display: flex; align-items: center; gap: 14px; margin-top: 8px; font-size: 12px; flex-wrap: wrap; }
+.orch-rd-time { color: var(--text-faint); }
+.orch-rd-follow { color: var(--info); font-size: 12px; }
+.orch-rd-follow--paused { color: var(--warn); }
+
+.orch-rd-l1 { display: flex; align-items: center; gap: 6px; padding: 12px 14px; border-bottom: 1px solid var(--border); overflow-x: auto; }
+.orch-rd-arrow { color: var(--text-faint); font-size: 13px; flex-shrink: 0; }
+.orch-rd-step { position: relative; display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 8px; cursor: pointer; font-size: 12px; white-space: nowrap; border: 1px solid var(--border); background: var(--neutral-soft); color: var(--text-sub); flex-shrink: 0; transition: all .15s; }
+.orch-rd-step:hover { border-color: var(--info); }
+.orch-rd-step.is-running { border-color: var(--info); box-shadow: 0 0 0 3px var(--info-soft); }
+.orch-rd-step-no { font-weight: 700; opacity: .7; }
+.orch-rd-step-name { max-width: 120px; overflow: hidden; text-overflow: ellipsis; }
+.orch-rd-step-mark { font-weight: 700; }
+.orch-rd-step-active { position: absolute; inset: auto 6px -6px 6px; height: 3px; border-radius: 2px; background: var(--brand); }
+.orch-rd-step.orch-step-running { background: var(--info-soft); color: var(--info); border-color: transparent; }
+.orch-rd-step.orch-step-running .orch-rd-step-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--info); animation: pulse 1.2s infinite; }
+.orch-rd-step.orch-step-ok { background: var(--ok-soft); color: var(--ok); border-color: transparent; }
+.orch-rd-step.orch-step-partial { background: var(--warn-soft); color: var(--warn); border-color: transparent; }
+.orch-rd-step.orch-step-fail { background: var(--danger-soft); color: var(--danger); border-color: transparent; }
+.orch-rd-step.orch-step-skipped { opacity: .55; }
+.orch-rd-step.orch-step-pending { opacity: .75; }
+
+.orch-rd-l2 { padding: 12px 14px; border-bottom: 1px solid var(--border); }
+.orch-rd-sec-title { font-size: 12px; color: var(--text-sub); margin-bottom: 8px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.orch-rd-hosts { display: flex; flex-direction: column; gap: 6px; max-height: 180px; overflow-y: auto; }
+.orch-rd-host { display: flex; align-items: center; gap: 10px; padding: 6px 10px; border-radius: 8px; background: var(--bg-soft); }
+.orch-rd-host-ip { font-size: 12px; color: var(--text-sub); min-width: 120px; flex-shrink: 0; }
+.orch-rd-host-name { font-size: 12px; font-weight: 500; }
+.orch-rd-host .status-badge { flex-shrink: 0; }
+
+.orch-rd-l3 { flex: 1; display: flex; flex-direction: column; min-height: 0; padding: 12px 14px 14px; }
+.orch-rd-logs { flex: 1; overflow-y: auto; background: #0f172a; border-radius: 8px; padding: 10px 12px; font-size: 12px; line-height: 1.55; }
+.orch-rd-log { display: flex; gap: 10px; white-space: pre-wrap; word-break: break-all; }
+.orch-rd-log-time { color: #64748b; flex-shrink: 0; }
+.orch-rd-log-ip { color: #38bdf8; flex-shrink: 0; min-width: 110px; }
+.orch-rd-log-text { color: #e2e8f0; }
+.orch-rd-empty { color: var(--text-faint); font-size: 12px; padding: 8px 0; }
+
+/* ===== 模板弹框：固定尺寸 + 暗色护眼 shell 脚本区 ===== */
+.tpl-dlg.el-dialog {
+  width: 60% !important;
+  margin: 10vh auto 0;
+  display: flex;
+  flex-direction: column;
+  max-height: 80vh;
+}
+.tpl-dlg .el-dialog__header { flex: 0 0 auto; padding-bottom: 10px; }
+.tpl-dlg .el-dialog__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 0 24px 18px;
+  overflow: hidden;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.tpl-dlg .el-dialog__footer { flex: 0 0 auto; padding-top: 0; }
+.tpl-dlg .el-form { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+.tpl-dlg .form-grid { flex: 0 0 auto; }
+.tpl-dlg .el-form-item { flex-shrink: 0; margin-bottom: 14px; }
+.tpl-dlg .el-form-item--default { margin-bottom: 14px; }
+.tpl-dlg .tpl-script-item { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.tpl-dlg .tpl-script-item .el-form-item__label { flex-shrink: 0; }
+.tpl-dlg .tpl-script-item .el-form-item__content {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  margin-left: 0 !important;
+  width: 100%;
+}
+.shell-wrap { flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; }
+.shell-box {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  width: 100%;
+  margin: 0;
+  border-radius: 8px;
+  border: 1px solid rgba(120,180,160,.15);
+  background: #0e1a16;            /* 墨绿暗色底（护眼低光） */
+  color: #c2d4c8;
+  font-family: 'JetBrains Mono', Consolas, 'Courier New', monospace;
+  font-size: 13px;
+  line-height: 1.65;
+  overflow: auto;
+  box-sizing: border-box;
+  tab-size: 4;
+}
+.shell-pre { padding: 14px 16px; white-space: pre; overflow: auto; word-break: normal; }
+.shell-pre code { background: none; font: inherit; color: inherit; padding: 0; }
+.shell-textarea {
+  padding: 12px 14px;
+  resize: none;
+  white-space: pre;
+  overflow: auto;
+  color: #c2d4c8;
+  caret-color: #7fd6ac;
+  outline: none;
+}
+.shell-textarea::placeholder { color: #4a6357; }
+/* shell 语法高亮 token（低对比护眼色） */
+.shk-comment { color: #5f7a6b; font-style: italic; }
+.shk-shebang { color: #4f6b5c; }
+.shk-string  { color: #8ccaa0; }
+.shk-var     { color: #e3b463; }
+.shk-ph      { color: #c792ea; font-weight: 600; }
+.shk-kw      { color: #70b1e0; }
+.shk-num     { color: #d99a5b; }

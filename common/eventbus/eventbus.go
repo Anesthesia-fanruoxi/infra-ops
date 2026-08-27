@@ -17,6 +17,10 @@ const (
 	TopicDeployProgress = "deploy.progress"
 	// TopicOrchestrationProgress 在编排运行步骤状态/输出变化后发布。
 	TopicOrchestrationProgress = "orchestration.progress"
+	// TopicOrchestrationSteps 在编排运行步骤生命周期（started/finished/run_done）发布。
+	TopicOrchestrationSteps = "orchestration.steps"
+	// TopicOrchestrationLogs 在编排运行日志行落库后发布。
+	TopicOrchestrationLogs = "orchestration.logs"
 )
 
 // Event 事件。

@@ -1,6 +1,6 @@
 package model
 
-// Orchestration 任务编排定义：多个「部署单元」（模板+主机+逐台变量）按顺序串行的长任务。
+// Orchestration 任务记录：新建即未开始，执行一次后进入已结束（终态）。
 type Orchestration struct {
 	ID          int64  `json:"id"`
 	Name        string `json:"name"`
@@ -8,6 +8,12 @@ type Orchestration struct {
 	ExecMode    string `json:"exec_mode"` // 固定 by_step（顺序串行）
 	Enabled     bool   `json:"enabled"`
 	StepCount   int    `json:"step_count"` // 列表联查
+	State       string `json:"state"`     // 由最近一次运行派生：not_started / running / finished
+	LastRunID   int64  `json:"last_run_id"`   // 最近一次运行 id，0=未运行
+	Result      string `json:"result"`        // 最近运行结果：success/partial/failed，空=未运行
+	OkHosts     int    `json:"ok_hosts"`      // 最近运行成功主机数
+	FailHosts   int    `json:"fail_hosts"`    // 最近运行失败主机数
+	TotalHosts  int    `json:"total_hosts"`   // 最近运行总主机数
 	CreatedAt   string `json:"created_at"`
 	UpdatedAt   string `json:"updated_at"`
 }
@@ -66,4 +72,15 @@ type OrchestrationStepVar struct {
 	Seq        int    `json:"seq"`
 	HostID     int64  `json:"host_id"`
 	ParamsJSON string `json:"params_json"`
+}
+
+// OrchestrationRunLog 运行日志行：按步骤落库，供详情流快照重放与回溯查看。
+type OrchestrationRunLog struct {
+	ID        int64  `json:"id"`
+	RunID     int64  `json:"run_id"`
+	Seq       int    `json:"seq"`
+	HostID    int64  `json:"host_id"`
+	HostIP    string `json:"host_ip"`
+	Text      string `json:"text"`
+	CreatedAt string `json:"created_at"`
 }
