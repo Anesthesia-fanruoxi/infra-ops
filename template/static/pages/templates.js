@@ -51,7 +51,7 @@ window.TemplatesPage = {
   </div>
 
   <!-- 查看 / 编辑弹窗 -->
-  <el-dialog v-model="dlgVisible" :title="dlgTitle" width="680px" :close-on-click-modal="false">
+  <el-dialog v-model="dlgVisible" :title="dlgTitle" class="tpl-dlg" width="85%" :close-on-click-modal="false">
     <div v-if="viewMode && editing.is_builtin" class="tpl-view-hint">
       <svg viewBox="0 0 16 16" width="13" height="13" fill="currentColor"><path d="M8 15A7 7 0 1 1 8 1a7 7 0 0 1 0 14zm0 1A8 8 0 1 0 8 0a8 8 0 0 0 0 16z"/><path d="m8.93 6.588-2.29.287-.082.38.45.083c.294.07.352.176.288.469l-.738 3.468c-.194.897.105 1.319.808 1.319.545 0 1.178-.252 1.465-.598l.088-.416c-.2.176-.492.246-.686.246-.275 0-.375-.193-.304-.533L8.93 6.588zM9 4.5a1 1 0 1 1-2 0 1 1 0 0 1 2 0z"/></svg>
       <span>内置模板为只读，可另存为副本后修改</span>
@@ -84,8 +84,11 @@ window.TemplatesPage = {
       </el-form-item>
 
       <!-- 脚本区 -->
-      <el-form-item label="脚本内容" prop="script">
-        <el-input v-model="editing.script" type="textarea" :autosize="{minRows:6,maxRows:16}" :readonly="viewMode" placeholder="# 支持 {{var_name}} 占位符，变量须在上方声明&#10;#!/bin/bash&#10;echo 'Deploying to {{target}}...'" :class="{'tpl-script-readonly': viewMode}" class="tpl-script-input" />
+      <el-form-item label="脚本内容" prop="script" class="tpl-script-item">
+        <div class="shell-wrap">
+          <pre v-if="viewMode" class="shell-box shell-pre" v-html="highlightedHtml"></pre>
+          <textarea v-else class="shell-box shell-textarea" v-model="editing.script" wrap="off" spellcheck="false" placeholder="# 支持 {{var_name}} 占位符，变量须在上方声明&#10;#!/bin/bash&#10;echo 'Deploying to {{target}}...'"></textarea>
+        </div>
         <div v-if="!viewMode && scriptWarnings.length" class="tpl-script-warn">
           <svg viewBox="0 0 16 16" width="13" height="13" fill="currentColor"><path d="M8.982 1.566a1.13 1.13 0 0 0-1.96 0L.165 13.233c-.457.778.091 1.767.98 1.767h13.713c.889 0 1.438-.99.98-1.767L8.982 1.566zM8 5c.535 0 .954.462.9.995l-.35 3.507a.552.552 0 0 1-1.1 0L7.1 5.995A.905.905 0 0 1 8 5zm.002 6a1 1 0 1 1 0 2 1 1 0 0 1 0-2z"/></svg>
           <span v-for="(w,i) in scriptWarnings" :key="i">{{w}}</span>
@@ -129,10 +132,61 @@ window.TemplatesPage = {
       const placeholders = [...(this.editing.script || '').matchAll(/\{\{(\w+)\}\}/g)].map(m => m[1])
       const undeclared = [...new Set(placeholders)].filter(p => !vars.has(p))
       return undeclared.map(p => '未声明的占位符: {{' + p + '}}')
+    },
+    highlightedHtml() {
+      if (!this.viewMode) return ''
+      return this.highlightShell(this.editing.script || '')
     }
   },
   mounted() { this.load() },
   methods: {
+    // 轻量 shell 语法高亮（查看模式），输出 HTML，配合暗色护眼主题
+    highlightShell(src) {
+      const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      const KW = new Set(['if','then','else','elif','fi','for','while','until','do','done','case','esac','in','function','select','break','continue','return','exit','echo','printf','read','readonly','local','declare','typeset','export','unset','set','shift','source','trap','wait'])
+      let out = '', i = 0, lineStart = true
+      const n = src.length
+      const span = (cls, t) => { out += '<span class="shk-' + cls + '">' + t + '</span>' }
+      while (i < n) {
+        const c = src[i], nx = src[i + 1]
+        if (c === '#') {
+          if (lineStart && nx === '!') { // shebang
+            let j = i + 2; while (j < n && src[j] !== '\n') j++
+            span('shebang', esc(src.slice(i, j))); i = j; lineStart = false; continue
+          }
+          let j = src.indexOf('\n', i); if (j < 0) j = n
+          span('comment', esc(src.slice(i, j))); i = j; continue
+        }
+        if (c === "'" || c === '"') {
+          let j = i + 1; while (j < n && src[j] !== c) j++
+          j++
+          span('string', esc(src.slice(i, j))); i = j; continue
+        }
+        if (c === '{' && nx === '{') { // 平台模板变量 {{var}}
+          const j = src.indexOf('}}', i + 2)
+          if (j >= 0) { span('ph', esc(src.slice(i, j + 2))); i = j + 2; continue }
+        }
+        if (c === '$' && nx && /[A-Za-z_{]/.test(nx)) {
+          let j = i + 1
+          if (src[j] === '{') { j++; while (j < n && src[j] !== '}') j++; if (j < n) j++ }
+          else while (j < n && /\w/.test(src[j])) j++
+          span('var', esc(src.slice(i, j))); i = j; continue
+        }
+        if (/[A-Za-z_]/.test(c)) {
+          let j = i; while (j < n && /\w/.test(src[j])) j++
+          const w = src.slice(i, j)
+          if (KW.has(w)) span('kw', esc(w)); else out += esc(w)
+          i = j; continue
+        }
+        if (/\d/.test(c)) {
+          let j = i; while (j < n && /[\w.]/.test(src[j])) j++
+          span('num', esc(src.slice(i, j))); i = j; continue
+        }
+        if (c === '\n') { lineStart = true } else if (!/[\s\t]/.test(c)) { lineStart = false }
+        out += esc(c); i++
+      }
+      return out
+    },
     async load() {
       this.loading = true
       try {
