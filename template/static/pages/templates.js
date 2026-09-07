@@ -48,9 +48,6 @@ window.TemplatesPage = {
         <el-table-column label="变量" width="70" align="center">
           <template #default="{row}"><span class="mono">{{(row.variables||[]).length}}</span></template>
         </el-table-column>
-        <el-table-column label="依赖" width="70" align="center">
-          <template #default="{row}"><span v-if="(row.requires||[]).length" class="status-badge ready"><span class="dot"></span>{{(row.requires||[]).length}} 项</span><span v-else class="mono faint">-</span></template>
-        </el-table-column>
         <el-table-column label="更新时间" width="170">
           <template #default="{row}"><span class="mono" style="font-size:12px;color:var(--text-faint)">{{formatTime(row.updated_at)}}</span></template>
         </el-table-column>
@@ -86,7 +83,6 @@ window.TemplatesPage = {
             <div class="tpl-card-desc">{{t.description || '暂无描述'}}</div>
             <div class="tpl-card-meta">
               <span v-if="(t.variables||[]).length" class="tpl-meta-chip">变量 {{(t.variables||[]).length}}</span>
-              <span v-if="(t.requires||[]).length" class="tpl-meta-chip dep">依赖 {{(t.requires||[]).length}}</span>
               <span v-if="(t.services||[]).filter(s=>s&&s.web).length" class="tpl-meta-chip svc">Web 服务</span>
             </div>
             <div class="tpl-card-ops">
@@ -107,23 +103,30 @@ window.TemplatesPage = {
   </div>
 
   <!-- 查看 / 编辑弹窗 -->
-  <el-dialog v-model="dlgVisible" :title="dlgTitle" class="tpl-dlg" width="85%" :close-on-click-modal="false">
+  <el-dialog v-model="dlgVisible" :title="dlgTitle" class="tpl-dlg" :class="viewMode ? 'tpl-dlg-view' : ''" width="85%" :close-on-click-modal="false">
     <div v-if="viewMode && editing.is_builtin" class="tpl-view-hint">
       <svg viewBox="0 0 16 16" width="13" height="13" fill="currentColor"><path d="M8 15A7 7 0 1 1 8 1a7 7 0 0 1 0 14zm0 1A8 8 0 1 0 8 0a8 8 0 0 0 0 16z"/><path d="m8.93 6.588-2.29.287-.082.38.45.083c.294.07.352.176.288.469l-.738 3.468c-.194.897.105 1.319.808 1.319.545 0 1.178-.252 1.465-.598l.088-.416c-.2.176-.492.246-.686.246-.275 0-.375-.193-.304-.533L8.93 6.588zM9 4.5a1 1 0 1 1-2 0 1 1 0 0 1 2 0z"/></svg>
       <span>内置模板为只读，可另存为副本后修改</span>
     </div>
-    <el-form :model="editing" label-position="top" ref="editFormRef" :rules="formRules">
+    <el-form :model="editing" label-position="top" ref="editFormRef" :rules="formRules" :class="viewMode ? 'tpl-form-view' : ''">
+      <div class="tpl-left-col">
       <div class="form-grid">
         <el-form-item label="模板名称" prop="name" required>
           <el-input v-model="editing.name" placeholder="如：nginx_reload" :disabled="viewMode" />
         </el-form-item>
-        <el-form-item label="描述">
-          <el-input v-model="editing.description" placeholder="简要说明模板用途" :disabled="viewMode" />
+        <el-form-item label="功能分类">
+          <el-select v-model="editing.category" :disabled="viewMode" placeholder="选择分类" style="width:100%" filterable allow-create>
+            <el-option v-for="c in categoryOptions" :key="c" :label="c" :value="c" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="描述" class="span-2">
+          <div v-if="viewMode" class="tpl-desc-view">{{ editing.description || '暂无描述' }}</div>
+          <el-input v-else v-model="editing.description" placeholder="简要说明模板用途；如脚本依赖 Docker 等环境，请在此注明" />
         </el-form-item>
       </div>
 
       <!-- 变量声明表 -->
-      <el-form-item label="变量声明">
+      <el-form-item label="变量声明" class="tpl-fld-vars">
         <div class="tpl-var-table">
           <div class="tpl-var-head"><span>变量名</span><span>标签</span><span>默认值</span><span>必填</span><span v-if="!viewMode"></span></div>
           <div v-for="(v, i) in editing.variables" :key="i" class="tpl-var-row">
@@ -138,36 +141,16 @@ window.TemplatesPage = {
           <el-button v-if="!viewMode" size="small" @click="addVar" class="tpl-add-var">+ 添加变量</el-button>
         </div>
       </el-form-item>
-
-      <!-- 功能分类 -->
-      <el-form-item label="功能分类">
-        <el-select v-model="editing.category" :disabled="viewMode" placeholder="选择分类" style="width:240px" filterable allow-create>
-          <el-option v-for="c in categoryOptions" :key="c" :label="c" :value="c" />
-        </el-select>
-        <span class="tpl-field-hint">按功能归类，内置/自定义另有徽标区分，二者并存</span>
-      </el-form-item>
-
-      <!-- 前置依赖检查 -->
-      <el-form-item label="前置依赖检查">
-        <div class="tpl-var-table">
-          <div class="tpl-var-head"><span>检查命令</span><span>不满足提示</span><span v-if="!viewMode"></span></div>
-          <div v-for="(d, i) in editing.requires" :key="i" class="tpl-var-row">
-            <el-input v-model="d.check" size="small" placeholder="如：command -v docker" :disabled="viewMode" />
-            <el-input v-model="d.hint" size="small" placeholder="如：请先在主机安装 Docker" :disabled="viewMode" />
-            <el-button v-if="!viewMode" text type="danger" size="small" @click="editing.requires.splice(i,1)">
-              <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor"><path d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0V6z"/><path fill-rule="evenodd" d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H5.5l1-1h3l1 1h2.5a1 1 0 0 1 1 1v1zM4.118 4L4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 1 1-1V4.059L11.882 4H4.118zM2.5 3V2h11v1h-11z"/></svg>
-            </el-button>
-          </div>
-          <div class="tpl-dep-actions">
-            <el-button v-if="!viewMode" size="small" @click="addDep" class="tpl-add-var">+ 添加依赖检查</el-button>
-            <span class="tpl-dep-hint">部署/编排启动前会对每台主机逐条执行 check，任一失败则不执行该主机的脚本</span>
-          </div>
-        </div>
-      </el-form-item>
+      </div>
 
       <!-- 脚本区 -->
       <el-form-item label="脚本内容" prop="script" class="tpl-script-item">
         <div class="shell-wrap">
+          <div v-if="viewMode" class="shell-bar">
+            <div class="shell-bar-dots"><span></span><span></span><span></span></div>
+            <span class="shell-bar-title">部署脚本</span>
+            <span class="shell-bar-meta">{{lineCount}} 行 · {{(editing.variables||[]).length}} 个变量</span>
+          </div>
           <pre v-if="viewMode" class="shell-box shell-pre" v-html="highlightedHtml"></pre>
           <textarea v-else class="shell-box shell-textarea" v-model="editing.script" wrap="off" spellcheck="false" placeholder="# 支持 {{var_name}} 占位符，变量须在上方声明&#10;#!/bin/bash&#10;echo 'Deploying to {{target}}...'"></textarea>
         </div>
@@ -235,6 +218,9 @@ window.TemplatesPage = {
     highlightedHtml() {
       if (!this.viewMode) return ''
       return this.highlightShell(this.editing.script || '')
+    },
+    lineCount() {
+      return (this.editing.script || '').split('\n').length
     }
   },
   mounted() { this.load() },
@@ -317,7 +303,6 @@ window.TemplatesPage = {
       this.dlgVisible = true
     },
     addVar() { this.editing.variables.push({ name: '', label: '', default: '', required: false }) },
-    addDep() { this.editing.requires.push({ check: '', hint: '' }) },
     async saveTemplate() {
       if (!this.editing.name?.trim()) { ElMessage.warning('请输入模板名称'); return }
       if (!this.editing.script?.trim()) { ElMessage.warning('请输入脚本内容'); return }

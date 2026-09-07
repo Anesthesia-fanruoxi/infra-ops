@@ -291,13 +291,10 @@ a { text-decoration: none; }
 .tpl-card-desc { font-size: 12.5px; color: var(--text-sub); line-height: 1.6; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; min-height: 40px; }
 .tpl-card-meta { display: flex; gap: 8px; flex-wrap: wrap; }
 .tpl-meta-chip { font-size: 11px; color: var(--text-sub); padding: 3px 8px; border-radius: 8px; background: var(--bg-faint); }
-.tpl-meta-chip.dep { color: #b45309; background: #fef3c7; }
 .tpl-meta-chip.svc { color: var(--ok); background: var(--ok-soft); }
 .tpl-card-ops { display: flex; align-items: center; gap: 2px; padding-top: 8px; border-top: 1px solid var(--border); margin-top: auto; }
 .tpl-cat-badge { display: inline-block; font-size: 11px; padding: 2px 9px; border-radius: 10px; color: var(--brand); background: var(--brand-soft); }
 .tpl-field-hint { margin-left: 10px; font-size: 11px; color: var(--text-faint); }
-.tpl-dep-actions { display: flex; align-items: center; gap: 10px; margin-top: 6px; }
-.tpl-dep-hint { font-size: 11px; color: var(--text-faint); }
 .tpl-view-switch .view-btn:focus { outline: none; }
 .overview-card-header .el-button:hover .button-arrow { transform: translateX(3px); }
 .overview-host-table { border-radius: 10px; overflow: hidden; }
@@ -1332,3 +1329,118 @@ a { text-decoration: none; }
 .shk-ph      { color: #c792ea; font-weight: 600; }
 .shk-kw      { color: #70b1e0; }
 .shk-num     { color: #d99a5b; }
+
+/* ===== 模板查看模式：左右布局（左：信息/变量，右：脚本固定铺满 + 内部滚动） ===== */
+.tpl-left-col { flex-shrink: 0; min-width: 0; align-self: stretch; }
+.tpl-dlg-view.el-dialog { width: 78% !important; height: 74vh !important; margin-top: 6vh !important; overflow: hidden; }
+.tpl-dlg-view .el-dialog__body { margin: 0 0 16px 24px; }
+.tpl-dlg .tpl-form-view {
+  display: grid;
+  grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+  grid-template-rows: minmax(56vh, 1fr);
+  gap: 0 24px;
+  align-items: stretch;
+  justify-items: stretch;
+  height: 100%;
+  min-height: 0;
+}
+.tpl-form-view .tpl-left-col {
+  grid-column: 1;
+  grid-row: 1;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+/* 左列：精简间距 + 分区标签 */
+.tpl-form-view .el-form-item { margin-bottom: 4px; }
+.tpl-form-view .el-form-item:last-child { margin-bottom: 0; }
+.tpl-form-view .form-grid .el-form-item { margin-bottom: 4px; }
+.tpl-form-view .el-form-item__label {
+  padding-bottom: 4px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: .2px;
+  color: var(--text);
+}
+.tpl-dlg .tpl-form-view .el-form-item__label::before {
+  content: '';
+  display: inline-block;
+  width: 3px;
+  height: 10px;
+  border-radius: 2px;
+  background: var(--brand, #1890ff);
+  margin-right: 6px;
+  vertical-align: -2px;
+  opacity: .85;
+}
+.tpl-form-view .tpl-var-row { padding: 2px 0; gap: 6px; }
+/* 描述（查看模式）自动换行 */
+.tpl-form-view .tpl-desc-view {
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.6;
+  font-size: 13px;
+  color: var(--text);
+  padding: 3px 2px;
+}
+/* 压缩输入控件高度 */
+.tpl-form-view .el-input__wrapper,
+.tpl-form-view .el-select__wrapper { min-height: 28px; padding: 0 9px; }
+.tpl-form-view .el-input__inner { line-height: 28px; }
+/* 右列：脚本面板，固定铺满整列（宽高均拉伸），行数超出内部滚动 */
+.tpl-form-view .tpl-script-item {
+  grid-column: 2;
+  grid-row: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  width: 100%;
+  margin-bottom: 0;
+  border-left: 1px solid var(--border);
+  padding-left: 24px;
+}
+.tpl-form-view .tpl-script-item .el-form-item__label { display: none; }
+.tpl-form-view .tpl-script-item .el-form-item__content {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  margin-left: 0 !important;
+  width: 100%;
+}
+.tpl-form-view .shell-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 34px;
+  padding: 0 12px;
+  border-radius: 8px 8px 0 0;
+  background: #12201a;
+  border: 1px solid rgba(120,180,160,.15);
+  border-bottom: none;
+}
+.tpl-form-view .shell-bar-dots { display: flex; gap: 5px; }
+.tpl-form-view .shell-bar-dots span {
+  width: 9px; height: 9px; border-radius: 50%;
+  background: #f87171;
+}
+.tpl-form-view .shell-bar-dots span:nth-child(2) { background: #fbbf24; }
+.tpl-form-view .shell-bar-dots span:nth-child(3) { background: #34d399; }
+.tpl-form-view .shell-bar-title {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: #c8dcd0;
+}
+.tpl-form-view .shell-bar-meta {
+  margin-left: auto;
+  font-size: 11px;
+  color: #5f7a6b;
+  font-family: 'JetBrains Mono', Consolas, monospace;
+}
+.tpl-form-view .shell-pre {
+  flex: 1;
+  min-height: 0;
+  border-radius: 0 0 8px 8px;
+  border-top: none;
+}
