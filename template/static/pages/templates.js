@@ -19,35 +19,91 @@ window.TemplatesPage = {
   <div class="page-card tpl-panel">
     <div class="card-header">
       <span class="title">模板列表</span>
-      <el-button type="primary" @click="openDialog(null)">新增模板</el-button>
+      <div class="tpl-toolbar">
+        <div class="tpl-view-switch">
+          <button class="view-btn" :class="{active: mode==='card'}" @click="setMode('card')">卡片</button>
+          <button class="view-btn" :class="{active: mode==='table'}" @click="setMode('table')">表格</button>
+        </div>
+        <el-button type="primary" @click="openDialog(null)">新增模板</el-button>
+      </div>
     </div>
-    <el-table :data="list" style="width:100%" v-loading="loading" class="tpl-table">
-      <el-table-column label="模板名称" min-width="160">
-        <template #default="{row}"><span style="font-weight:600">{{row.name}}</span><el-tag v-if="row.is_builtin" size="small" type="info" style="margin-left:8px">内置</el-tag></template>
-      </el-table-column>
-      <el-table-column label="描述" min-width="200">
-        <template #default="{row}"><span style="color:var(--text-sub);font-size:12.5px">{{row.description || '-'}}</span></template>
-      </el-table-column>
-      <el-table-column label="变量数" width="80" align="center">
-        <template #default="{row}"><span class="mono">{{(row.variables||[]).length}}</span></template>
-      </el-table-column>
-      <el-table-column label="更新时间" width="170">
-        <template #default="{row}"><span class="mono" style="font-size:12px;color:var(--text-faint)">{{formatTime(row.updated_at)}}</span></template>
-      </el-table-column>
-      <el-table-column label="" width="220" fixed="right">
-        <template #default="{row}"><div class="ops-cell">
-          <el-button size="small" text @click="openView(row)">查看</el-button>
-          <el-button v-if="row.is_builtin" size="small" text @click="duplicate(row)">另存为副本</el-button>
-          <template v-else>
-            <el-button size="small" text @click="openDialog(row)">编辑</el-button>
-            <el-button size="small" text type="danger" @click="delTemplate(row)">删除</el-button>
-          </template>
-        </div></template>
-      </el-table-column>
-    </el-table>
-    <div v-if="!loading && !list.length" class="empty-state tpl-empty">
-      <strong>暂无模板</strong><span>点击「新增模板」创建第一个部署脚本</span>
+    <div class="tpl-filterbar">
+      <span class="tpl-filter-label">功能</span>
+      <button class="tpl-filter-tab" :class="{active: activeCat==='全部'}" @click="activeCat='全部'">全部</button>
+      <button v-for="c in categories" :key="c" class="tpl-filter-tab" :class="{active: activeCat===c}" @click="activeCat=c">{{c}}</button>
     </div>
+
+    <!-- 表格视图 -->
+    <template v-if="mode==='table'">
+      <el-table :data="filtered" style="width:100%" v-loading="loading" class="tpl-table">
+        <el-table-column label="模板名称" min-width="180">
+          <template #default="{row}"><span style="font-weight:600">{{row.name}}</span><el-tag v-if="row.is_builtin" size="small" type="info" style="margin-left:8px">内置</el-tag></template>
+        </el-table-column>
+        <el-table-column label="分类" width="100">
+          <template #default="{row}"><span class="tpl-cat-badge">{{row.category || '未分类'}}</span></template>
+        </el-table-column>
+        <el-table-column label="描述" min-width="200">
+          <template #default="{row}"><span style="color:var(--text-sub);font-size:12.5px">{{row.description || '-'}}</span></template>
+        </el-table-column>
+        <el-table-column label="变量" width="70" align="center">
+          <template #default="{row}"><span class="mono">{{(row.variables||[]).length}}</span></template>
+        </el-table-column>
+        <el-table-column label="依赖" width="70" align="center">
+          <template #default="{row}"><span v-if="(row.requires||[]).length" class="status-badge ready"><span class="dot"></span>{{(row.requires||[]).length}} 项</span><span v-else class="mono faint">-</span></template>
+        </el-table-column>
+        <el-table-column label="更新时间" width="170">
+          <template #default="{row}"><span class="mono" style="font-size:12px;color:var(--text-faint)">{{formatTime(row.updated_at)}}</span></template>
+        </el-table-column>
+        <el-table-column label="" width="220" fixed="right">
+          <template #default="{row}"><div class="ops-cell">
+            <el-button size="small" text @click="openView(row)">查看</el-button>
+            <el-button v-if="row.is_builtin" size="small" text @click="duplicate(row)">另存为副本</el-button>
+            <template v-else>
+              <el-button size="small" text @click="openDialog(row)">编辑</el-button>
+              <el-button size="small" text type="danger" @click="delTemplate(row)">删除</el-button>
+            </template>
+          </div></template>
+        </el-table-column>
+      </el-table>
+      <div v-if="!loading && !filtered.length" class="empty-state tpl-empty">
+        <strong>暂无适配的模板</strong><span>换个分类，或点击「新增模板」创建</span>
+      </div>
+    </template>
+
+    <!-- 卡片视图：按分类分组 -->
+    <template v-else>
+      <div v-for="g in grouped" :key="g.category" class="tpl-cat-group">
+        <div class="tpl-cat-title"><span class="tpl-cat-icon">{{groupIcon(g.category)}}</span>{{g.category}}<span class="tpl-cat-count">{{g.items.length}}</span></div>
+        <div class="tpl-card-grid">
+          <div v-for="t in g.items" :key="t.id" class="tpl-card">
+            <div class="tpl-card-head">
+              <strong class="tpl-card-name" :title="t.name">{{t.name}}</strong>
+              <div class="tpl-card-badges">
+                <span v-if="t.is_builtin" class="tpl-badge builtin">内置</span>
+                <span v-else class="tpl-badge custom">自定义</span>
+              </div>
+            </div>
+            <div class="tpl-card-desc">{{t.description || '暂无描述'}}</div>
+            <div class="tpl-card-meta">
+              <span v-if="(t.variables||[]).length" class="tpl-meta-chip">变量 {{(t.variables||[]).length}}</span>
+              <span v-if="(t.requires||[]).length" class="tpl-meta-chip dep">依赖 {{(t.requires||[]).length}}</span>
+              <span v-if="(t.services||[]).filter(s=>s&&s.web).length" class="tpl-meta-chip svc">Web 服务</span>
+            </div>
+            <div class="tpl-card-ops">
+              <el-button size="small" text @click="openView(t)">查看</el-button>
+              <el-button v-if="t.is_builtin" size="small" text @click="duplicate(t)">另存副本</el-button>
+              <template v-else>
+                <el-button size="small" text @click="openDialog(t)">编辑</el-button>
+                <el-button size="small" text type="danger" @click="delTemplate(t)">删除</el-button>
+              </template>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div v-if="!loading && !filtered.length" class="empty-state tpl-empty">
+        <strong>暂无适配的模板</strong><span>换个分类，或点击「新增模板」创建</span>
+      </div>
+    </template>
   </div>
 
   <!-- 查看 / 编辑弹窗 -->
@@ -83,6 +139,32 @@ window.TemplatesPage = {
         </div>
       </el-form-item>
 
+      <!-- 功能分类 -->
+      <el-form-item label="功能分类">
+        <el-select v-model="editing.category" :disabled="viewMode" placeholder="选择分类" style="width:240px" filterable allow-create>
+          <el-option v-for="c in categoryOptions" :key="c" :label="c" :value="c" />
+        </el-select>
+        <span class="tpl-field-hint">按功能归类，内置/自定义另有徽标区分，二者并存</span>
+      </el-form-item>
+
+      <!-- 前置依赖检查 -->
+      <el-form-item label="前置依赖检查">
+        <div class="tpl-var-table">
+          <div class="tpl-var-head"><span>检查命令</span><span>不满足提示</span><span v-if="!viewMode"></span></div>
+          <div v-for="(d, i) in editing.requires" :key="i" class="tpl-var-row">
+            <el-input v-model="d.check" size="small" placeholder="如：command -v docker" :disabled="viewMode" />
+            <el-input v-model="d.hint" size="small" placeholder="如：请先在主机安装 Docker" :disabled="viewMode" />
+            <el-button v-if="!viewMode" text type="danger" size="small" @click="editing.requires.splice(i,1)">
+              <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor"><path d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0V6z"/><path fill-rule="evenodd" d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H5.5l1-1h3l1 1h2.5a1 1 0 0 1 1 1v1zM4.118 4L4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 1 1-1V4.059L11.882 4H4.118zM2.5 3V2h11v1h-11z"/></svg>
+            </el-button>
+          </div>
+          <div class="tpl-dep-actions">
+            <el-button v-if="!viewMode" size="small" @click="addDep" class="tpl-add-var">+ 添加依赖检查</el-button>
+            <span class="tpl-dep-hint">部署/编排启动前会对每台主机逐条执行 check，任一失败则不执行该主机的脚本</span>
+          </div>
+        </div>
+      </el-form-item>
+
       <!-- 脚本区 -->
       <el-form-item label="脚本内容" prop="script" class="tpl-script-item">
         <div class="shell-wrap">
@@ -114,7 +196,10 @@ window.TemplatesPage = {
   data() {
     return {
       list: [], loading: false, saving: false, dlgVisible: false, viewMode: false,
-      editing: { name: '', description: '', script: '', variables: [] },
+      mode: localStorage.getItem('tpl-view-mode') || 'card',
+      activeCat: '全部',
+      categoryOptions: ['系统', '工具', '中间件', '监控', '其他'],
+      editing: { name: '', description: '', category: '其他', script: '', variables: [], requires: [] },
       formRules: {
         name: [{ required: true, message: '请输入模板名称', trigger: 'blur' }],
         script: [{ required: true, message: '请输入脚本内容', trigger: 'blur' }]
@@ -123,6 +208,20 @@ window.TemplatesPage = {
   },
   computed: {
     builtinCount() { return this.list.filter(t => t.is_builtin).length },
+    categories() {
+      const s = new Set(this.list.map(t => t.category || '未分类').filter(Boolean))
+      return [...s].filter(c => c !== '其他').concat((s.has('其他') || s.has('')) ? '其他' : '')
+    },
+    filtered() {
+      if (this.activeCat === '全部') return this.list
+      return this.list.filter(t => (t.category || '未分类') === this.activeCat)
+    },
+    grouped() {
+      const cats = this.categories.filter(c => c !== '' && c !== '其他')
+      const groups = cats.concat(this.list.some(t => !t.category || t.category === '其他') ? ['其他'] : [])
+        .map(c => ({ category: c, items: this.filtered.filter(t => (t.category || '未分类') === c || (!t.category && c === '其他')) }))
+      return groups.filter(g => g.items.length)
+    },
     dlgTitle() {
       if (this.viewMode) return '查看模板'
       return this.editing.id ? '编辑模板' : '新增模板'
@@ -140,6 +239,10 @@ window.TemplatesPage = {
   },
   mounted() { this.load() },
   methods: {
+    setMode(m) { this.mode = m; localStorage.setItem('tpl-view-mode', m) },
+    groupIcon(c) {
+      return ({ '系统': '🖥', '工具': '🧰', '中间件': '🗄', '监控': '📈' })[c] || '📦'
+    },
     // 轻量 shell 语法高亮（查看模式），输出 HTML，配合暗色护眼主题
     highlightShell(src) {
       const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -202,18 +305,19 @@ window.TemplatesPage = {
     openDialog(row) {
       this.viewMode = false
       if (row) {
-        this.editing = { ...row, variables: (row.variables || []).map(v => ({...v})) }
+        this.editing = { ...row, variables: (row.variables || []).map(v => ({...v})), requires: (row.requires || []).map(d => ({...d})) }
       } else {
-        this.editing = { name: '', description: '', script: '', variables: [] }
+        this.editing = { name: '', description: '', category: '其他', script: '', variables: [], requires: [] }
       }
       this.dlgVisible = true
     },
     openView(row) {
       this.viewMode = true
-      this.editing = { ...row, variables: (row.variables || []).map(v => ({...v})) }
+      this.editing = { ...row, variables: (row.variables || []).map(v => ({...v})), requires: (row.requires || []).map(d => ({...d})) }
       this.dlgVisible = true
     },
     addVar() { this.editing.variables.push({ name: '', label: '', default: '', required: false }) },
+    addDep() { this.editing.requires.push({ check: '', hint: '' }) },
     async saveTemplate() {
       if (!this.editing.name?.trim()) { ElMessage.warning('请输入模板名称'); return }
       if (!this.editing.script?.trim()) { ElMessage.warning('请输入脚本内容'); return }
@@ -221,9 +325,12 @@ window.TemplatesPage = {
       for (const v of this.editing.variables) {
         if (!v.name || !/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(v.name)) { ElMessage.warning('变量名 "' + (v.name||'') + '" 不合法'); return }
       }
+      for (let i = 0; i < this.editing.requires.length; i++) {
+        if (!this.editing.requires[i].check || /\r|\n/.test(this.editing.requires[i].check)) { ElMessage.warning('第 ' + (i+1) + ' 条依赖检查的命令不合法（须为单行）'); return }
+      }
       this.saving = true
       try {
-        const body = { name: this.editing.name, description: this.editing.description, script: this.editing.script, variables: this.editing.variables }
+        const body = { name: this.editing.name, description: this.editing.description, category: this.editing.category, script: this.editing.script, variables: this.editing.variables, requires: this.editing.requires }
         if (this.editing.id) { await api.put('/deploy/templates/' + this.editing.id, body) }
         else { await api.post('/deploy/templates', body) }
         ElMessage.success('保存成功'); this.dlgVisible = false; this.load()
@@ -239,7 +346,7 @@ window.TemplatesPage = {
       }).catch(() => {})
     },
     async duplicate(row) {
-      const body = { name: row.name + ' (副本)', description: row.description, script: row.script, variables: (row.variables || []).map(v => ({...v})) }
+      const body = { name: row.name + ' (副本)', description: row.description, category: row.category || '其他', script: row.script, variables: (row.variables || []).map(v => ({...v})), requires: (row.requires || []).map(d => ({...d})) }
       try {
         await api.post('/deploy/templates', body)
         ElMessage.success('已创建副本'); this.load()

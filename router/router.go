@@ -100,7 +100,11 @@ func Setup(staticFS fs.FS, deps Deps) *gin.Engine {
 		hosts.DELETE("/:id", hostHandler.Delete)
 		hosts.POST("/:id/test", hostHandler.Test)
 		hosts.GET("/:id/installs", hostHandler.Installs)
+		hosts.GET("/:id/services", api.NewServiceHandler(hostHandler.TplRepo()).HostList)
 	}
+
+	// 服务清单：总览聚合入口
+	protected.GET("/services", api.NewServiceHandler(hostHandler.TplRepo()).List)
 
 	// 部署中心
 	deployRepo := store.NewDeployRepo()

@@ -69,7 +69,7 @@ mkdir -p /etc/nginx/cert /etc/nginx/conf.d \
   /var/cache/openresty/proxy_temp /var/cache/openresty/proxy_cache /var/log/openresty
 chown -R "${NGX_USER}:${NGX_USER}" /etc/nginx/cert /var/cache/openresty /var/log/openresty
 
-# 备份现有主配置后写入生产级配置（@@NGINX_CONF@@ 由平台注入 nginx.conf 内容）
+# 备份现有主配置后写入生产级配置（nginx.conf 内容由平台经资源占位符注入，注释中勿写占位符字面量，否则会被误替换）
 [ -f "${NGX_CONF}" ] && cp "${NGX_CONF}" "${NGX_CONF}.bak.$(date +%s)"
 cat > "${NGX_CONF}" <<'NGINXEOF'
 @@NGINX_CONF@@

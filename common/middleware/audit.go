@@ -11,11 +11,6 @@ import (
 	"infra-ops/store"
 )
 
-// auditWriter 审计日志写入接口（避免循环依赖）。
-type auditWriter interface {
-	Create(log *model.AuditLog) error
-}
-
 // Audit 审计中间件：拦截写操作，响应成功后落库。
 func Audit(repo *store.AuditRepo) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -59,7 +54,7 @@ func Audit(repo *store.AuditRepo) gin.HandlerFunc {
 }
 
 func resolveAction(fullPath, method string) string {
-	// ???????? /api/v1 ???????? /api ???
+	// 规范化路径：先剥离 /api/v1 前缀，再剥离 /api 前缀
 	path := strings.TrimPrefix(fullPath, "/api/v1")
 	path = strings.TrimPrefix(path, "/api")
 

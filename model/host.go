@@ -37,6 +37,19 @@ type DiskInfo struct {
 	UsedPercent int     `json:"used_percent"`
 }
 
+// HostService 主机上登记的服务（由模板声明、安装成功后自动生成）。
+type HostService struct {
+	ID          int64  `json:"id"`
+	HostID      int64  `json:"host_id"`
+	HostIP      string `json:"host_ip"`
+	HostName    string `json:"host_name"` // 冗余展示用，联表填充
+	ServiceName string `json:"service_name"`
+	URL         string `json:"url"`
+	Web         bool   `json:"web"`
+	TemplateID  int64  `json:"template_id"`
+	UpdatedAt   string `json:"updated_at"`
+}
+
 // HostInstall 主机安装标记：该主机成功执行过的安装模板（每模板一条，重复执行刷新时间）。
 type HostInstall struct {
 	ID           int64  `json:"id"`

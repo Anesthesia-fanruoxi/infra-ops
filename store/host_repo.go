@@ -10,14 +10,14 @@ import (
 	"infra-ops/model"
 )
 
-// HostRepo ???????
+// HostRepo 主机表数据仓库。
 type HostRepo struct{}
 
 func NewHostRepo() *HostRepo {
 	return &HostRepo{}
 }
 
-// GetByID ? ID ?????
+// GetByID 按 ID 查询单台主机。
 func (r *HostRepo) GetByID(id int64) (*model.Host, error) {
 	h := &model.Host{}
 	var lastCheckAt sql.NullString
@@ -123,7 +123,7 @@ func ipKey(s string) []byte {
 	return ip.To4()
 }
 
-// Create ???????? ID?
+// Create 新建主机，返回自增 ID。
 func (r *HostRepo) Create(h *model.Host) (int64, error) {
 	res, err := DB.Exec(
 		`INSERT INTO hosts(name,ip,port,tag,remark,credential_id) VALUES(?,?,?,?,?,?)`,
@@ -138,7 +138,7 @@ func (r *HostRepo) Create(h *model.Host) (int64, error) {
 	return res.LastInsertId()
 }
 
-// Update ?????????
+// Update 更新主机基础信息与凭据绑定。
 func (r *HostRepo) Update(id int64, name, ip string, port int, tag, remark string, credentialID int64) error {
 	_, err := DB.Exec(
 		`UPDATE hosts SET name=?, ip=?, port=?, tag=?, remark=?, credential_id=?, updated_at=datetime('now','localtime') WHERE id=?`,
@@ -147,7 +147,7 @@ func (r *HostRepo) Update(id int64, name, ip string, port int, tag, remark strin
 	return err
 }
 
-// UpdateProbeResult ????/?????
+// UpdateProbeResult 更新探测结果：状态/延迟/详情 JSON。
 func (r *HostRepo) UpdateProbeResult(id int64, status string, latencyMs int, infoJSON string) error {
 	_, err := DB.Exec(
 		`UPDATE hosts SET status=?, latency_ms=?, info_json=?, last_check_at=datetime('now','localtime'), updated_at=datetime('now','localtime') WHERE id=?`,
@@ -156,7 +156,7 @@ func (r *HostRepo) UpdateProbeResult(id int64, status string, latencyMs int, inf
 	return err
 }
 
-// Rename ???????????????????? UNIQUE ????
+// Rename 仅改名，重名由数据库 UNIQUE 约束拦截。
 func (r *HostRepo) Rename(id int64, name string) error {
 	_, err := DB.Exec(
 		`UPDATE hosts SET name=?, updated_at=datetime('now','localtime') WHERE id=?`,
@@ -165,13 +165,13 @@ func (r *HostRepo) Rename(id int64, name string) error {
 	return err
 }
 
-// Delete ?????
+// Delete 删除主机记录。
 func (r *HostRepo) Delete(id int64) error {
 	_, err := DB.Exec("DELETE FROM hosts WHERE id=?", id)
 	return err
 }
 
-// CountAll ?????????
+// CountAll 统计总数及在线/离线/未验证数量。
 func (r *HostRepo) CountAll() (total, online, offline, unverified int64, err error) {
 	err = DB.QueryRow("SELECT COUNT(*), COALESCE(SUM(CASE WHEN status='online' THEN 1 ELSE 0 END),0), COALESCE(SUM(CASE WHEN status='offline' THEN 1 ELSE 0 END),0), COALESCE(SUM(CASE WHEN status='unverified' THEN 1 ELSE 0 END),0) FROM hosts").
 		Scan(&total, &online, &offline, &unverified)
@@ -197,7 +197,7 @@ func (r *HostRepo) CountByTag() (map[string]int, error) {
 	return result, rows.Err()
 }
 
-// ListAll ????????????
+// ListAll 全量主机列表（不分页，按 ID 升序）。
 func (r *HostRepo) ListAll() ([]model.Host, error) {
 	rows, err := DB.Query(`SELECT id,name,ip,port,tag,remark,credential_id,status,latency_ms,info_json,last_check_at,created_at,updated_at FROM hosts ORDER BY id`)
 	if err != nil {

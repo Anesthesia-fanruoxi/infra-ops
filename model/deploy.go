@@ -2,16 +2,32 @@ package model
 
 import "encoding/json"
 
-// DeployTemplate 部署模板：shell 正文 + 变量声明。
+// DeployTemplate 部署模板：shell 正文 + 变量声明 + 分类/前置依赖。
 type DeployTemplate struct {
 	ID          int64           `json:"id"`
 	Name        string          `json:"name"`
 	Description string          `json:"description"`
+	Category    string          `json:"category"` // 功能分类：系统/工具/中间件/…（内置/自定义另有 is_builtin 徽标，二者并存）
 	Script      string          `json:"script"`
 	Variables   json.RawMessage `json:"variables"` // [{name,label,default,required}]
+	Services    json.RawMessage `json:"services"`  // [{name,url,web}]
+	Requires    json.RawMessage `json:"requires"`  // [{check,hint}] 前置依赖检查，运行前逐条检查
 	IsBuiltin   bool            `json:"is_builtin"`
 	CreatedAt   string          `json:"created_at"`
 	UpdatedAt   string          `json:"updated_at"`
+}
+
+// TemplateService 模板声明的服务；url 支持 {{ip}} 与 {{变量名}} 占位符，安装成功登记时替换。
+type TemplateService struct {
+	Name string `json:"name"`
+	URL  string `json:"url"` // 占位符模板，如 http://{{ip}}:{{port}}
+	Web  bool   `json:"web"` // true 提供"打开"按钮
+}
+
+// TemplateDependency 模板前置依赖检查：在目标主机执行 check，非 0 则阻断并提示 hint。
+type TemplateDependency struct {
+	Check string `json:"check"` // 在目标主机 $SHELL 下执行的单行判断，如 command -v docker
+	Hint  string `json:"hint"`  // 不满足时的提示文案
 }
 
 // DeployTask 一次批量部署任务。

@@ -114,6 +114,8 @@ func (h *orchHandler) executeRun(orchID, runID int64) {
 			interval = 30
 		}
 		var lastOut, lastErr string
+		// stepParams 需在重试循环外合并一次，供成功后登记服务复用之。
+		var stepParams map[string]string
 
 		for a := 1; a <= attempts; a++ {
 			_ = h.repo.UpdateRunStepStatus(cell.RecID, "running", a, "", "")
@@ -125,8 +127,8 @@ func (h *orchHandler) executeRun(orchID, runID int64) {
 				lastErr = "模板不存在或已删除"
 				break
 			}
-			// 变量合并：模板默认 < 主机覆盖
-			stepParams := map[string]string{}
+			// 变量合并：模板默认 < 主机覆盖（重试时沿用首次结果）
+			stepParams = map[string]string{}
 			_ = json.Unmarshal([]byte(def.ParamsJSON), &stepParams)
 			if stepParams == nil {
 				stepParams = map[string]string{}
@@ -146,6 +148,13 @@ func (h *orchHandler) executeRun(orchID, runID int64) {
 			hr := store.HostRecord{DeployTaskHost: model.DeployTaskHost{
 				HostID: cell.HostID, HostName: cell.HostName, HostIP: cell.HostIP}}
 			rendered = applyHostVars(rendered, cell.Seq, hr)
+
+			// 前置依赖检查：不满足则阻断该主机本步，不执行脚本（重试无意义，直接退出重试循环）
+			if hint := checkRequires(h.hostRepo, h.credRepo, h.cryptoS, h.sshC, cell.HostID, templateRequires(tpl)); hint != "" {
+				lastErr = "前置依赖不满足：" + hint
+				appendLog(cell.HostID, cell.Seq, cell.HostIP, "依赖检查未通过："+hint)
+				break
+			}
 
 			onLog := func(chunk string) {
 				if chunk == "" {
@@ -193,6 +202,9 @@ func (h *orchHandler) executeRun(orchID, runID int64) {
 			}
 			if err := h.tplRepo.MarkHostInstalled(cell.HostID, def.TemplateID, tname, runID); err != nil {
 				fmt.Printf("orchestration: 标记安装失败 host=%d: %v\n", cell.HostID, err)
+			}
+			if err := registerTemplateServices(h.tplRepo, cell.HostID, cell.HostIP, def.TemplateID, stepParams); err != nil {
+				fmt.Printf("orchestration: 登记服务失败 host=%d: %v\n", cell.HostID, err)
 			}
 		} else {
 			appendLog(cell.HostID, cell.Seq, cell.HostIP, "执行失败："+lastErr)

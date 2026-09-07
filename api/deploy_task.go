@@ -58,10 +58,10 @@ func NewDeployHandler(tplRepo *store.DeployRepo, schedRepo *store.DeploySchedule
 }
 
 type runReq struct {
-	TemplateID int64                        `json:"template_id" binding:"required"`
-	HostIDs    []int64                      `json:"host_ids" binding:"required,min=1"`
-	Params     map[string]string            `json:"params"`      // 任务级默认变量
-	HostParams map[int64]map[string]string  `json:"host_params"` // 主机级变量覆盖 host_id -> {k:v}
+	TemplateID int64                       `json:"template_id" binding:"required"`
+	HostIDs    []int64                     `json:"host_ids" binding:"required,min=1"`
+	Params     map[string]string           `json:"params"`      // 任务级默认变量
+	HostParams map[int64]map[string]string `json:"host_params"` // 主机级变量覆盖 host_id -> {k:v}
 }
 
 // deployProgress SSE 推送的进度事件。
@@ -288,6 +288,11 @@ func (h *deployHandler) execute(taskID int64) {
 			if err := h.tplRepo.MarkHostInstalled(rec.HostID, task.TemplateID, task.TemplateName, taskID); err != nil {
 				log.Printf("deploy: 标记安装记录失败 host=%d: %v", rec.HostID, err)
 			}
+			vars := map[string]string{}
+			_ = json.Unmarshal([]byte(rec.ParamsJSON), &vars)
+			if err := registerTemplateServices(h.tplRepo, rec.HostID, rec.HostIP, task.TemplateID, vars); err != nil {
+				log.Printf("deploy: 登记服务失败 host=%d: %v", rec.HostID, err)
+			}
 		}
 		_ = h.tplRepo.UpdateHostStatus(rec.RecID, status, output, errMsg)
 		if h.bus != nil {
@@ -341,6 +346,11 @@ func (h *deployHandler) execute(taskID int64) {
 			}
 			rendered = applyHostVars(rendered, seq, rec)
 
+			// 前置依赖检查：不满足则该主机直接失败，不执行主脚本
+			if hint := checkRequires(h.hostRepo, h.credRepo, h.cryptoS, h.sshC, rec.HostID, templateRequires(tpl)); hint != "" {
+				publish(rec, "failed", "", "前置依赖不满足："+hint)
+				return
+			}
 			output, execErr := h.execOnHost(rec.HostID, rendered, onLog)
 			status, errMsg := "success", ""
 			if execErr != nil {
@@ -376,6 +386,35 @@ func (h *deployHandler) execute(taskID int64) {
 // execOnHost 解密凭据→SSH 拨号→执行渲染后脚本；onLog 在执行过程中接收增量输出。
 func (h *deployHandler) execOnHost(hostID int64, script string, onLog func(string)) (string, error) {
 	return execHostWith(h.hostRepo, h.credRepo, h.cryptoS, h.sshC, hostID, script, onLog)
+}
+
+// templateRequires 解析模板前置依赖声明。
+func templateRequires(t *model.DeployTemplate) []model.TemplateDependency {
+	if t == nil || len(t.Requires) == 0 {
+		return nil
+	}
+	var deps []model.TemplateDependency
+	if err := json.Unmarshal(t.Requires, &deps); err != nil {
+		return nil
+	}
+	return deps
+}
+
+// checkRequires 对单主机逐条执行前置依赖检查；全部通过返回空串，否则返回阻断提示。
+func checkRequires(hostRepo *store.HostRepo, credRepo *store.CredentialRepo, cryptoS *icrypto.Service,
+	sshC *sshx.Client, hostID int64, reqs []model.TemplateDependency) string {
+	for _, d := range reqs {
+		if strings.TrimSpace(d.Check) == "" {
+			continue
+		}
+		if _, err := execHostWith(hostRepo, credRepo, cryptoS, sshC, hostID, d.Check, nil); err != nil {
+			if d.Hint != "" {
+				return d.Hint
+			}
+			return "依赖检查未通过：" + d.Check
+		}
+	}
+	return ""
 }
 
 // execHostWith 部署与编排共用的单主机执行：解密凭据→SSH 拨号→运行脚本。

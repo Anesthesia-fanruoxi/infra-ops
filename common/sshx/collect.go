@@ -96,11 +96,6 @@ func Collect(client *ssh.Client) (*CollectResult, error) {
 	}, nil
 }
 
-// RunSingle 在 SSH 连接上执行单条命令。
-func RunSingle(client *ssh.Client, cmd string) (string, error) {
-	return runCmd(client, cmd)
-}
-
 func runCmd(client *ssh.Client, cmd string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()

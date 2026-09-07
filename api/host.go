@@ -45,6 +45,9 @@ func NewHostHandler(deps HostDeps) *hostHandler {
 	}
 }
 
+// TplRepo 暴露部署模板仓库，供路由层复用同一实例。
+func (h *hostHandler) TplRepo() *store.DeployRepo { return h.tplRepo }
+
 type hostCreateReq struct {
 	Name         string `json:"name"` // 可选；缺省用 IP 作为初始名（巡检后会自动跟随系统主机名）
 	IP           string `json:"ip" binding:"required"`

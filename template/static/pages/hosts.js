@@ -86,6 +86,17 @@ window.HostsPage = {
     <div class="detail-section"><h4>基本信息</h4><div class="detail-grid"><div class="detail-item"><div class="label">IP</div><div class="value mono">{{detail.ip}}</div></div><div class="detail-item"><div class="label">端口</div><div class="value mono">{{detail.port}}</div></div><div class="detail-item"><div class="label">标签</div><div class="value">{{detail.tag || '其他'}}</div></div><div class="detail-item"><div class="label">状态</div><div class="value"><span class="status-badge" :class="detail.status"><span class="dot"></span>{{statusText(detail.status)}}</span></div></div></div></div>
     <div class="detail-section" v-if="info(detail)"><h4>系统信息</h4><div class="detail-grid"><div class="detail-item"><div class="label">主机名</div><div class="value mono">{{info(detail).hostname||'-'}}</div></div><div class="detail-item"><div class="label">操作系统</div><div class="value">{{info(detail).os||'-'}}</div></div><div class="detail-item"><div class="label">内核</div><div class="value mono">{{info(detail).kernel||'-'}}</div></div><div class="detail-item"><div class="label">运行时长</div><div class="value mono">{{info(detail).uptime||'-'}}</div></div></div></div>
     <div class="detail-section" v-if="info(detail)"><h4>资源使用</h4><div class="detail-grid"><div class="detail-item"><div class="label">CPU</div><div class="value mono">{{info(detail).cpu_cores||'-'}} 核</div></div><div class="detail-item"><div class="label">内存</div><div class="metric"><div class="metric-bar" style="max-width:100%"><div class="fill" :class="memCls(detail)" :style="{width:memPct(detail)+'%'}"></div></div><span class="metric-value">{{memPct(detail)}}%</span></div></div><div class="detail-item" style="grid-column:span 2"><div class="label">磁盘</div><div class="metric"><div class="metric-bar" style="max-width:100%"><div class="fill" :class="diskCls(detail)" :style="{width:diskPct(detail)+'%'}"></div></div><span class="metric-value">{{diskPct(detail)}}%</span></div></div></div></div>
+    <div class="detail-section"><h4>已部署服务 <span v-if="services.length" style="color:var(--text-faint);font-size:11px;font-weight:400">（{{services.length}} 项）</span></h4>
+      <div v-if="servicesLoading" style="color:#94A3B8;font-size:12px">加载中…</div>
+      <div v-else-if="!services.length" style="color:#94A3B8;font-size:12px">该主机尚未登记任何服务</div>
+      <div v-else class="host-install-list">
+        <div v-for="svc in services" :key="svc.id" class="host-service-item">
+          <div class="host-service-main"><span class="service-avatar">⚡</span><div><div class="host-service-name">{{svc.service_name}}</div><div class="mono host-service-url">{{svc.url || '（无访问地址）'}}</div></div></div>
+          <el-button v-if="svc.web && svc.url" size="small" text type="primary" @click="openService(svc.url)">打开</el-button>
+          <span v-else-if="!svc.web" class="tag-badge other">无Web</span>
+        </div>
+      </div>
+    </div>
     <div class="detail-section"><h4>已执行安装 <span v-if="installs.length" style="color:var(--text-faint);font-size:11px;font-weight:400">（{{installs.length}} 项）</span></h4>
       <div v-if="installsLoading" style="color:#94A3B8;font-size:12px">加载中…</div>
       <div v-else-if="!installs.length" style="color:#94A3B8;font-size:12px">该主机尚未通过部署中心执行过安装</div>
@@ -140,7 +151,7 @@ window.HostsPage = {
   </el-dialog>
 </div>`,
   data() {
-    return { list: [], loading: false, pg: 1, total: 0, filter: { tag: '', status: '', name: '', ip: '' }, sort: JSON.parse(localStorage.getItem('hosts-sort') || '{"field":"name","order":"asc"}'), viewMode: localStorage.getItem('hosts-view-mode') || 'table', drawer: false, detail: null, installs: [], installsLoading: false, dialog: false, form: {}, creds: [], credLoading: false, credsLoaded: false, saving: false, eventSource: null, batchDialog: false, batchForm: { credential_id: null, ips: '', port: 22, tag: 'other', remark: '', auto_test: true }, batchSubmitting: false, batchTimer: null, preview: { count: 0, dup: 0, err: '' }, result: { show: false, created: 0, failed: 0, skipped: 0, results: [] } }
+    return { list: [], loading: false, pg: 1, total: 0, filter: { tag: '', status: '', name: '', ip: '' }, sort: JSON.parse(localStorage.getItem('hosts-sort') || '{"field":"name","order":"asc"}'), viewMode: localStorage.getItem('hosts-view-mode') || 'table', drawer: false, detail: null, installs: [], installsLoading: false, services: [], servicesLoading: false, dialog: false, form: {}, creds: [], credLoading: false, credsLoaded: false, saving: false, eventSource: null, batchDialog: false, batchForm: { credential_id: null, ips: '', port: 22, tag: 'other', remark: '', auto_test: true }, batchSubmitting: false, batchTimer: null, preview: { count: 0, dup: 0, err: '' }, result: { show: false, created: 0, failed: 0, skipped: 0, results: [] } }
   },
   mounted() { this.connectSSE() },
   beforeUnmount() { if (this.eventSource) this.eventSource.close() },
@@ -295,7 +306,10 @@ window.HostsPage = {
       this.detail = row; this.drawer = true
       this.installs = []; this.installsLoading = true
       api.get('/hosts/' + row.id + '/installs').then(r => { this.installs = r.data || [] }).catch(() => {}).finally(() => { this.installsLoading = false })
+      this.services = []; this.servicesLoading = true
+      api.get('/hosts/' + row.id + '/services').then(r => { this.services = r.data || [] }).catch(() => {}).finally(() => { this.servicesLoading = false })
     },
+    openService(url) { if (url) window.open(url, '_blank', 'noopener') },
     openForm(row) { this.form = row ? {...row} : { name:'', ip:'', port:22, tag:'other', credential_id:null, remark:'' }; this.dialog = true },
     async save() {
       this.saving = true

@@ -256,10 +256,49 @@ a { text-decoration: none; }
 .panel-icon { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 34px; width: 34px; height: 34px; border-radius: 11px; font-size: 18px; font-weight: 700; }
 .panel-icon-host { color: var(--brand); background: var(--brand-soft); }
 .panel-icon-audit { color: var(--purple); background: var(--purple-soft); }
+.panel-icon-service { color: var(--ok); background: var(--ok-soft); }
 .overview-card-header .title { display: block; font-size: 15px; }
 .overview-card-header .section-hint { display: block; margin: 4px 0 0; }
 .count-badge { display: inline-flex; vertical-align: 2px; align-items: center; height: 19px; margin-left: 5px; padding: 0 7px; border-radius: 99px; color: var(--brand); background: var(--brand-soft); font-size: 10px; font-weight: 600; }
 .button-arrow { display: inline-block; margin-left: 3px; transition: transform .15s ease; }
+.overview-services-card { margin-top: 20px; }
+.service-cell { display: flex; align-items: center; gap: 10px; }
+.service-avatar { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 28px; width: 28px; height: 28px; border-radius: 9px; font-size: 14px; color: var(--ok); background: var(--ok-soft); }
+.service-url { color: var(--text-sub); font-size: 12px; }
+/* 模板卡片视图 */
+.tpl-toolbar { display: flex; align-items: center; gap: 12px; }
+.tpl-view-switch { display: inline-flex; padding: 2px; border-radius: 9px; background: var(--bg-faint); }
+.tpl-view-switch .view-btn { border: none; background: transparent; padding: 5px 14px; border-radius: 7px; font-size: 12.5px; color: var(--text-sub); cursor: pointer; transition: all .15s ease; }
+.tpl-view-switch .view-btn.active { background: #fff; color: var(--brand); box-shadow: 0 1px 3px rgba(15,23,42,.08); font-weight: 600; }
+.tpl-filterbar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 12px 0 16px; }
+.tpl-filter-label { font-size: 12px; color: var(--text-faint); margin-right: 4px; }
+.tpl-filter-tab { border: none; background: transparent; padding: 5px 13px; border-radius: 16px; font-size: 12.5px; color: var(--text-sub); cursor: pointer; transition: all .15s ease; }
+.tpl-filter-tab:hover { color: var(--brand); background: var(--brand-soft); }
+.tpl-filter-tab.active { color: #fff; background: var(--brand); font-weight: 600; }
+.tpl-cat-group { margin-bottom: 22px; }
+.tpl-cat-title { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 700; color: var(--text-main); margin-bottom: 12px; }
+.tpl-cat-icon { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; border-radius: 8px; font-size: 14px; background: var(--bg-faint); }
+.tpl-cat-count { font-size: 11px; font-weight: 500; color: var(--text-faint); background: var(--bg-faint); padding: 1px 8px; border-radius: 10px; }
+.tpl-card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; }
+.tpl-card { display: flex; flex-direction: column; gap: 10px; padding: 16px; border-radius: 14px; background: #fff; border: 1px solid var(--border); transition: all .18s ease; }
+.tpl-card:hover { border-color: var(--brand); box-shadow: 0 8px 24px rgba(15,23,42,.06); transform: translateY(-2px); }
+.tpl-card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.tpl-card-name { font-size: 14px; font-weight: 700; color: var(--text-main); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tpl-card-badges { display: flex; gap: 6px; flex-shrink: 0; }
+.tpl-badge { font-size: 11px; padding: 2px 8px; border-radius: 10px; font-weight: 600; }
+.tpl-badge.builtin { color: var(--brand); background: var(--brand-soft); }
+.tpl-badge.custom { color: var(--purple); background: var(--purple-soft); }
+.tpl-card-desc { font-size: 12.5px; color: var(--text-sub); line-height: 1.6; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; min-height: 40px; }
+.tpl-card-meta { display: flex; gap: 8px; flex-wrap: wrap; }
+.tpl-meta-chip { font-size: 11px; color: var(--text-sub); padding: 3px 8px; border-radius: 8px; background: var(--bg-faint); }
+.tpl-meta-chip.dep { color: #b45309; background: #fef3c7; }
+.tpl-meta-chip.svc { color: var(--ok); background: var(--ok-soft); }
+.tpl-card-ops { display: flex; align-items: center; gap: 2px; padding-top: 8px; border-top: 1px solid var(--border); margin-top: auto; }
+.tpl-cat-badge { display: inline-block; font-size: 11px; padding: 2px 9px; border-radius: 10px; color: var(--brand); background: var(--brand-soft); }
+.tpl-field-hint { margin-left: 10px; font-size: 11px; color: var(--text-faint); }
+.tpl-dep-actions { display: flex; align-items: center; gap: 10px; margin-top: 6px; }
+.tpl-dep-hint { font-size: 11px; color: var(--text-faint); }
+.tpl-view-switch .view-btn:focus { outline: none; }
 .overview-card-header .el-button:hover .button-arrow { transform: translateX(3px); }
 .overview-host-table { border-radius: 10px; overflow: hidden; }
 .overview-host-table .el-table__inner-wrapper::before { display: none; }
@@ -432,6 +471,10 @@ a { text-decoration: none; }
 .host-install-list { display: flex; flex-direction: column; gap: 8px; }
 .host-install-item { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 12px; border-radius: var(--radius-btn); background: var(--bg-faint); }
 .host-install-time { color: #94A3B8 !important; font-size: 11px; }
+.host-service-item { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; border-radius: var(--radius-btn); background: var(--bg-faint); }
+.host-service-main { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.host-service-name { font-size: 13px; font-weight: 600; color: var(--text-main); }
+.host-service-url { color: #94A3B8 !important; font-size: 11px; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px; }
 .form-tip { margin-top: 5px; color: #94a3b8; font-size: 11px; line-height: 1.5; }
 @media (max-width: 760px) {
   .hosts-intro { align-items: flex-start; flex-direction: column; gap: 16px; padding: 20px; }

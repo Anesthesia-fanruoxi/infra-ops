@@ -18,6 +18,7 @@ import (
 var (
 	varNameRe     = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
 	placeholderRe = regexp.MustCompile(`\{\{([a-zA-Z_][a-zA-Z0-9_]*)\}\}`)
+	safeCheckRe   = regexp.MustCompile(`^[^\r\n\x00]+$`)
 )
 
 type deployTemplateHandler struct {
@@ -32,8 +33,11 @@ func NewDeployTemplateHandler(tplRepo *store.DeployRepo, schedRepo *store.Deploy
 type templateReq struct {
 	Name        string          `json:"name" binding:"required"`
 	Description string          `json:"description"`
+	Category    string          `json:"category"`
 	Script      string          `json:"script" binding:"required"`
 	Variables   json.RawMessage `json:"variables"`
+	Services    json.RawMessage `json:"services"`
+	Requires    json.RawMessage `json:"requires"`
 }
 
 // tplVar 模板变量声明。
@@ -64,8 +68,9 @@ func (h *deployTemplateHandler) Create(c *gin.Context) {
 		return
 	}
 	t := &model.DeployTemplate{
-		Name: req.Name, Description: req.Description,
+		Name: req.Name, Description: req.Description, Category: req.Category,
 		Script: req.Script, Variables: mustMarshal(vars),
+		Services: req.Services, Requires: req.Requires,
 	}
 	id, err := h.tplRepo.CreateTemplate(t)
 	if err != nil {
@@ -93,8 +98,11 @@ func (h *deployTemplateHandler) Update(c *gin.Context) {
 	}
 	existing.Name = req.Name
 	existing.Description = req.Description
+	existing.Category = req.Category
 	existing.Script = req.Script
 	existing.Variables = mustMarshal(vars)
+	existing.Services = req.Services
+	existing.Requires = req.Requires
 	if err := h.tplRepo.UpdateTemplate(existing); err != nil {
 		resp.ErrHTTP(c, 500, resp.CodeInternal, "更新失败")
 		return
@@ -138,11 +146,35 @@ func (h *deployTemplateHandler) bindAndValidate(c *gin.Context) (*templateReq, [
 		resp.Fail(c, resp.CodeBadRequest, err.Error())
 		return nil, nil, false
 	}
+	if err := validateRequires(req.Requires); err != nil {
+		resp.Fail(c, resp.CodeBadRequest, err.Error())
+		return nil, nil, false
+	}
 	if err := validatePlaceholders(req.Script, vars); err != nil {
 		resp.Fail(c, resp.CodeBadRequest, err.Error())
 		return nil, nil, false
 	}
 	return &req, vars, true
+}
+
+// validateRequires 校验前置依赖声明表：check 必填且为单行。
+func validateRequires(raw json.RawMessage) error {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil
+	}
+	var deps []model.TemplateDependency
+	if err := json.Unmarshal(raw, &deps); err != nil {
+		return fmt.Errorf("requires 格式错误")
+	}
+	for i, d := range deps {
+		if strings.TrimSpace(d.Check) == "" {
+			return fmt.Errorf("第 %d 条依赖检查缺少 check 命令", i+1)
+		}
+		if !safeCheckRe.MatchString(d.Check) {
+			return fmt.Errorf("第 %d 条依赖检查的 check 必须为单行命令", i+1)
+		}
+	}
+	return nil
 }
 
 // parseVariables 解析并校验变量声明表。

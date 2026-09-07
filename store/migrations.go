@@ -22,6 +22,62 @@ var migrations = []migration{
 	{12, migrateV12},
 	{13, migrateV13},
 	{14, migrateV14},
+	{15, migrateV15},
+}
+
+// migrateV15 服务清单与模板扩展：deploy_templates 增 services/category/requires；新增 host_services。
+// 服务由模板声明、主机安装成功后自动登记，web=true 可前端一键打开。
+func migrateV15(db *sql.DB) error {
+	if err := addColumnIfMissing(db, "deploy_templates", "services", `TEXT NOT NULL DEFAULT '[]'`); err != nil {
+		return err
+	}
+	if err := addColumnIfMissing(db, "deploy_templates", "category", `TEXT NOT NULL DEFAULT ''`); err != nil {
+		return err
+	}
+	if err := addColumnIfMissing(db, "deploy_templates", "requires", `TEXT NOT NULL DEFAULT '[]'`); err != nil {
+		return err
+	}
+	stmts := []string{
+		`CREATE TABLE IF NOT EXISTS host_services (
+			id          INTEGER PRIMARY KEY AUTOINCREMENT,
+			host_id     INTEGER NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+			host_ip     TEXT NOT NULL DEFAULT '',
+			service_name TEXT NOT NULL,
+			url         TEXT NOT NULL DEFAULT '',
+			web         INTEGER NOT NULL DEFAULT 0,
+			template_id INTEGER NOT NULL DEFAULT 0,
+			created_at  TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+			updated_at  TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+			UNIQUE(host_id, service_name)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_host_services_host ON host_services(host_id)`,
+	}
+	for _, s := range stmts {
+		if _, err := db.Exec(s); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// addColumnIfMissing 幂等为表新增一列（SQLite 无 IF NOT EXISTS for column）。
+func addColumnIfMissing(db *sql.DB, table, col, ddl string) error {
+	rows, err := db.Query(`SELECT COUNT(*) FROM pragma_table_info(?) WHERE name=?`, table, col)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	var n int
+	if rows.Next() {
+		if err := rows.Scan(&n); err != nil {
+			return err
+		}
+	}
+	if n == 0 {
+		_, err = db.Exec(`ALTER TABLE ` + table + ` ADD COLUMN ` + col + ` ` + ddl)
+		return err
+	}
+	return nil
 }
 
 // migrateV14 运行日志表：按步骤落库，供详情流快照重放；run 删除时级联清理。

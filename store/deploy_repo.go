@@ -2,6 +2,7 @@
 package store
 
 import (
+	"bytes"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -14,7 +15,7 @@ type DeployRepo struct{}
 
 func NewDeployRepo() *DeployRepo { return &DeployRepo{} }
 
-const tplCols = "id,name,description,script,variables,is_builtin,created_at,updated_at"
+const tplCols = "id,name,description,category,script,variables,services,requires,is_builtin,created_at,updated_at"
 
 // ListTemplates 全量模板列表（数量小，不分页）。
 func (r *DeployRepo) ListTemplates() ([]model.DeployTemplate, error) {
@@ -41,8 +42,11 @@ type tplRow struct {
 	ID          int64
 	Name        string
 	Description string
+	Category    string
 	Script      string
 	Variables   string
+	Services    string
+	Requires    string
 	IsBuiltin   bool
 	CreatedAt   string
 	UpdatedAt   string
@@ -50,23 +54,23 @@ type tplRow struct {
 
 func (r tplRow) toModel() *model.DeployTemplate {
 	return &model.DeployTemplate{
-		ID: r.ID, Name: r.Name, Description: r.Description,
-		Script: r.Script, Variables: json.RawMessage(r.Variables),
-		IsBuiltin: r.IsBuiltin, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
+		ID: r.ID, Name: r.Name, Description: r.Description, Category: r.Category,
+		Script: r.Script, Variables: json.RawMessage(r.Variables), Services: json.RawMessage(r.Services),
+		Requires: json.RawMessage(r.Requires), IsBuiltin: r.IsBuiltin, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
 	}
 }
 
 func scanTplRow(rows *sql.Rows, r *tplRow) error {
-	return rows.Scan(&r.ID, &r.Name, &r.Description, &r.Script, &r.Variables,
-		&r.IsBuiltin, &r.CreatedAt, &r.UpdatedAt)
+	return rows.Scan(&r.ID, &r.Name, &r.Description, &r.Category, &r.Script, &r.Variables,
+		&r.Services, &r.Requires, &r.IsBuiltin, &r.CreatedAt, &r.UpdatedAt)
 }
 
 // GetTemplate 按 ID 取模板。
 func (r *DeployRepo) GetTemplate(id int64) (*model.DeployTemplate, error) {
 	row := tplRow{}
 	err := DB.QueryRow("SELECT "+tplCols+" FROM deploy_templates WHERE id=?", id).
-		Scan(&row.ID, &row.Name, &row.Description, &row.Script, &row.Variables,
-			&row.IsBuiltin, &row.CreatedAt, &row.UpdatedAt)
+		Scan(&row.ID, &row.Name, &row.Description, &row.Category, &row.Script, &row.Variables,
+			&row.Services, &row.Requires, &row.IsBuiltin, &row.CreatedAt, &row.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -76,11 +80,20 @@ func (r *DeployRepo) GetTemplate(id int64) (*model.DeployTemplate, error) {
 	return row.toModel(), nil
 }
 
+// normalizeJSON 任意 JSON 字段空值兜底为 '[]'：NULL/空字符串会破坏 NOT NULL 约束或 json.RawMessage 序列化。
+func normalizeJSON(s json.RawMessage) string {
+	if len(bytes.TrimSpace(s)) == 0 {
+		return "[]"
+	}
+	return string(s)
+}
+
 // CreateTemplate 新建模板。
 func (r *DeployRepo) CreateTemplate(t *model.DeployTemplate) (int64, error) {
 	res, err := DB.Exec(
-		`INSERT INTO deploy_templates(name,description,script,variables,is_builtin) VALUES(?,?,?,?,0)`,
-		t.Name, t.Description, t.Script, string(t.Variables),
+		`INSERT INTO deploy_templates(name,description,category,script,variables,services,requires,is_builtin) VALUES(?,?,?,?,?,?,?,0)`,
+		t.Name, t.Description, t.Category, t.Script, string(t.Variables),
+		normalizeJSON(t.Services), normalizeJSON(t.Requires),
 	)
 	if err != nil {
 		return 0, fmt.Errorf("create template: %w", err)
@@ -91,9 +104,10 @@ func (r *DeployRepo) CreateTemplate(t *model.DeployTemplate) (int64, error) {
 // UpdateTemplate 更新模板内容（内置模板仅允许改描述以外的场景由上层限制）。
 func (r *DeployRepo) UpdateTemplate(t *model.DeployTemplate) error {
 	_, err := DB.Exec(
-		`UPDATE deploy_templates SET name=?, description=?, script=?, variables=?,
+		`UPDATE deploy_templates SET name=?, description=?, category=?, script=?, variables=?, services=?, requires=?,
 		updated_at=datetime('now','localtime') WHERE id=?`,
-		t.Name, t.Description, t.Script, string(t.Variables), t.ID,
+		t.Name, t.Description, t.Category, t.Script, string(t.Variables),
+		normalizeJSON(t.Services), normalizeJSON(t.Requires), t.ID,
 	)
 	return err
 }
@@ -227,6 +241,71 @@ func (r *DeployRepo) HostInstalls(hostID int64) ([]model.HostInstall, error) {
 	return items, rows.Err()
 }
 
+// UpsertHostService 按 host_id+service_name 登记/刷新一条服务。
+func (r *DeployRepo) UpsertHostService(svc *model.HostService) error {
+	_, err := DB.Exec(
+		`INSERT INTO host_services(host_id,host_ip,service_name,url,web,template_id) VALUES(?,?,?,?,?,?)
+		ON CONFLICT(host_id,service_name) DO UPDATE SET
+			host_ip=excluded.host_ip, url=excluded.url, web=excluded.web,
+			template_id=excluded.template_id, updated_at=datetime('now','localtime')`,
+		svc.HostID, svc.HostIP, svc.ServiceName, svc.URL, svc.Web, svc.TemplateID,
+	)
+	if err != nil {
+		return fmt.Errorf("upsert host service: %w", err)
+	}
+	return nil
+}
+
+// ListServices 全量服务清单，联表填充主机名与 IP，供总览聚合。
+func (r *DeployRepo) ListServices() ([]model.HostService, error) {
+	rows, err := DB.Query(
+		`SELECT s.id,s.host_id,s.host_ip,s.service_name,s.url,s.web,s.template_id,s.updated_at,
+			COALESCE(h.name,'')
+		FROM host_services s LEFT JOIN hosts h ON h.id=s.host_id
+		ORDER BY s.updated_at DESC, s.host_id, s.id`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var items []model.HostService
+	for rows.Next() {
+		var it model.HostService
+		var web int
+		if err := rows.Scan(&it.ID, &it.HostID, &it.HostIP, &it.ServiceName, &it.URL, &web, &it.TemplateID, &it.UpdatedAt, &it.HostName); err != nil {
+			return nil, err
+		}
+		it.Web = web == 1
+		items = append(items, it)
+	}
+	return items, rows.Err()
+}
+
+// HostServices 单台主机的服务清单。
+func (r *DeployRepo) HostServices(hostID int64) ([]model.HostService, error) {
+	rows, err := DB.Query(
+		`SELECT id,host_id,host_ip,service_name,url,web,template_id,updated_at
+		FROM host_services WHERE host_id=? ORDER BY web DESC, updated_at DESC, id`, hostID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var items []model.HostService
+	for rows.Next() {
+		var it model.HostService
+		var web int
+		if err := rows.Scan(&it.ID, &it.HostID, &it.HostIP, &it.ServiceName, &it.URL, &web, &it.TemplateID, &it.UpdatedAt); err != nil {
+			return nil, err
+		}
+		it.Web = web == 1
+		items = append(items, it)
+	}
+	return items, rows.Err()
+}
+
 // FinishTask 汇总成败计数并落任务终态。
 func (r *DeployRepo) FinishTask(taskID int64) (string, error) {
 	var successCnt, failCnt, total int
@@ -294,8 +373,4 @@ func (r *DeployRepo) GetTask(id int64) (*model.DeployTask, error) {
 		return nil, nil
 	}
 	return t, err
-}
-
-func scanTemplate(rows *sql.Rows, t *model.DeployTemplate) error {
-	return rows.Scan(&t.ID, &t.Name, &t.Description, &t.Script, &t.Variables, &t.IsBuiltin, &t.CreatedAt, &t.UpdatedAt)
 }

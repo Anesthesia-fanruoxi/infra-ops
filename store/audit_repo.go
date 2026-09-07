@@ -115,22 +115,6 @@ func (r *AuditRepo) Recent(limit int) ([]model.AuditLog, error) {
 	return scanAuditRows(rows)
 }
 
-// GetLatestByAction 获取最新一条指定 action 的日志（用于取 lastCheckAt 等）。
-func (r *AuditRepo) GetLatestByAction(action string) (*model.AuditLog, error) {
-	a := &model.AuditLog{}
-	err := DB.QueryRow(
-		"SELECT "+auditCols+" FROM audit_logs WHERE action=? ORDER BY id DESC LIMIT 1",
-		action,
-	).Scan(&a.ID, &a.Action, &a.TargetType, &a.TargetID, &a.Detail, &a.RemoteIP, &a.CreatedAt)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	return a, nil
-}
-
 // buildAuditWhere 拼接查询条件；失败判定用 substr(action,-5)='_fail' 精确匹配后缀。
 func buildAuditWhere(q AuditQuery) (string, []interface{}) {
 	var conds []string
