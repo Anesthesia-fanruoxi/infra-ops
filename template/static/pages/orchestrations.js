@@ -59,17 +59,17 @@ window.OrchestrationsPage = {
       <el-table-column label="操作" width="200" fixed="right">
         <template #default="{row}">
           <template v-if="row.state==='not_started'">
-            <el-button size="small" type="primary" @click="startRun(row)">运行</el-button>
-            <el-button size="small" @click="openEditor(row)">编辑</el-button>
-            <el-button size="small" type="danger" text @click="removeOrch(row)">删除</el-button>
+            <el-button size="small" type="primary" @click.stop="startRun(row)">运行</el-button>
+            <el-button size="small" @click.stop="openEditor(row)">编辑</el-button>
+            <el-button size="small" type="danger" text @click.stop="removeOrch(row)">删除</el-button>
           </template>
           <template v-else-if="row.state==='running'">
-            <el-button size="small" type="primary" @click="openRunDrawer(row.last_run_id)">进度</el-button>
-            <el-button size="small" type="danger" text @click="removeOrch(row)">删除</el-button>
+            <el-button size="small" type="primary" @click.stop="openRunDrawer(row.last_run_id)">进度</el-button>
+            <el-button size="small" type="danger" text @click.stop="removeOrch(row)">删除</el-button>
           </template>
           <template v-else>
-            <el-button size="small" @click="openRunDrawer(row.last_run_id)">详情</el-button>
-            <el-button size="small" type="danger" text @click="removeOrch(row)">删除</el-button>
+            <el-button size="small" @click.stop="openRunDrawer(row.last_run_id)">详情</el-button>
+            <el-button size="small" type="danger" text @click.stop="removeOrch(row)">删除</el-button>
           </template>
         </template>
       </el-table-column>
@@ -92,8 +92,14 @@ window.OrchestrationsPage = {
   </el-dialog>
 
   <!-- 编辑任务：大弹框 + 流水线 -->
-  <el-dialog v-model="editorVisible" :title="'任务：' + form.name" width="85%" top="10vh" class="orch-editor-dialog"
+  <el-dialog v-model="editorVisible" width="85%" top="10vh" class="orch-editor-dialog"
     :close-on-click-modal="false" @open="onEditorOpen">
+    <template #header>
+      <div class="orch-ed-header">
+        <span class="orch-ed-title">任务：{{form.name}}</span>
+        <span v-if="invalidReason" class="orch-ed-warn"><el-icon><WarningFilled /></el-icon>{{invalidReason}}</span>
+      </div>
+    </template>
     <el-form label-position="top">
       <div class="form-grid">
         <el-form-item label="任务名称" required><el-input v-model="form.name" placeholder="如：新机初始化" style="max-width:360px" /></el-form-item>
@@ -101,128 +107,143 @@ window.OrchestrationsPage = {
       </div>
     </el-form>
 
-    <!-- 流水线 -->
-    <div class="pipe-wrap">
-      <div class="pipe-flow">
-        <div v-for="(s,i) in form.steps" :key="s.uid" class="pipe-node"
-          :class="{active: editIdx===i, dragging: dragIdx===i, 'drag-over': dragOver===i && dragIdx!==i}"
-          draggable="true"
-          @dragstart="onDragStart(i,$event)" @dragover.prevent="dragOver=i"
-          @dragleave="dragOver=null" @dragend="onDragEnd" @drop.prevent="onDropTo(i)"
-          @click="openDrawer(i)">
-          <span class="pipe-seq">{{i+1}}</span>
-          <div class="pipe-info">
-            <b>{{s.template_name}}</b>
-            <small>{{(s.hostIds||[]).length}} 台主机<template v-if="hostVarTotal(s)"> · {{hostVarTotal(s)}} 台覆盖变量</template></small>
-          </div>
-          <span class="pipe-tools" title="拖动节点调整顺序" @click.stop>
-            <el-icon class="pipe-tool pipe-tool-danger" title="移除本步骤" @click="removeStep(i)"><Close /></el-icon>
-          </span>
+    <!-- 步骤 + 配置 双栏 -->
+    <div class="orch-ed-grid">
+      <!-- 左：步骤列表 -->
+      <div class="orch-ed-left">
+        <div class="orch-ed-left-head">
+          <el-button type="primary" size="small" @click="addClick"><el-icon style="margin-right:4px"><Plus /></el-icon>添加步骤</el-button>
+          <span class="deploy-sel-count">共 {{form.steps.length}} 步 · 自上而下执行</span>
         </div>
-        <div class="pipe-add" @click="addClick">
-          <el-icon><Plus /></el-icon><span>添加步骤</span>
+        <div class="orch-step-list">
+          <div v-for="(s,i) in form.steps" :key="s.uid" class="orch-step-item"
+            :class="{active: editIdx===i, dragging: dragIdx===i, 'drag-over': dragOver===i && dragIdx!==i}"
+            draggable="true"
+            @dragstart="onDragStart(i,$event)" @dragover.prevent="dragOver=i"
+            @dragleave="dragOver=null" @dragend="onDragEnd" @drop.prevent="onDropTo(i)"
+            @click="editIdx=i">
+            <el-icon class="orch-step-grip" title="拖动排序"><Rank /></el-icon>
+            <span class="add-step-seq">{{i+1}}</span>
+            <div class="orch-step-item-info">
+              <b :title="s.template_name">{{s.template_name}}</b>
+              <small>{{(s.hostIds||[]).length}} 台主机<template v-if="hostVarTotal(s)"> · {{hostVarTotal(s)}} 台覆盖变量</template></small>
+            </div>
+            <span class="orch-step-item-tools" @click.stop>
+              <el-icon class="orch-step-item-del" title="移除" @click="removeStep(i)"><Close /></el-icon>
+            </span>
+          </div>
+          <div v-if="!form.steps.length" class="deploy-placeholder">点击上方「添加步骤」，勾选模板（可多选）创建步骤</div>
         </div>
       </div>
-      <div class="pipe-hint">点击节点在右侧抽屉中编辑该步骤的主机与变量；执行顺序从左到右</div>
+
+      <!-- 右：选中步骤的配置 -->
+      <div class="orch-ed-right">
+        <template v-if="editStep">
+          <div class="orch-ed-right-head">
+            <span class="add-step-seq">{{editIdx+1}}</span>
+            <b>{{editStep.template_name}}</b>
+            <span class="deploy-sel-count">已选 {{(editStep.hostIds||[]).length}} 台主机</span>
+          </div>
+
+          <div class="orch-unit-hosts">
+            <el-input v-model="editStep.hostFilter" placeholder="搜索主机名 / IP" clearable size="small" style="width:180px" />
+            <el-select v-model="editStep.tagFilter" multiple collapse-tags placeholder="按标签过滤" size="small"
+              style="width:200px" clearable>
+              <el-option v-for="tg in allTags" :key="tg" :label="tg" :value="tg" />
+            </el-select>
+            <el-button size="small" @click="toggleAllUnitHosts(editStep)">{{ unitAllSelected(editStep) ? '取消全选' : '全选' }}</el-button>
+          </div>
+          <div class="deploy-host-list deploy-host-list--unit" v-loading="hostLoading">
+            <label v-for="h in unitHosts(editStep)" :key="h.id" class="deploy-host-item"
+              :class="{'deploy-host-item--sel': (editStep.hostIds||[]).includes(h.id)}">
+              <el-checkbox :model-value="(editStep.hostIds||[]).includes(h.id)" @change="toggleUnitHost(editStep,h.id)" />
+              <span class="deploy-host-name">{{h.name}}</span>
+              <span class="mono deploy-host-ip">{{h.ip}}</span>
+              <span class="status-badge" :class="h.status"><span class="dot"></span>{{h.status==='online'?'在线':h.status==='offline'?'离线':'未验证'}}</span>
+            </label>
+            <div v-if="!unitHosts(editStep).length" class="deploy-placeholder">无匹配主机，请勾选本步骤要执行的主机</div>
+          </div>
+
+          <template v-if="tplVars(editStep.template_id).length && (editStep.hostIds||[]).length">
+            <div class="orch-ed-sec">
+              <div class="orch-ed-sec-title">变量 · 逐台填写
+                <el-button size="small" text type="primary" @click="copyFirstHostVars(editStep)">复制首台到其他</el-button>
+                <el-button size="small" text @click="clearHostVars(editStep)">清空覆盖</el-button>
+              </div>
+              <div class="orch-hostvars-rows">
+                <div class="orch-hostvar-row" v-for="hid in (editStep.hostIds||[])" :key="'hv'+hid">
+                  <div class="orch-hostvar-side">
+                    <span class="deploy-host-name">{{hostName(hid)}}</span>
+                    <span class="mono deploy-host-ip">{{hostIP(hid)}}</span>
+                    <span class="orch-hv-meta">
+                      <span v-if="hostVarCount(editStep,hid)" class="deploy-var-hint">覆盖{{hostVarCount(editStep,hid)}}项</span>
+                      <el-button size="small" text type="primary" @click="clearHostVar(editStep,hid)">重置</el-button>
+                    </span>
+                  </div>
+                  <div class="orch-step-params">
+                    <div class="orch-param" v-for="v in tplVars(editStep.template_id)" :key="'hv'+hid+v.name">
+                      <label>{{v.label || v.name}}<b v-if="v.required">*</b></label>
+                      <el-input size="small" :model-value="hostVarValue(editStep,hid,v)" @input="val => setHostVar(editStep,hid,v,val)"
+                        :placeholder="v.default ? ('默认: ' + v.default) : '必填'" />
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </template>
+
+          <div class="orch-ed-sec">
+            <div class="orch-ed-sec-title">失败策略</div>
+            <div class="orch-fail-row">
+              <el-checkbox v-model="editStep.continue_on_error">本步骤失败的仍继续参与后续步骤</el-checkbox>
+              <span class="orch-retry">重试
+                <el-input-number v-model="editStep.retry_count" size="small" :min="0" :max="5" controls-position="right" style="width:90px" /> 次 ·
+                间隔 <el-input-number v-model="editStep.retry_interval_sec" size="small" :min="5" :max="600" controls-position="right" style="width:110px" /> 秒
+              </span>
+            </div>
+          </div>
+        </template>
+        <div v-else class="orch-ed-empty">
+          <div class="deploy-placeholder">在左侧点击步骤，在右侧配置该步骤的主机与变量</div>
+        </div>
+      </div>
     </div>
+    <div class="deploy-sel-count" style="display:block;margin-top:10px">主机与变量配置即时生效；点击右下角「保存」才会写入数据库</div>
 
     <template #footer>
       <el-button @click="editorVisible=false">取消</el-button>
-      <span v-if="invalidReason" class="save-block-reason">{{invalidReason}}</span>
       <el-button type="primary" :disabled="!formValid" @click="saveOrch">保存</el-button>
     </template>
   </el-dialog>
 
-  <!-- 步骤编辑抽屉 -->
-  <el-drawer v-model="drawerVisible" :title="drawerTitle" size="50%" :close-on-click-modal="false">
-    <!-- 新增模式：选模板 -->
-    <div v-if="drawerMode==='add'" v-loading="templatesLoading">
-      <div class="drawer-tip">选择一个模板作为新步骤：</div>
-      <div class="tpl-pick-list">
-        <div v-for="t in templates" :key="t.id" class="tpl-pick-item" @click="pickTemplate(t)">
-          <div><b>{{t.name}}</b><div v-if="t.description" class="tpl-pick-desc">{{t.description}}</div></div>
+  <!-- 添加步骤：多选模板 -->
+  <el-dialog v-model="addTplVisible" title="添加步骤 · 选择模板" width="50%" top="12vh"
+    :close-on-click-modal="false" append-to-body>
+    <div v-loading="templatesLoading">
+      <div class="deploy-sel-count" style="margin-bottom:8px">可多选 · 按勾选顺序作为执行顺序 · 已选 {{addSteps.length}} 个</div>
+      <div class="orch-tpl-filter">
+        <button class="tpl-filter-tab" :class="{active: addTplCat==='全部'}" @click="addTplCat='全部'">全部</button>
+        <button v-for="c in addTplCats" :key="c" class="tpl-filter-tab" :class="{active: addTplCat===c}" @click="addTplCat=c">{{c}}</button>
+      </div>
+      <el-input v-model="addTplFilter" placeholder="搜索模板名" clearable size="small" style="width:220px;margin:10px 0" />
+      <div class="tpl-pick-list tpl-pick-list--dlg">
+        <div v-for="t in addTemplates" :key="t.id" class="tpl-pick-item" :class="{'tpl-pick-item--sel': addSelIds.has(t.id)}"
+          @click="toggleAddTpl(t)">
+          <div style="display:flex;align-items:center;gap:10px;min-width:0">
+            <el-checkbox :model-value="addSelIds.has(t.id)" @change="toggleAddTpl(t)" @click.stop />
+            <span v-if="t.category" class="tpl-cat-chip" :class="catClass(t.category)">{{t.category}}</span>
+            <div style="min-width:0"><b>{{t.name}}</b><div v-if="t.description" class="tpl-pick-desc">{{t.description}}</div></div>
+          </div>
           <el-tag size="small" type="info">{{(t.variables||[]).length}} 变量</el-tag>
         </div>
+        <div v-if="!addTemplates.length" class="deploy-placeholder">无匹配模板</div>
       </div>
     </div>
-
-    <!-- 编辑模式 -->
-    <template v-else-if="editStep">
-      <div class="drawer-sec">
-        <div class="drawer-sec-title">目标主机 <span class="deploy-sel-count">已选 {{(editStep.hostIds||[]).length}} 台</span></div>
-        <div class="orch-unit-hosts">
-          <el-input v-model="editStep.hostFilter" placeholder="搜索主机名 / IP" clearable size="small" style="width:180px" />
-          <el-select v-model="editStep.tagFilter" multiple collapse-tags placeholder="按标签过滤" size="small"
-            style="width:200px" :teleported="false" clearable>
-            <el-option v-for="tg in allTags" :key="tg" :label="tg" :value="tg" />
-          </el-select>
-          <el-button size="small" @click="toggleAllUnitHosts(editStep)">{{ unitAllSelected(editStep) ? '取消全选' : '全选' }}</el-button>
-          <span class="deploy-sel-count">已选 {{(editStep.hostIds||[]).length}} 台</span>
-        </div>
-        <div class="deploy-host-list deploy-host-list--unit" v-loading="hostLoading">
-          <label v-for="h in unitHosts(editStep)" :key="h.id" class="deploy-host-item"
-            :class="{'deploy-host-item--sel': (editStep.hostIds||[]).includes(h.id)}">
-            <el-checkbox :model-value="(editStep.hostIds||[]).includes(h.id)" @change="toggleUnitHost(editStep,h.id)" />
-            <span class="deploy-host-name">{{h.name}}</span>
-            <span class="mono deploy-host-ip">{{h.ip}}</span>
-            <span class="status-badge" :class="h.status"><span class="dot"></span>{{h.status==='online'?'在线':h.status==='offline'?'离线':'未验证'}}</span>
-          </label>
-          <div v-if="!unitHosts(editStep).length" class="deploy-placeholder">无匹配主机，请勾选本步骤要执行的主机</div>
-        </div>
-      </div>
-
-      <template v-if="tplVars(editStep.template_id).length && (editStep.hostIds||[]).length">
-        <div class="drawer-sec">
-          <div class="drawer-sec-title">变量 · 逐台填写
-            <el-button size="small" text type="primary" @click="copyFirstHostVars(editStep)">复制首台到其他</el-button>
-            <el-button size="small" text @click="clearHostVars(editStep)">清空覆盖</el-button>
-          </div>
-          <div class="orch-hostvars-rows">
-            <div class="orch-hostvar-row" v-for="hid in (editStep.hostIds||[])" :key="'hv'+hid">
-              <div class="orch-hostvar-side">
-                <span class="deploy-host-name">{{hostName(hid)}}</span>
-                <span class="mono deploy-host-ip">{{hostIP(hid)}}</span>
-                <span class="orch-hv-meta">
-                  <span v-if="hostVarCount(editStep,hid)" class="deploy-var-hint">覆盖{{hostVarCount(editStep,hid)}}项</span>
-                  <el-button size="small" text type="primary" @click="clearHostVar(editStep,hid)">重置</el-button>
-                </span>
-              </div>
-              <div class="orch-step-params">
-                <div class="orch-param" v-for="v in tplVars(editStep.template_id)" :key="'hv'+hid+v.name">
-                  <label>{{v.label || v.name}}<b v-if="v.required">*</b></label>
-                  <el-input size="small" :model-value="hostVarValue(editStep,hid,v)" @input="val => setHostVar(editStep,hid,v,val)"
-                    :placeholder="v.default ? ('默认: ' + v.default) : '必填'" />
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </template>
-      <div v-else class="deploy-placeholder deploy-placeholder--ok">该模板无需变量</div>
-
-      <div class="drawer-sec">
-        <div class="drawer-sec-title">失败策略</div>
-        <div class="orch-fail-row">
-          <el-checkbox v-model="editStep.continue_on_error">本步骤失败的仍继续参与后续步骤</el-checkbox>
-          <span class="orch-retry">重试
-            <el-input-number v-model="editStep.retry_count" size="small" :min="0" :max="5" controls-position="right" style="width:90px" /> 次 ·
-            间隔 <el-input-number v-model="editStep.retry_interval_sec" size="small" :min="5" :max="600" controls-position="right" style="width:110px" /> 秒
-          </span>
-        </div>
-      </div>
-    </template>
-
     <template #footer>
-      <div style="display:flex;align-items:center;gap:8px">
-        <el-button v-if="drawerMode==='edit'" type="danger" text @click="removeStep(editIdx)">删除本步骤</el-button>
-        <span v-if="invalidReason && drawerMode==='edit'" class="save-block-reason">{{invalidReason}}</span>
-        <span style="flex:1"></span>
-        <el-button @click="drawerVisible=false">取消</el-button>
-        <el-button type="primary" @click="saveStep">保存步骤</el-button>
-      </div>
-      <div class="drawer-save-hint">「保存步骤」仅应用到当前流水线；点击外层「保存」才会写入数据库</div>
+      <el-button @click="addTplVisible=false">取消</el-button>
+      <el-button type="primary" :disabled="!addSteps.length" @click="confirmAdd">添加{{ addSteps.length ? ' ' + addSteps.length + ' 个步骤' : '' }}</el-button>
     </template>
-  </el-drawer>
+  </el-dialog>
 
   <!-- 运行抽屉：三层结构（只读监控） -->
   <el-drawer v-model="runDrawerVisible" size="50%" :with-header="false" @close="closeRunDrawer">
@@ -294,10 +315,10 @@ window.OrchestrationsPage = {
       templates: [], templatesLoading: false, hostOptions: [], hostLoading: false,
       editorVisible: false,
       nameDialogVisible: false, nameDraft: '',
-      dragIdx: null, dragOver: null, editSnapshot: null, stepSaved: false,
+      dragIdx: null, dragOver: null,
       form: { id: 0, name: '', description: '', steps: [] },
-      uidSeed: 1,
-      drawerVisible: false, drawerMode: 'edit', editIdx: -1,
+      uidSeed: 1, editIdx: -1,
+      addTplVisible: false, addSteps: [], addTplFilter: '', addTplCat: '全部',
       saving: false
     }
   },
@@ -319,14 +340,25 @@ window.OrchestrationsPage = {
       return ''
     },
     editStep() {
-      if (this.drawerMode !== 'edit' || this.editIdx < 0) return null
+      if (this.editIdx < 0) return null
       return this.form.steps[this.editIdx] || null
     },
-    drawerTitle() {
-      if (this.drawerMode === 'add') return '添加步骤 · 选择模板'
-      const s = this.editStep
-      return s ? ('步骤 ' + (this.editIdx + 1) + ' · ' + s.template_name) : ''
+    addTemplates() {
+      let list = this.templates
+      if (this.addTplCat !== '全部') list = list.filter(t => (t.category || '未分类') === this.addTplCat)
+      const kw = (this.addTplFilter || '').trim().toLowerCase()
+      if (kw) list = list.filter(t => this.subseqMatch(t.name || '', kw))
+      return list
     },
+    addTplCats() {
+      const order = ['系统', '工具', '中间件', '监控', '其他']
+      const present = new Set(this.templates.map(t => t.category || '未分类'))
+      return [...present].sort((a, b) => {
+        const ia = order.indexOf(a), ib = order.indexOf(b)
+        return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib)
+      })
+    },
+    addSelIds() { return new Set(this.addSteps.map(s => s.template_id)) },
     displayList() {
       let arr = this.allList
       if (this.activeState) arr = arr.filter(o => o.state === this.activeState)
@@ -341,18 +373,6 @@ window.OrchestrationsPage = {
       const c = { all: this.allList.length, running: 0, not_started: 0, finished: 0 }
       this.allList.forEach(o => { if (c[o.state] !== undefined) c[o.state]++ })
       return c
-    }
-  },
-  watch: {
-    drawerVisible(v) {
-      if (!v && !this.stepSaved && this.editSnapshot) {
-        try {
-          const snap = JSON.parse(this.editSnapshot)
-          const cur = this.form.steps[this.editIdx]
-          if (cur && cur.uid === snap.uid) this.form.steps.splice(this.editIdx, 1, snap)
-        } catch(e) {}
-      }
-      if (!v) { this.editSnapshot = null; this.stepSaved = false }
     }
   },
   mounted() { this.loadList() },
@@ -404,10 +424,10 @@ window.OrchestrationsPage = {
               hostIds: s.host_ids || [], hostVars: s.host_vars || {},
               continue_on_error: !!s.continue_on_error,
               retry_count: s.retry_count || 0, retry_interval_sec: s.retry_interval_sec || 30,
-              hostFilter: ''
+              hostFilter: '', tagFilter: []
             }))
           }
-          this.editIdx = -1
+          this.editIdx = this.form.steps.length ? 0 : -1
           this.editorVisible = true
         })
       } else {
@@ -424,46 +444,59 @@ window.OrchestrationsPage = {
       this.editorVisible = true
     },
     /* ===== 流水线节点 ===== */
-    addClick() { this.editIdx = -1; this.drawerMode = 'add'; this.drawerVisible = true },
-    pickTemplate(t) {
-      this.form.steps.push({
+    catClass(c) {
+      return ({ '系统': 'cat-sys', '工具': 'cat-tool', '中间件': 'cat-mid', '监控': 'cat-mon' })[c] || 'cat-other'
+    },
+    subseqMatch(name, q) {
+      let i = 0
+      const lower = name.toLowerCase()
+      for (const ch of lower) { if (ch === q[i]) i++ }
+      return i >= q.length
+    },
+    addClick() {
+      // 回填：已加入流水线的模板保持勾选（确认时整体替换，保留已配置内容）
+      this.addSteps = this.form.steps.map(st => ({ ...st }))
+      this.addTplFilter = ''
+      this.addTplCat = '全部'
+      this.addTplVisible = true
+    },
+    toggleAddTpl(t) {
+      const i = this.addSteps.findIndex(s => s.template_id === t.id)
+      if (i >= 0) { this.addSteps.splice(i, 1); return }
+      this.addSteps.push({
         uid: this.uidSeed++, template_id: t.id, template_name: t.name,
-        hostIds: [], hostVars: {}, tagFilter: [],
-        continue_on_error: false, retry_count: 0, retry_interval_sec: 30, hostFilter: ''
+        hostIds: [], hostVars: {}, tagFilter: [], hostFilter: '',
+        continue_on_error: false, retry_count: 0, retry_interval_sec: 30
       })
-      this.editIdx = this.form.steps.length - 1
-      this.drawerMode = 'edit'
-      this.stepSaved = true
+    },
+    confirmAdd() {
+      if (!this.addSteps.length) return
+      const sel = this.editIdx >= 0 ? this.form.steps[this.editIdx]?.uid : null
+      this.form.steps = this.addSteps
+      this.addSteps = []
+      this.editIdx = sel != null ? Math.max(0, this.form.steps.findIndex(x => x.uid === sel)) : (this.form.steps.length ? 0 : -1)
+      this.addTplVisible = false
     },
     removeStep(i) {
-      if (this.editIdx === i) { this.stepSaved = true; this.drawerVisible = false }
       this.form.steps.splice(i, 1)
       if (this.editIdx > i) this.editIdx--
-      else if (this.editIdx === i) this.editIdx = -1
+      else if (this.editIdx === i) this.editIdx = this.form.steps.length ? Math.min(i, this.form.steps.length - 1) : -1
     },
-    onDragStart(i, e) { this.dragIdx = i; e.dataTransfer.effectAllowed = 'move' },
+    onDragStart(i, e) {
+      this.dragIdx = i; e.dataTransfer.effectAllowed = 'move'
+      try { e.dataTransfer.setData('text/plain', String(i)) } catch(err) {}
+    },
     onDragEnd() { this.dragIdx = null; this.dragOver = null },
     onDropTo(i) {
       const from = this.dragIdx
       this.dragIdx = null; this.dragOver = null
       if (from == null || from === i) return
       const arr = this.form.steps
-      const editedUid = this.editIdx >= 0 ? arr[this.editIdx]?.uid : null
       const [m] = arr.splice(from, 1)
       arr.splice(i, 0, m)
-      if (editedUid != null) this.editIdx = arr.findIndex(s => s.uid === editedUid)
-    },
-    openDrawer(i) {
-      this.editIdx = i; this.drawerMode = 'edit'
-      this.editSnapshot = JSON.stringify(this.form.steps[i])
-      this.stepSaved = false
-      this.drawerVisible = true
-    },
-    saveStep() {
-      if (!this.editStep) return
-      this.stepSaved = true
-      this.drawerVisible = false
-      ElMessage.success('步骤已应用，点击外层「保存」写入数据库')
+      if (this.editIdx === from) this.editIdx = i
+      else if (this.editIdx > from && this.editIdx <= i) this.editIdx--
+      else if (this.editIdx < from && this.editIdx >= i) this.editIdx++
     },
     /* ===== 抽屉内：主机 ===== */
     unitHosts(s) {

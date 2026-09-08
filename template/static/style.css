@@ -1052,27 +1052,50 @@ a { text-decoration: none; }
 @keyframes orch-pulse { 50% { opacity: .55; } }
 .orch-log-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; font-size: 12px; }
 /* 流水线编辑器 */
-.pipe-wrap { border: 1px solid var(--border); border-radius: var(--radius-btn); padding: 18px 16px 10px; background: var(--bg-soft); }
-.pipe-flow { display: flex; align-items: stretch; overflow-x: auto; padding-bottom: 8px; }
-.pipe-node { position: relative; display: flex; align-items: center; gap: 10px; min-width: 170px; max-width: 220px;
-  background: var(--bg-card, #fff); border: 1.5px solid var(--border); border-radius: 10px; padding: 10px 12px;
-  cursor: pointer; transition: border-color .15s, box-shadow .15s; margin-right: 34px; flex-shrink: 0; }
-.pipe-node::after { content: '→'; position: absolute; right: -26px; top: 50%; transform: translateY(-50%);
-  color: var(--text-faint); font-size: 16px; font-weight: 600; }
-.pipe-node:last-of-type { margin-right: 34px; }
-.pipe-node:hover { border-color: var(--brand); }
-.pipe-node.active { border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-soft, rgba(59,130,246,.15)); }
-.pipe-seq { width: 24px; height: 24px; border-radius: 50%; background: var(--brand); color: #fff; font-size: 12px;
-  display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; font-weight: 600; }
-.pipe-info { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.pipe-info b { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.pipe-info small { font-size: 11px; color: var(--text-faint); white-space: nowrap; }
-.pipe-tools { position: absolute; top: -11px; right: -6px; display: inline-flex; gap: 2px;
-  background: var(--bg-card, #fff); border: 1px solid var(--border); border-radius: 6px; padding: 1px 3px;
-  box-shadow: 0 2px 6px rgba(0,0,0,.08); z-index: 2; }
-.pipe-tool { font-size: 12px; padding: 2px; border-radius: 3px; color: var(--text-sub); cursor: pointer; }
-.pipe-tool:hover { color: var(--brand); background: var(--bg-hover); }
-.pipe-tool-danger:hover { color: var(--danger); }
+/* 编辑任务：左步骤列表 + 右配置面板 */
+.orch-ed-header { display: flex; align-items: center; gap: 14px; min-width: 0; }
+.orch-ed-title { font-size: 16px; font-weight: 700; color: var(--text-main); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.orch-ed-warn { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 500;
+  color: var(--danger); background: var(--danger-soft); border: 1px solid rgba(220,38,38,.22);
+  border-radius: 8px; padding: 4px 12px; margin-left: auto; }
+.orch-ed-grid { display: grid; grid-template-columns: 360px 1fr; gap: 16px; align-items: stretch; }
+.orch-ed-left { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.orch-ed-left-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.orch-step-list { flex: 1; min-height: 48vh; max-height: 58vh; overflow-y: auto; border: 1px dashed var(--border);
+  border-radius: var(--radius-btn); padding: 10px; display: flex; flex-direction: column; gap: 8px; background: var(--bg-faint); }
+.orch-step-item { display: flex; align-items: center; gap: 10px; padding: 11px 12px; border: 1.5px solid var(--border);
+  border-radius: 10px; background: var(--bg-card, #fff); cursor: pointer; transition: border-color .15s, box-shadow .15s; }
+.orch-step-item:hover { border-color: var(--brand); }
+.orch-step-item.active { border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-soft, rgba(59,130,246,.15)); }
+.orch-step-item-info { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.orch-step-item-info b { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.orch-step-item-info small { font-size: 11px; color: var(--text-faint); white-space: nowrap; }
+.orch-step-item-tools { margin-left: auto; display: inline-flex; gap: 4px; color: var(--text-faint); flex-shrink: 0; }
+.orch-step-item-tools .el-icon { padding: 3px; border-radius: 4px; cursor: pointer; font-size: 13px; }
+.orch-step-item-tools .el-icon:hover { color: var(--brand); background: var(--bg-hover); }
+.orch-step-item-tools .orch-step-item-del:hover { color: var(--danger); }
+.orch-ed-right { border: 1px solid var(--border); border-radius: var(--radius-btn); padding: 14px 16px;
+  min-height: 48vh; max-height: 58vh; overflow-y: auto; background: var(--bg-card, #fff); }
+.orch-ed-right-head { display: flex; align-items: center; gap: 10px; font-size: 14px; margin-bottom: 12px;
+  padding-bottom: 10px; border-bottom: 1px dashed var(--border); }
+.orch-ed-sec { margin-top: 16px; }
+.orch-ed-sec-title { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 700;
+  color: var(--text-main); margin-bottom: 10px; }
+.orch-ed-empty { display: flex; align-items: center; justify-content: center; height: 70%; }
+.orch-unit-hosts { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+.orch-ed-right .deploy-host-list--unit { max-height: 300px; }
+.tpl-pick-list--dlg { max-height: 46vh; overflow-y: auto; }
+.tpl-cat-chip { flex-shrink: 0; font-size: 11px; font-weight: 600; padding: 2px 9px; border-radius: 9px; line-height: 18px; }
+.tpl-cat-chip.cat-sys { color: #2F6BFF; background: #EAF1FF; }
+.tpl-cat-chip.cat-tool { color: #7C3AED; background: #F1EAFE; }
+.tpl-cat-chip.cat-mid { color: #D97706; background: #FEF3E2; }
+.tpl-cat-chip.cat-mon { color: #16A34A; background: #E8F7EE; }
+.tpl-cat-chip.cat-other { color: #6B7280; background: #F3F4F6; }
+.orch-tpl-filter { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.orch-step-grip { color: var(--text-faint); cursor: grab; flex-shrink: 0; font-size: 14px; }
+.orch-step-grip:active { cursor: grabbing; }
+.orch-step-item.dragging { opacity: .45; }
+.orch-step-item.drag-over { border-color: var(--brand); box-shadow: 0 -2px 0 0 var(--brand) inset; }
 .pipe-add { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
   min-width: 110px; border: 1.5px dashed var(--border); border-radius: 10px; color: var(--text-sub);
   cursor: pointer; font-size: 12px; padding: 14px 18px; transition: all .15s; flex-shrink: 0; }
@@ -1088,6 +1111,14 @@ a { text-decoration: none; }
 .tpl-pick-item { display: flex; align-items: center; justify-content: space-between; gap: 10px;
   border: 1px solid var(--border); border-radius: var(--radius-btn); padding: 10px 14px; cursor: pointer; transition: all .12s; }
 .tpl-pick-item:hover { border-color: var(--brand); background: var(--brand-soft, rgba(59,130,246,.05)); }
+.tpl-pick-item--sel { border-color: var(--brand); background: var(--brand-soft, rgba(59,130,246,.08)); }
+/* 添加步骤：多模板逐步骤配置 */
+.add-step-block { border: 1px dashed var(--border); border-radius: var(--radius-btn); padding: 12px 14px; }
+.add-step-head { margin-bottom: 10px; }
+.add-step-seq { display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px;
+  border-radius: 6px; background: var(--brand); color: #fff; font-size: 12px; font-weight: 700; }
+.add-step-vars { margin-top: 10px; border: none; }
+.add-step-vars .el-collapse-item__header { font-size: 12.5px; color: var(--text-sub); height: 34px; }
 .tpl-pick-desc { font-size: 11px; color: var(--text-faint); margin-top: 2px; }
 .drawer-sec { margin-top: 18px; }
 .drawer-sec:first-child { margin-top: 0; }

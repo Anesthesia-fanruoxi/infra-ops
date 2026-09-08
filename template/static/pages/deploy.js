@@ -136,7 +136,8 @@ window.DeployPage = {
       </div>
       <el-button size="small" text @click="loadTasks"><el-icon style="margin-right:4px"><Refresh /></el-icon>刷新</el-button>
     </div>
-    <el-table :data="tasks" style="width:100%" v-loading="tasksLoading" class="deploy-task-table">
+    <el-table :data="tasks" style="width:100%" v-loading="tasksLoading" class="deploy-task-table"
+      :row-style="{cursor:'pointer'}" @row-click="openDrawer">
       <el-table-column label="记录 ID" width="90">
         <template #default="{row}"><span class="mono">#{{row.id}}</span></template>
       </el-table-column>
@@ -152,9 +153,6 @@ window.DeployPage = {
       </el-table-column>
       <el-table-column label="开始时间" width="170">
         <template #default="{row}"><span class="mono" style="font-size:12px;color:var(--text-faint)">{{formatTime(row.created_at)}}</span></template>
-      </el-table-column>
-      <el-table-column label="" width="100" fixed="right">
-        <template #default="{row}"><el-button size="small" text type="primary" @click="openDrawer(row)">查看记录</el-button></template>
       </el-table-column>
     </el-table>
     <div v-if="!tasksLoading && !tasks.length" class="empty-state"><p>暂无执行记录</p></div>
