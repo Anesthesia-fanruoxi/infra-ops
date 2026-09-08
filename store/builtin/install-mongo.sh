@@ -3,28 +3,33 @@ set -e
 
 command -v docker &>/dev/null || { echo "未检测到 Docker，请先执行「安装 Docker」模板"; exit 1; }
 docker info &>/dev/null || { echo "docker 服务未运行"; exit 1; }
+docker compose version &>/dev/null || { echo "未检测到 docker compose 插件，请先执行「安装 Docker」模板（含 compose-plugin）"; exit 1; }
 
 # ==== 参数 ====
 PORT="{{port}}"
-DATA_DIR="{{data_dir}}"
+HOME_DIR="{{home_dir}}"
+
+if [ -d "/data/middleware/mongodb" ] && [ ! -d "${HOME_DIR}" ]; then
+  echo "警告: 检测到旧版数据目录 /data/middleware/mongodb，如需保留历史数据请先迁移到 ${HOME_DIR}，或将服务主目录填为旧路径"
+fi
 MONGO_USER="{{admin_username}}"
 MONGO_PASS="{{admin_password}}"
 IMAGE="{{image}}"
 CONTAINER=mongodb
-NET=middleware_net
 
 [ -n "${MONGO_PASS}" ] || { echo "管理员密码不能为空"; exit 1; }
 
 # ==== 共享网络 ====
+NET=middleware_net
 docker network inspect "${NET}" &>/dev/null || docker network create "${NET}"
 
 # ==== 配置文件（已有则备份） ====
-mkdir -p "${DATA_DIR}/db"
-if [ -f "${DATA_DIR}/mongodb.conf" ]; then
-  cp "${DATA_DIR}/mongodb.conf" "${DATA_DIR}/mongodb.conf.bak.$(date +%s)"
+mkdir -p "${HOME_DIR}/data"
+if [ -f "${HOME_DIR}/mongodb.conf" ]; then
+  cp "${HOME_DIR}/mongodb.conf" "${HOME_DIR}/mongodb.conf.bak.$(date +%s)"
   echo "已备份原有 mongodb.conf"
 fi
-cat > "${DATA_DIR}/mongodb.conf" <<'MONGOCONF'
+cat > "${HOME_DIR}/mongodb.conf" <<'MONGOCONF'
 storage:
   dbPath: /data/db
   directoryPerDB: true
@@ -37,21 +42,49 @@ net:
   port: 27017
 MONGOCONF
 
-# ==== 幂等部署（数据目录保留） ====
-docker rm -f "${CONTAINER}" &>/dev/null || true
-echo "拉取镜像 ${IMAGE}"
-docker pull "${IMAGE}"
+# ==== 敏感凭据落盘（env_file 不做插值，密码含 $ 等特殊字符也安全） ====
+umask 077
+printf 'MONGO_INITDB_ROOT_USERNAME=%s\nMONGO_INITDB_ROOT_PASSWORD=%s\n' "${MONGO_USER}" "${MONGO_PASS}" > "${HOME_DIR}/secrets.env"
+umask 022
 
-docker run -d --name "${CONTAINER}" --restart=always \
-  --network "${NET}" \
-  -p "${PORT}:27017" \
-  -e MONGO_INITDB_ROOT_USERNAME="${MONGO_USER}" \
-  -e MONGO_INITDB_ROOT_PASSWORD="${MONGO_PASS}" \
-  -v "${DATA_DIR}/db:/data/db" \
-  -v "${DATA_DIR}/mongodb.conf:/etc/mongodb.conf:ro" \
-  -v /etc/localtime:/etc/localtime:ro \
-  "${IMAGE}" \
-  mongod -f /etc/mongodb.conf
+# ==== 迁移旧版 docker run 容器（数据目录保留） ====
+if docker ps -a --format '{{.Names}}' | grep -qx "${CONTAINER}"; then
+  PROJ="$(docker inspect --format='{{index .Config.Labels "com.docker.compose.project"}}' "${CONTAINER}" 2>/dev/null || true)"
+  if [ -z "${PROJ}" ]; then
+    echo "检测到旧版 docker run 容器，迁移为 compose 管理（数据保留）"
+    docker rm -f "${CONTAINER}" &>/dev/null || true
+  fi
+fi
+
+# ==== 生成 compose 文件 ====
+cat > "${HOME_DIR}/compose.yml" <<'YAMLEOF'
+name: mongodb
+services:
+  mongodb:
+    image: {{image}}
+    container_name: mongodb
+    restart: always
+    ports:
+      - "{{port}}:27017"
+    env_file:
+      - secrets.env
+    volumes:
+      - {{home_dir}}/data:/data/db
+      - {{home_dir}}/mongodb.conf:/etc/mongodb.conf:ro
+      - /etc/localtime:/etc/localtime:ro
+    command: ["mongod", "-f", "/etc/mongodb.conf"]
+    networks:
+      - middleware_net
+
+networks:
+  middleware_net:
+    external: true
+YAMLEOF
+
+# ==== 拉取并启动（compose 幂等：配置未变不动，变了自动 recreate） ====
+echo "拉取镜像 ${IMAGE}"
+docker compose -f "${HOME_DIR}/compose.yml" pull
+docker compose -f "${HOME_DIR}/compose.yml" up -d
 
 # ==== 等待就绪 ====
 READY=0
@@ -89,4 +122,5 @@ EOF
   rm -f /tmp/init-mongo-admin.js
 fi
 
-echo "MongoDB 已就绪: {{__ip}}:${PORT}（数据目录 ${DATA_DIR}/db）"
+echo "MongoDB 已就绪: {{__ip}}:${PORT}（数据目录 ${HOME_DIR}/data）"
+echo "compose 文件: ${HOME_DIR}/compose.yml（改参数后 docker compose -f ${HOME_DIR}/compose.yml up -d 生效）"

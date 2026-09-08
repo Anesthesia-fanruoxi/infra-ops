@@ -71,12 +71,56 @@ chown -R "${NGX_USER}:${NGX_USER}" /etc/nginx/cert /var/cache/openresty /var/log
 
 # 备份现有主配置后写入生产级配置（nginx.conf 内容由平台经资源占位符注入，注释中勿写占位符字面量，否则会被误替换）
 [ -f "${NGX_CONF}" ] && cp "${NGX_CONF}" "${NGX_CONF}.bak.$(date +%s)"
+# __DEPLOY_CONF__ nginx_conf
 cat > "${NGX_CONF}" <<'NGINXEOF'
 @@NGINX_CONF@@
 NGINXEOF
+# __DEPLOY_CONF_END__ nginx_conf
+
+# ==== 生成默认站点（conf.d），安装后即可通过 http://<ip> 访问 ====
+DEFAULT_CONF=/etc/nginx/conf.d/default.conf
+cat > "${DEFAULT_CONF}" <<'DEFAULTCONF'
+# 平台生成的默认站点：安装后即可通过 http://<ip> 访问；需自定义站点时请替换本文件
+server {
+    listen 80 default_server;
+    server_name _;
+    access_log off;
+
+    location = / {
+        default_type text/html; charset utf-8;
+        return 200 '<!doctype html><html><head><meta charset="utf-8"><title>Ready</title></head><body style="font-family:sans-serif;text-align:center;margin-top:12vh"><h1 style="color:#2f5a6b">OpenResty 已就绪</h1><p>默认站点由 infra-ops 安装模板生成</p><p style="color:#999">如需自定义站点，替换 conf.d 下的 default.conf 并 reload 即可</p></body></html>';
+    }
+
+    location / {
+        default_type text/plain; charset utf-8;
+        return 200 'OpenResty is running.\n';
+    }
+}
+DEFAULTCONF
+echo "默认站点已生成: ${DEFAULT_CONF}"
 
 # 语法校验通过才重载；失败保留本次写入并报错，便于人工排查
 "${NGX_BIN}" -t
 systemctl reload openresty || "${NGX_BIN}" -s reload
 echo "OpenResty 配置已生效: $(openresty -v 2>&1)"
 echo "生产级 nginx.conf 已写入 ${NGX_CONF}"
+
+# ==== 防火墙放行 Web 端口（否则外部访问会超时 ERR_CONNECTION_TIMED_OUT） ====
+if command -v firewall-cmd >/dev/null 2>&1 && systemctl is-active --quiet firewalld 2>/dev/null; then
+  for P in 80 443; do firewall-cmd --permanent --add-port=${P}/tcp >/dev/null 2>&1 || true; done
+  firewall-cmd --reload >/dev/null 2>&1 || true
+  echo "firewalld 已放行 80/443 端口"
+elif command -v iptables >/dev/null 2>&1; then
+  iptables -C INPUT -p tcp --dport 80 -j ACCEPT 2>/dev/null || iptables -I INPUT -p tcp --dport 80 -j ACCEPT 2>/dev/null || true
+  iptables -C INPUT -p tcp --dport 443 -j ACCEPT 2>/dev/null || iptables -I INPUT -p tcp --dport 443 -j ACCEPT 2>/dev/null || true
+  echo "iptables 已放行 80/443 端口"
+fi
+
+# 自检：80 端口是否真正监听，输出便于回溯
+if command -v ss >/dev/null 2>&1; then
+  if ss -tln 2>/dev/null | grep -q ':80 '; then
+    echo "自检通过：80 端口监听中，可通过 http://<主机IP>/ 访问"
+  else
+    echo "警告：80 端口未监听，请检查 nginx 配置与错误日志"
+  fi
+fi

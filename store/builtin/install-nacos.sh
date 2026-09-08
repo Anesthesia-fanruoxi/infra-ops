@@ -3,6 +3,7 @@ set -e
 
 command -v docker &>/dev/null || { echo "未检测到 Docker，请先执行「安装 Docker」模板"; exit 1; }
 docker info &>/dev/null || { echo "docker 服务未运行"; exit 1; }
+docker compose version &>/dev/null || { echo "未检测到 docker compose 插件，请先执行「安装 Docker」模板（含 compose-plugin）"; exit 1; }
 
 # ==== 参数 ====
 PORT="{{port}}"
@@ -11,7 +12,11 @@ DB_USER="{{db_username}}"
 DB_PASS="{{db_password}}"
 IMAGE="{{image}}"
 CONTAINER=nacos
-NET=middleware_net
+HOME_DIR="{{home_dir}}"
+
+if [ -d "/data/middleware/nacos" ] && [ ! -d "${HOME_DIR}" ]; then
+  echo "警告: 检测到旧版数据目录 /data/middleware/nacos，如需保留历史数据请先迁移到 ${HOME_DIR}，或将服务主目录填为旧路径"
+fi
 
 [ -n "${DB_USER}" ] && [ -n "${DB_PASS}" ] || { echo "数据库用户名/密码不能为空"; exit 1; }
 
@@ -21,6 +26,7 @@ if ! docker ps --format '{{.Names}}' | grep -qx "mysql"; then
 fi
 
 # ==== 共享网络 ====
+NET=middleware_net
 docker network inspect "${NET}" &>/dev/null || docker network create "${NET}"
 
 # ==== 数据库初始化（已存在完整表结构则跳过） ====
@@ -54,23 +60,53 @@ NACOSQLEOF
   echo "nacos 数据库初始化完成（${NEW_COUNT} 张表）"
 fi
 
-# ==== 幂等部署 ====
-docker rm -f "${CONTAINER}" &>/dev/null || true
-echo "拉取镜像 ${IMAGE}"
-docker pull "${IMAGE}"
+# ==== 敏感凭据落盘（env_file 不做插值，密码含 $ 等特殊字符也安全） ====
+mkdir -p "${HOME_DIR}"
+umask 077
+printf 'MYSQL_SERVICE_PASSWORD=%s\n' "${DB_PASS}" > "${HOME_DIR}/secrets.env"
+umask 022
 
-docker run -d --name "${CONTAINER}" --restart=always \
-  --network "${NET}" \
-  -p "${PORT}:8848" \
-  -p "${GRPC_PORT}:9848" \
-  -e MODE=standalone \
-  -e SPRING_DATASOURCE_PLATFORM=mysql \
-  -e MYSQL_SERVICE_HOST=mysql \
-  -e MYSQL_SERVICE_PORT=3306 \
-  -e MYSQL_SERVICE_USER="${DB_USER}" \
-  -e MYSQL_SERVICE_PASSWORD="${DB_PASS}" \
-  -e MYSQL_SERVICE_DB_NAME=nacos \
-  "${IMAGE}"
+# ==== 迁移旧版 docker run 容器 ====
+if docker ps -a --format '{{.Names}}' | grep -qx "${CONTAINER}"; then
+  PROJ="$(docker inspect --format='{{index .Config.Labels "com.docker.compose.project"}}' "${CONTAINER}" 2>/dev/null || true)"
+  if [ -z "${PROJ}" ]; then
+    echo "检测到旧版 docker run 容器，迁移为 compose 管理"
+    docker rm -f "${CONTAINER}" &>/dev/null || true
+  fi
+fi
+
+# ==== 生成 compose 文件 ====
+cat > "${HOME_DIR}/compose.yml" <<'YAMLEOF'
+name: nacos
+services:
+  nacos:
+    image: {{image}}
+    container_name: nacos
+    restart: always
+    ports:
+      - "{{port}}:8848"
+      - "{{grpc_port}}:9848"
+    env_file:
+      - secrets.env
+    environment:
+      - MODE=standalone
+      - SPRING_DATASOURCE_PLATFORM=mysql
+      - MYSQL_SERVICE_HOST=mysql
+      - MYSQL_SERVICE_PORT=3306
+      - MYSQL_SERVICE_USER={{db_username}}
+      - MYSQL_SERVICE_DB_NAME=nacos
+    networks:
+      - middleware_net
+
+networks:
+  middleware_net:
+    external: true
+YAMLEOF
+
+# ==== 拉取并启动（compose 幂等：配置未变不动，变了自动 recreate） ====
+echo "拉取镜像 ${IMAGE}"
+docker compose -f "${HOME_DIR}/compose.yml" pull
+docker compose -f "${HOME_DIR}/compose.yml" up -d
 
 # ==== 等待控制台就绪 ====
 READY=0
@@ -85,3 +121,4 @@ if [ "${READY}" != "1" ]; then
 fi
 
 echo "Nacos 已就绪: http://{{__ip}}:${PORT}/nacos/（默认账号 nacos/nacos，gRPC 端口 ${GRPC_PORT}）"
+echo "compose 文件: ${HOME_DIR}/compose.yml（改参数后 docker compose -f ${HOME_DIR}/compose.yml up -d 生效）"
