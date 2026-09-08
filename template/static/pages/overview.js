@@ -84,27 +84,6 @@ window.OverviewPage = {
       <div v-else class="empty-state overview-empty"><span class="empty-icon">✓</span><strong>暂无操作记录</strong><span>系统产生操作后会实时出现在这里</span></div>
     </section>
   </div>
-
-  <section class="page-card overview-section overview-services-card">
-    <div class="card-header overview-card-header">
-      <div class="overview-card-title"><span class="panel-icon panel-icon-service">⚡</span><div><div class="title">已部署服务 <span class="count-badge">{{services.length}} 项</span></div><span class="section-hint">各主机安装部署的 Web 服务，一键打开</span></div></div>
-    </div>
-    <el-table v-if="services.length" class="overview-host-table" :data="services" size="default" :header-cell-style="{background:'#F8FAFC',color:'#94A3B8',fontSize:'12px'}">
-      <el-table-column prop="service_name" label="服务" min-width="160">
-        <template #default="{row}"><div class="service-cell"><span class="service-avatar service-avatar-web">⚡</span><strong>{{row.service_name}}</strong></div></template>
-      </el-table-column>
-      <el-table-column label="主机" min-width="170">
-        <template #default="{row}"><div class="host-cell"><span class="host-avatar">{{hostInitial(row.host_name)}}</span><div><div class="host-name">{{row.host_name || '未知主机'}}</div><div class="mono host-ip">{{row.host_ip}}</div></div></div></template>
-      </el-table-column>
-      <el-table-column prop="url" label="访问地址" min-width="220">
-        <template #default="{row}"><span class="mono service-url">{{row.url || '-'}}</span></template>
-      </el-table-column>
-      <el-table-column label="操作" width="110">
-        <template #default="{row}"><el-button size="small" type="primary" :disabled="!row.url" @click="openService(row.url)">打开</el-button></template>
-      </el-table-column>
-    </el-table>
-    <div v-else class="empty-state overview-empty"><span class="empty-icon">⚡</span><strong>暂无已部署服务</strong><span>在某主机安装带 Web 界面的模板（如 OpenResty、Docker Registry）后会自动登记在这里</span></div>
-  </section>
 </div>`,
   emits: ['navigate'],
   data() {
@@ -112,7 +91,6 @@ window.OverviewPage = {
       stats: { total: 0, online: 0, offline: 0, onlineRate: 0, credTotal: 0, unverified: 0 },
       hosts: [],
       recentAudits: [],
-      services: [],
       eventSource: null,
       sseState: 'connecting'
     }
@@ -124,13 +102,9 @@ window.OverviewPage = {
       return '连接已断开'
     }
   },
-  mounted() { this.connectSSE(); this.loadServices() },
+  mounted() { this.connectSSE() },
   beforeUnmount() { if (this.eventSource) this.eventSource.close() },
   methods: {
-    loadServices() {
-      api.get('/services').then(r => { this.services = r.data || [] }).catch(() => {})
-    },
-    openService(url) { if (url) window.open(url, '_blank', 'noopener') },
     parseEvent(event) {
       try { return JSON.parse(event.data || '{}') } catch (e) { return null }
     },

@@ -33,11 +33,11 @@ window.OrchestrationsPage = {
       <span class="orch-state-tab" :class="{active: activeState==='finished'}" @click="activeState='finished'">已结束 <em>{{stateCounts.finished}}</em></span>
     </div>
     <el-table :data="displayList" style="width:100%" v-loading="loading" @row-click="rowClick">
-      <el-table-column label="名称" min-width="180">
+      <el-table-column label="名称" width="110">
         <template #default="{row}"><span style="font-weight:600">{{row.name}}</span>
-          <div v-if="row.description" style="font-size:11px;color:var(--text-faint)">{{row.description}}</div></template>
+          <div v-if="row.description" :title="row.description" style="font-size:11px;color:var(--text-faint);line-height:1.35;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;word-break:break-all">{{row.description}}</div></template>
       </el-table-column>
-      <el-table-column label="流水线" min-width="260">
+      <el-table-column label="流水线" min-width="240">
         <template #default="{row}">
           <div class="pipe-mini">
             <template v-for="(s,idx) in pipePreview(row.id)" :key="idx">
@@ -47,22 +47,13 @@ window.OrchestrationsPage = {
           </div>
         </template>
       </el-table-column>
-      <el-table-column label="步骤数" width="80">
+      <el-table-column label="步骤数" width="70">
         <template #default="{row}"><span class="mono">{{row.step_count}}</span></template>
       </el-table-column>
-      <el-table-column label="状态" width="110">
+      <el-table-column label="状态" width="100">
         <template #default="{row}"><span class="status-badge" :class="stateClass(row.state)"><span class="dot"></span>{{stateLabel(row.state)}}</span></template>
       </el-table-column>
-      <el-table-column label="结果" width="220">
-        <template #default="{row}">
-          <template v-if="row.state==='finished'">
-            <span class="status-badge" :class="resultClass(row.result)"><span class="dot"></span>{{resultLabel(row.result)}}</span>
-            <span class="mono orch-prog"><span class="ok">{{row.ok_hosts}}</span> 成功 · <span class="fail">{{row.fail_hosts}}</span> 失败 · 共 {{row.total_hosts}}</span>
-          </template>
-          <span v-else style="color:var(--text-faint)">-</span>
-        </template>
-      </el-table-column>
-      <el-table-column label="更新时间" width="160">
+      <el-table-column label="更新时间" width="148">
         <template #default="{row}"><span class="mono" style="font-size:12px;color:var(--text-faint)">{{formatTime(row.updated_at)}}</span></template>
       </el-table-column>
       <el-table-column label="操作" width="200" fixed="right">
@@ -568,8 +559,6 @@ window.OrchestrationsPage = {
     },
     stateLabel(s) { return { running:'运行中', not_started:'未开始', finished:'已结束' }[s] || '未开始' },
     stateClass(s) { return { running:'running', not_started:'unverified', finished:'completed' }[s] || 'unverified' },
-    resultLabel(s) { return { success:'成功', partial:'部分成功', failed:'失败' }[s] || s },
-    resultClass(s) { return { success:'online', partial:'warning', failed:'offline' }[s] || 'unverified' },
     rowClick(row) {
       if (row.state === 'running' || row.state === 'finished') this.openRunDrawer(row.last_run_id)
     },
