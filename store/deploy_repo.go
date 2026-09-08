@@ -15,7 +15,7 @@ type DeployRepo struct{}
 
 func NewDeployRepo() *DeployRepo { return &DeployRepo{} }
 
-const tplCols = "id,name,description,category,script,variables,services,requires,is_builtin,created_at,updated_at"
+const tplCols = "id,name,description,category,script,variables,services,requires,configs,is_builtin,created_at,updated_at"
 
 // ListTemplates 全量模板列表（数量小，不分页）。
 func (r *DeployRepo) ListTemplates() ([]model.DeployTemplate, error) {
@@ -47,6 +47,7 @@ type tplRow struct {
 	Variables   string
 	Services    string
 	Requires    string
+	Configs     string
 	IsBuiltin   bool
 	CreatedAt   string
 	UpdatedAt   string
@@ -56,13 +57,14 @@ func (r tplRow) toModel() *model.DeployTemplate {
 	return &model.DeployTemplate{
 		ID: r.ID, Name: r.Name, Description: r.Description, Category: r.Category,
 		Script: r.Script, Variables: json.RawMessage(r.Variables), Services: json.RawMessage(r.Services),
-		Requires: json.RawMessage(r.Requires), IsBuiltin: r.IsBuiltin, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
+		Requires: json.RawMessage(r.Requires), Configs: json.RawMessage(r.Configs),
+		IsBuiltin: r.IsBuiltin, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
 	}
 }
 
 func scanTplRow(rows *sql.Rows, r *tplRow) error {
 	return rows.Scan(&r.ID, &r.Name, &r.Description, &r.Category, &r.Script, &r.Variables,
-		&r.Services, &r.Requires, &r.IsBuiltin, &r.CreatedAt, &r.UpdatedAt)
+		&r.Services, &r.Requires, &r.Configs, &r.IsBuiltin, &r.CreatedAt, &r.UpdatedAt)
 }
 
 // GetTemplate 按 ID 取模板。
@@ -70,7 +72,7 @@ func (r *DeployRepo) GetTemplate(id int64) (*model.DeployTemplate, error) {
 	row := tplRow{}
 	err := DB.QueryRow("SELECT "+tplCols+" FROM deploy_templates WHERE id=?", id).
 		Scan(&row.ID, &row.Name, &row.Description, &row.Category, &row.Script, &row.Variables,
-			&row.Services, &row.Requires, &row.IsBuiltin, &row.CreatedAt, &row.UpdatedAt)
+			&row.Services, &row.Requires, &row.Configs, &row.IsBuiltin, &row.CreatedAt, &row.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -91,9 +93,9 @@ func normalizeJSON(s json.RawMessage) string {
 // CreateTemplate 新建模板。
 func (r *DeployRepo) CreateTemplate(t *model.DeployTemplate) (int64, error) {
 	res, err := DB.Exec(
-		`INSERT INTO deploy_templates(name,description,category,script,variables,services,requires,is_builtin) VALUES(?,?,?,?,?,?,?,0)`,
+		`INSERT INTO deploy_templates(name,description,category,script,variables,services,requires,configs,is_builtin) VALUES(?,?,?,?,?,?,?,?,0)`,
 		t.Name, t.Description, t.Category, t.Script, string(t.Variables),
-		normalizeJSON(t.Services), normalizeJSON(t.Requires),
+		normalizeJSON(t.Services), normalizeJSON(t.Requires), normalizeJSON(t.Configs),
 	)
 	if err != nil {
 		return 0, fmt.Errorf("create template: %w", err)
@@ -104,10 +106,10 @@ func (r *DeployRepo) CreateTemplate(t *model.DeployTemplate) (int64, error) {
 // UpdateTemplate 更新模板内容（内置模板仅允许改描述以外的场景由上层限制）。
 func (r *DeployRepo) UpdateTemplate(t *model.DeployTemplate) error {
 	_, err := DB.Exec(
-		`UPDATE deploy_templates SET name=?, description=?, category=?, script=?, variables=?, services=?, requires=?,
+		`UPDATE deploy_templates SET name=?, description=?, category=?, script=?, variables=?, services=?, requires=?, configs=?,
 		updated_at=datetime('now','localtime') WHERE id=?`,
 		t.Name, t.Description, t.Category, t.Script, string(t.Variables),
-		normalizeJSON(t.Services), normalizeJSON(t.Requires), t.ID,
+		normalizeJSON(t.Services), normalizeJSON(t.Requires), normalizeJSON(t.Configs), t.ID,
 	)
 	return err
 }
@@ -373,4 +375,86 @@ func (r *DeployRepo) GetTask(id int64) (*model.DeployTask, error) {
 		return nil, nil
 	}
 	return t, err
+}
+
+// ListRunningTasks 当前状态为 running 的任务（setup sse 用于判断是否存在运行中任务）。
+func (r *DeployRepo) ListRunningTasks() ([]model.DeployTask, error) {
+	rows, err := DB.Query(
+		`SELECT id,template_id,template_name,status,total,success_cnt,fail_cnt,schedule_id,trigger_type,created_at,finished_at
+		FROM deploy_tasks WHERE status='running' ORDER BY id ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []model.DeployTask{}
+	for rows.Next() {
+		var t model.DeployTask
+		if err := rows.Scan(&t.ID, &t.TemplateID, &t.TemplateName, &t.Status, &t.Total,
+			&t.SuccessCnt, &t.FailCnt, &t.ScheduleID, &t.TriggerType, &t.CreatedAt, &t.FinishedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, t)
+	}
+	return items, rows.Err()
+}
+
+// AppendTaskLogs 批量写入任务日志行（单事务），返回落库后的行（填充自增 id 与 created_at）。
+func (r *DeployRepo) AppendTaskLogs(taskID int64, rows []model.DeployLog) ([]model.DeployLog, error) {
+	if len(rows) == 0 {
+		return nil, nil
+	}
+	tx, err := DB.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	now := ""
+	_ = tx.QueryRow(`SELECT datetime('now','localtime')`).Scan(&now)
+	out := make([]model.DeployLog, 0, len(rows))
+	for _, l := range rows {
+		res, err := tx.Exec(
+			`INSERT INTO deploy_task_logs(task_id,host_id,host_ip,text,created_at) VALUES(?,?,?,?,?)`,
+			taskID, l.HostID, l.HostIP, l.Text, now)
+		if err != nil {
+			return nil, fmt.Errorf("append task log: %w", err)
+		}
+		id, err := res.LastInsertId()
+		if err != nil {
+			return nil, err
+		}
+		l.ID = id
+		l.TaskID = taskID
+		l.CreatedAt = now
+		out = append(out, l)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// TaskLogs 某任务已落库日志（id 升序，最近 2000 行封顶）。
+func (r *DeployRepo) TaskLogs(taskID int64) ([]model.DeployLog, error) {
+	rows, err := DB.Query(
+		`SELECT id,task_id,host_id,host_ip,text,created_at
+		 FROM (
+		   SELECT id,task_id,host_id,host_ip,text,created_at
+		   FROM deploy_task_logs
+		   WHERE task_id=?
+		   ORDER BY id DESC LIMIT 2000
+		 ) t ORDER BY id ASC`, taskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []model.DeployLog{}
+	for rows.Next() {
+		var l model.DeployLog
+		if err := rows.Scan(&l.ID, &l.TaskID, &l.HostID, &l.HostIP, &l.Text, &l.CreatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, l)
+	}
+	return items, rows.Err()
 }

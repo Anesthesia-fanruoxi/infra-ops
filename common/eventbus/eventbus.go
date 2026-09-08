@@ -15,6 +15,8 @@ const (
 	TopicAuditCreated = "audit.created"
 	// TopicDeployProgress 在部署任务单台主机状态变化后发布。
 	TopicDeployProgress = "deploy.progress"
+	// TopicDeployLogs 在部署任务日志行落库（先落库再发布）后发布，供日志抽屉回放与实时追加。
+	TopicDeployLogs = "deploy.logs"
 	// TopicOrchestrationProgress 在编排运行步骤状态/输出变化后发布。
 	TopicOrchestrationProgress = "orchestration.progress"
 	// TopicOrchestrationSteps 在编排运行步骤生命周期（started/finished/run_done）发布。

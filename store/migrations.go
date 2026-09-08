@@ -23,6 +23,34 @@ var migrations = []migration{
 	{13, migrateV13},
 	{14, migrateV14},
 	{15, migrateV15},
+	{16, migrateV16},
+	{17, migrateV17},
+}
+
+// migrateV17 deploy_templates 增加 configs 列：声明可被用户覆盖的配置文件（JSON 数组）。
+func migrateV17(db *sql.DB) error {
+	return addColumnIfMissing(db, "deploy_templates", "configs", `TEXT NOT NULL DEFAULT '[]'`)
+}
+
+// migrateV16 部署任务运行时日志表：按行落库，供日志抽屉快照回放与实时追加；任务删除时级联清理。
+func migrateV16(db *sql.DB) error {
+	stmts := []string{
+		`CREATE TABLE IF NOT EXISTS deploy_task_logs (
+			id         INTEGER PRIMARY KEY AUTOINCREMENT,
+			task_id    INTEGER NOT NULL REFERENCES deploy_tasks(id) ON DELETE CASCADE,
+			host_id    INTEGER NOT NULL DEFAULT 0,
+			host_ip    TEXT NOT NULL DEFAULT '',
+			text       TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_deploy_task_logs_task ON deploy_task_logs(task_id, id)`,
+	}
+	for _, s := range stmts {
+		if _, err := db.Exec(s); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // migrateV15 服务清单与模板扩展：deploy_templates 增 services/category/requires；新增 host_services。

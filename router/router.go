@@ -160,6 +160,8 @@ func Setup(staticFS fs.FS, deps Deps) *gin.Engine {
 	protected.GET("/sse/hosts", sseHandler.HostStatus)
 	protected.GET("/sse/audits", sseHandler.Audits)
 	protected.GET("/sse/deploy", deployTaskHandler.SSEProgress)
+	protected.GET("/sse/deploy/setup", deployTaskHandler.SSESetup)
+	protected.GET("/sse/deploy/log", deployTaskHandler.SSELog)
 	protected.GET("/sse/orchestration/steps", orchHandler.SSESteps)
 	protected.GET("/sse/orchestration/detail", orchHandler.SSEDetail)
 

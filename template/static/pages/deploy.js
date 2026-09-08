@@ -10,7 +10,7 @@ window.DeployPage = {
         <div>
           <span class="deploy-eyebrow">DEPLOY CENTER</span>
           <h1>基础建设</h1>
-          <p>历史任务回溯 · 三步创建批量部署</p>
+          <p>执行记录回溯 · 三步创建批量部署</p>
         </div>
         <el-button type="primary" size="large" class="deploy-new-btn" @click="openWizard">
           <el-icon style="margin-right:6px"><Plus /></el-icon>新建任务
@@ -62,8 +62,21 @@ window.DeployPage = {
       </div>
     </div>
 
-    <!-- Step 3: 逐台变量 -->
+    <!-- Step 3: 逐台变量 + 自定义配置 -->
     <div v-show="step===3">
+      <!-- 任务级自定义配置：留空则使用脚本默认配置；提供内容则整体覆盖对应配置文件 -->
+      <div v-if="selectedConfigs.length" class="deploy-cfgs-task">
+        <div class="deploy-host-vars-head">
+          <span class="deploy-host-vars-title">自定义配置 <span class="deploy-var-hint">任务级默认 · 留空则使用脚本默认配置；粘贴完整内容将整体覆盖对应配置文件</span></span>
+        </div>
+        <div class="deploy-cfgs-fields">
+          <div class="deploy-cfgs-field" v-for="c in selectedConfigs" :key="c.key">
+            <label>{{c.label}}</label>
+            <el-input type="textarea" :rows="4" class="mono deploy-cfgs-input" :model-value="taskConfigs[c.key] || ''" @input="val => onTaskConfig(c.key, val)" :placeholder="c.hint" />
+          </div>
+        </div>
+      </div>
+
       <template v-if="hasTplVars">
         <div class="deploy-host-vars-head" style="margin-bottom:10px">
           <span class="deploy-host-vars-title">每台主机单独设置 <span class="deploy-var-hint">留空则使用模板默认值</span></span>
@@ -86,6 +99,12 @@ window.DeployPage = {
                 <el-input size="small" :model-value="hostParamValue(h.id, v)" @input="val => onHostParamInput(h.id, v, val)" :placeholder="v.default || '继承默认'" />
               </div>
             </div>
+            <div v-if="selectedConfigs.length" class="deploy-host-cfg-fields">
+              <div class="deploy-cfgs-field deploy-cfgs-field--host" v-for="c in selectedConfigs" :key="c.key">
+                <label>自定义 · {{c.label}}（覆盖任务级）</label>
+                <el-input type="textarea" :rows="3" class="mono deploy-cfgs-input" :model-value="configValue(h.id, c.key)" @input="val => onHostConfig(h.id, c.key, val)" :placeholder="(taskConfigs[c.key] ? '继承任务级配置' : c.hint)" />
+              </div>
+            </div>
           </div>
         </div>
       </template>
@@ -106,90 +125,74 @@ window.DeployPage = {
     </template>
   </el-dialog>
 
-  <!-- 实时进度区 -->
-  <div v-if="taskDetail" class="page-card deploy-progress-card">
-    <div class="card-header">
-      <div>
-        <span class="title">部署进度</span>
-        <el-tag :type="taskStatusType" size="small" style="margin-left:10px">{{taskStatusText}}</el-tag>
-      </div>
-      <span class="mono" style="font-size:12px;color:var(--text-faint)">任务 #{{taskDetail.id}}</span>
-    </div>
-    <div class="deploy-progress-summary">
-      <span>总计 <strong>{{taskDetail.total}}</strong></span>
-      <span class="deploy-prog-ok">成功 <strong>{{taskDetail.success_cnt}}</strong></span>
-      <span class="deploy-prog-fail">失败 <strong>{{taskDetail.fail_cnt}}</strong></span>
-    </div>
-    <div class="deploy-progress-bar-wrap" v-if="taskDetail.total">
-      <div class="deploy-progress-bar">
-        <div class="deploy-progress-fill deploy-progress-fill--ok" :style="{width: (taskDetail.success_cnt/taskDetail.total*100)+'%'}"></div>
-        <div class="deploy-progress-fill deploy-progress-fill--fail" :style="{width: (taskDetail.fail_cnt/taskDetail.total*100)+'%'}"></div>
-      </div>
-    </div>
-    <el-table :data="taskHosts" size="small" class="deploy-progress-table">
-      <el-table-column label="主机" min-width="160">
-        <template #default="{row}"><span style="font-weight:500">{{row.host_name}}</span><span class="mono" style="margin-left:6px;font-size:11px;color:var(--text-faint)">{{row.host_ip}}</span></template>
-      </el-table-column>
-      <el-table-column label="状态" width="100">
-        <template #default="{row}"><span class="status-badge" :class="hostStatusCls(row.status)"><span class="dot"></span>{{hostStatusText(row.status)}}</span></template>
-      </el-table-column>
-      <el-table-column label="输出" min-width="200">
-        <template #default="{row}">
-          <el-button v-if="row.output || row.error" size="small" text type="primary" @click="row._showOutput = !row._showOutput">{{row._showOutput ? '收起日志' : (row.status === 'running' ? '实时日志' : '查看')}}</el-button>
-          <div v-if="row._showOutput" class="deploy-output-pre"><pre>{{ outputText(row) }}</pre></div>
-        </template>
-      </el-table-column>
-    </el-table>
-  </div>
-
-  <!-- 历史任务 -->
+  <!-- 执行记录列表 -->
   <div class="page-card deploy-history">
     <div class="card-header">
-      <span class="title">历史执行任务</span>
+      <div class="deploy-history-head">
+        <span class="title">执行记录</span>
+        <el-tag v-if="runningCount" type="warning" size="small" class="deploy-running-tag">
+          <span class="dot running"></span>{{runningCount}} 个任务运行中
+        </el-tag>
+      </div>
       <el-button size="small" text @click="loadTasks"><el-icon style="margin-right:4px"><Refresh /></el-icon>刷新</el-button>
     </div>
-    <el-table :data="tasks" style="width:100%" v-loading="tasksLoading" class="deploy-task-table" @row-click="viewTaskDetail">
-      <el-table-column label="任务 ID" width="90">
+    <el-table :data="tasks" style="width:100%" v-loading="tasksLoading" class="deploy-task-table">
+      <el-table-column label="记录 ID" width="90">
         <template #default="{row}"><span class="mono">#{{row.id}}</span></template>
       </el-table-column>
-      <el-table-column label="模板" min-width="140" prop="template_name" />
+      <el-table-column label="模板" min-width="160" prop="template_name" />
       <el-table-column label="状态" width="110">
         <template #default="{row}"><el-tag :type="taskTagType(row.status)" size="small">{{taskStatusLabel(row.status)}}</el-tag></template>
       </el-table-column>
-      <el-table-column label="进度" width="100">
-        <template #default="{row}"><span class="mono">{{row.success_cnt}}/{{row.total}}</span></template>
+      <el-table-column label="成功" width="76" align="center">
+        <template #default="{row}"><span class="ok deploy-cnt">{{row.success_cnt}}</span><span class="mono faint">/{{row.total}}</span></template>
+      </el-table-column>
+      <el-table-column label="失败" width="70" align="center">
+        <template #default="{row}"><span class="fail deploy-cnt">{{row.fail_cnt}}</span></template>
       </el-table-column>
       <el-table-column label="开始时间" width="170">
         <template #default="{row}"><span class="mono" style="font-size:12px;color:var(--text-faint)">{{formatTime(row.created_at)}}</span></template>
       </el-table-column>
+      <el-table-column label="" width="100" fixed="right">
+        <template #default="{row}"><el-button size="small" text type="primary" @click="openDrawer(row)">查看记录</el-button></template>
+      </el-table-column>
     </el-table>
-    <div v-if="!tasksLoading && !tasks.length" class="empty-state"><p>暂无部署记录</p></div>
+    <div v-if="!tasksLoading && !tasks.length" class="empty-state"><p>暂无执行记录</p></div>
   </div>
 
-  <!-- 任务详情弹窗 -->
-  <el-dialog v-model="detailVisible" :title="'任务详情 #' + (detailTask?.id || '')" width="720px">
-    <div v-if="detailTask" class="deploy-detail">
-      <div class="deploy-detail-meta">
-        <span>模板：{{detailTask.template_name}}</span>
-        <el-tag :type="taskTagType(detailTask.status)" size="small">{{taskStatusLabel(detailTask.status)}}</el-tag>
-        <span class="mono" style="font-size:12px">{{formatTime(detailTask.created_at)}}</span>
-      </div>
-      <el-table :data="detailHosts" size="small">
-        <el-table-column label="主机" min-width="140">
-          <template #default="{row}"><span>{{row.host_name}}</span><span class="mono" style="margin-left:6px;font-size:11px;color:var(--text-faint)">{{row.host_ip}}</span></template>
-        </el-table-column>
-        <el-table-column label="状态" width="100">
-          <template #default="{row}"><span class="status-badge" :class="hostStatusCls(row.status)"><span class="dot"></span>{{hostStatusText(row.status)}}</span></template>
-        </el-table-column>
-        <el-table-column label="输出" min-width="200">
-          <template #default="{row}">
-            <el-button v-if="row.output || row.error" size="small" text @click="row._showOutput = !row._showOutput">{{row._showOutput ? '收起' : '查看'}}</el-button>
-            <div v-if="row._showOutput" class="deploy-output-pre"><pre>{{row.error || row.output || '无输出'}}</pre></div>
-          </template>
-        </el-table-column>
-      </el-table>
+  <!-- 执行记录详情抽屉：主机状态 + 实时日志 -->
+  <el-drawer v-model="drawerVisible" :title="'执行记录 #' + (recordMeta?.id || '')" size="44%" class="deploy-drawer" @closed="closeDrawer">
+    <div v-if="recordMeta" class="deploy-drawer-meta">
+      <span class="deploy-drawer-meta-tpl">{{recordMeta.template_name || '模板未记录'}}</span>
+      <el-tag :type="taskTagType(recordMeta.status)" size="small">{{taskStatusLabel(recordMeta.status)}}</el-tag>
+      <span v-if="recordMeta.created_at" class="mono faint deploy-drawer-meta-time">{{formatTime(recordMeta.created_at)}}</span>
     </div>
-  </el-dialog>
+    <div v-if="recordHosts.length" class="deploy-drawer-hostlist">
+      <div class="deploy-drawer-host" v-for="h in recordHosts" :key="h.id">
+        <span class="status-badge" :class="hostStatusCls(h.status)"><span class="dot"></span>{{hostStatusText(h.status)}}</span>
+        <span class="deploy-host-name">{{h.host_name}}</span>
+        <span class="mono deploy-host-ip">{{h.host_ip}}</span>
+      </div>
+    </div>
+
+    <div class="drawer-sec deploy-log-sec">
+      <div class="drawer-sec-title">运行日志</div>
+      <div class="orch-log-head">
+        <span class="faint deploy-log-count">{{recordLogs.length}} 行</span>
+        <div class="deploy-log-filter">
+          <el-input v-model="logFilter" placeholder="过滤：主机 IP 或内容关键词" clearable size="small" style="width:220px" />
+        </div>
+      </div>
+      <div class="deploy-log-box" ref="deployLogBox" @scroll="onLogScroll">
+        <div v-if="!filteredLogs.length" class="deploy-log-empty">暂无日志</div>
+        <div v-for="l in filteredLogs" :key="l.id" class="deploy-log-row">
+          <span class="deploy-log-time">{{logTime(l.ts)}}</span>
+          <span class="deploy-log-ip">{{l.ip}}</span>
+          <span class="deploy-log-text">{{l.text}}</span>
+        </div>
+      </div>
+    </div>
+  </el-drawer>
 </div>`,
 
   data() {
@@ -197,11 +200,14 @@ window.DeployPage = {
       step: 1, templates: [], tplLoading: false, tplLoaded: false, selectedTemplateId: null, selectedTemplate: null,
       hosts: [], hostsLoading: false, hostsLoaded: false, selectedHostIds: new Set(), hostFilter: '', hostSort: { field: 'name', order: 'asc' },
       hostParams: {}, // 逐主机变量覆盖 host_id -> {name: value}；留空字段=继承模板默认
-      deploying: false, running: false,
+      taskConfigs: {}, // 任务级自定义配置 config_key -> 内容（留空=用脚本默认）
+      hostConfigs: {}, // 主机级自定义配置覆盖 host_id -> {key: content}
+      deploying: false,
       wizardVisible: false,
-      taskDetail: null, taskHosts: [], taskSse: null,
       tasks: [], tasksLoading: false,
-      detailVisible: false, detailTask: null, detailHosts: []
+      // 执行记录抽屉
+      drawerVisible: false, recordMeta: null, recordHosts: [], recordLogs: [], logFilter: '',
+      sseLog: null, setupSse: null, logAutoScroll: true
     }
   },
   computed: {
@@ -215,6 +221,8 @@ window.DeployPage = {
     },
     selectedHosts() { return this.hosts.filter(h => this.selectedHostIds.has(h.id)) },
     hasTplVars() { return !!(this.selectedTemplate && this.selectedTemplate.variables && this.selectedTemplate.variables.length) },
+    // 模板声明的可覆盖配置文件
+    selectedConfigs() { return (this.selectedTemplate && this.selectedTemplate.configs) || [] },
     // 存在必填变量未填的主机列表
     missingHosts() {
       if (!this.hasTplVars) return []
@@ -224,23 +232,21 @@ window.DeployPage = {
       if (!this.selectedHosts.length || !this.selectedTemplate) return false
       return this.missingHosts.length === 0
     },
-    taskStatusType() {
-      if (!this.taskDetail) return 'info'
-      const s = this.taskDetail.status
-      if (s === 'success') return 'success'; if (s === 'failed' || s === 'partial') return 'danger'; return 'warning'
-    },
-    taskStatusText() {
-      if (!this.taskDetail) return ''
-      return { running: '执行中', success: '已完成', partial: '部分成功', failed: '失败' }[this.taskDetail.status] || this.taskDetail.status
+    runningCount() { return this.tasks.filter(t => t.status === 'running').length },
+    filteredLogs() {
+      if (!this.logFilter) return this.recordLogs
+      const kw = this.logFilter.toLowerCase()
+      return this.recordLogs.filter(l => (l.ip||'').toLowerCase().includes(kw) || (l.text||'').toLowerCase().includes(kw))
     }
   },
-  mounted() { this.loadTasks() },
-  beforeUnmount() { this.closeSse() },
+  mounted() { this.loadTasks(); this.connectSetup() },
+  beforeUnmount() { this.closeDrawer(); this.closeSetup() },
   watch: {
     selectedTemplateId(id) {
       this.step = id ? 2 : 1
       this.selectedTemplate = this.templates.find(t => t.id === id) || null
       this.hostParams = {} // 切换模板后逐台变量全部失效
+      this.taskConfigs = {}; this.hostConfigs = {} // 自定义配置同理
       if (id) this.loadHosts() // 第二步需要主机列表
     },
     // 进入第三步时若主机列表尚未加载则补拉（直接点步骤条的场景）
@@ -315,6 +321,26 @@ window.DeployPage = {
       this.selectedHosts.forEach(h => { if (this.hostParams[h.id]) o[h.id] = this.hostParams[h.id] })
       return o
     },
+    /* ===== 自定义配置 ===== */
+    onTaskConfig(key, val) {
+      const n = { ...this.taskConfigs }
+      if (val == null || val === '') delete n[key]
+      else n[key] = val
+      this.taskConfigs = n
+    },
+    configValue(hostId, key) { return (this.hostConfigs[hostId] && this.hostConfigs[hostId][key]) || '' },
+    onHostConfig(hostId, key, val) {
+      const cur = this.hostConfigs[hostId] ? { ...this.hostConfigs[hostId] } : {}
+      if (val == null || val === '') delete cur[key]
+      else cur[key] = val
+      this.hostConfigs = { ...this.hostConfigs, [hostId]: cur }
+    },
+    buildTaskConfigs() { return { ...this.taskConfigs } },
+    buildHostConfigs() {
+      const o = {}
+      this.selectedHosts.forEach(h => { if (this.hostConfigs[h.id] && Object.keys(this.hostConfigs[h.id]).length) o[h.id] = { ...this.hostConfigs[h.id] } })
+      return o
+    },
     /* ===== 新建任务向导 ===== */
     openWizard() {
       this.loadTemplates()
@@ -329,10 +355,11 @@ window.DeployPage = {
       this.selectedTemplateId = null
       this.selectedTemplate = null
       this.hostParams = {}
+      this.taskConfigs = {}; this.hostConfigs = {}
       this.selectedHostIds = new Set()
       this.hostFilter = ''
     },
-    /* ===== 部署 ===== */
+    /* ===== 部署（新建任务 → 新执行记录） ===== */
     async confirmDeploy() {
       if (!this.selectedHosts.length) { ElMessage.warning('请至少选择一台主机'); return }
       try {
@@ -347,75 +374,122 @@ window.DeployPage = {
           template_id: this.selectedTemplateId,
           // 按页面当前显示顺序提交（排序后全选时序号跟随该顺序，供 {{__seq}} 批量命名使用）
           host_ids: this.filteredHosts.filter(h => this.selectedHostIds.has(h.id)).map(h => h.id),
-          host_params: this.buildHostParams()
+          host_params: this.buildHostParams(),
+          configs: this.buildTaskConfigs(),
+          host_configs: this.buildHostConfigs()
         })
         if (r.code === 0) {
           ElMessage.success('部署任务已创建')
           this.wizardVisible = false
-          this.taskDetail = { id: r.data.task_id, status: 'running', total: this.selectedHosts.length, success_cnt: 0, fail_cnt: 0 }
-          this.taskHosts = this.selectedHosts.map(h => ({ host_id: h.id, host_name: h.name, host_ip: h.ip, status: 'pending', output: '', error: '' }))
-          this.connectTaskSse(r.data.task_id)
-          this.running = true
           this.loadTasks()
+          this.openDrawer({ id: r.data.task_id, status: 'running' }) // 立即打开该执行记录，实时查看日志
         }
       } catch (e) { ElMessage.error(e.response?.data?.message || '部署失败') } finally { this.deploying = false }
     },
-    /* ===== SSE 进度 ===== */
-    connectSse(taskId) { this.connectTaskSse(taskId) },
-    connectTaskSse(taskId) {
-      this.closeSse()
-      const source = new EventSource('/api/sse/deploy?task_id=' + taskId, { withCredentials: true })
-      this.taskSse = source
-      source.addEventListener('progress', (e) => {
+    /* ===== setup sse：常驻执行记录状态流（运行中→终态），驱动列表刷新 ===== */
+    connectSetup() {
+      this.closeSetup()
+      const source = new EventSource('/api/sse/deploy/setup', { withCredentials: true })
+      this.setupSse = source
+      source.addEventListener('init', (e) => {
         try {
           const d = JSON.parse(e.data)
-          this.taskDetail.total = d.total || this.taskDetail.total
-          this.taskDetail.success_cnt = d.success_cnt ?? this.taskDetail.success_cnt
-          this.taskDetail.fail_cnt = d.fail_cnt ?? this.taskDetail.fail_cnt
-          this.taskDetail.status = d.task_status || 'running'
-          const h = this.taskHosts.find(x => x.host_id === d.host_id)
-          if (h) {
-            if (d.status === 'output') {
-              // 执行过程中的增量日志，实时追加
-              h.output = (h.output || '') + (d.output || '')
-            } else {
-              h.status = d.status
-              if (d.output) h.output = d.output  // 终态用全量输出覆盖，避免重复
-              h.error = d.error || ''
-            }
-          }
+          if (!d.idle && (d.running || []).length) { this.markRunning(d.running); this.refreshTaskRow(d) }
         } catch (err) { /* */ }
+      })
+      source.addEventListener('track', (e) => {
+        try { const d = JSON.parse(e.data); this.patchTaskRow(d) } catch (err) { /* */ }
       })
       source.addEventListener('done', (e) => {
-        try {
-          const d = JSON.parse(e.data)
-          if (d && d.task_status) {
-            this.taskDetail.total = d.total || this.taskDetail.total
-            this.taskDetail.success_cnt = d.success_cnt
-            this.taskDetail.fail_cnt = d.fail_cnt
-            this.taskDetail.status = d.task_status
-          }
-        } catch (err) { /* */ }
-        this.running = false; this.closeSse(); this.loadTasks()
+        try { const d = JSON.parse(e.data); this.patchTaskRow(d) } catch (err) { /* */ }
+        this.loadTasks() // 任务结束，刷新列表翻转终态
       })
-      source.onerror = () => { /* EventSource auto-reconnect */ }
+      source.onerror = () => { /* EventSource auto-reconnect，重连走默认即可 */ }
     },
-    closeSse() { if (this.taskSse) { this.taskSse.close(); this.taskSse = null } },
-    /* ===== 任务详情 ===== */
-    async viewTaskDetail(row) {
+    // init 里带来了运行中快照：将其并入列表（补缺即可，不整体刷新以免闪动）
+    markRunning(running) {
+      const have = new Set(this.tasks.map(t => t.id))
+      const need = running.filter(t => !have.has(t.task_id))
+      if (need.length) this.loadTasks()
+    },
+    refreshTaskRow(d) {
+      if (!d.running || !this.tasks.length) return
+      d.running.forEach(r => {
+        const row = this.tasks.find(t => t.id === r.task_id)
+        if (row) { row.status = 'running'; row.success_cnt = r.success_cnt; row.fail_cnt = r.fail_cnt; row.total = r.total }
+      })
+    },
+    // track/done：更新列表里对应记录行的计数与状态（不重拉）
+    patchTaskRow(d) {
+      const row = this.tasks.find(t => t.id === d.task_id)
+      if (!row) return
+      if (d.success_cnt != null) row.success_cnt = d.success_cnt
+      if (d.fail_cnt != null) row.fail_cnt = d.fail_cnt
+      if (d.total != null) row.total = d.total
+      if (d.status && d.status !== 'running') row.status = d.status
+    },
+    closeSetup() { if (this.setupSse) { this.setupSse.close(); this.setupSse = null } },
+    /* ===== 执行记录抽屉 ===== */
+    async openDrawer(row) {
+      this.drawerVisible = true
+      this.recordMeta = { id: row.id, status: row.status || 'running' }
+      this.recordHosts = []
+      this.logFilter = ''
+      this.disconnectLog()
       try {
         const r = await api.get('/deploy/tasks/' + row.id)
         if (r.code === 0) {
-          this.detailTask = r.data
-          this.detailHosts = (r.data.hosts || []).map(h => ({...h, _showOutput: false}))
-          this.detailVisible = true
-          if (r.data.status === 'running') this.connectTaskSse(r.data.id)
+          this.recordMeta = { id: r.data.id, template_name: r.data.template_name, status: r.data.status, created_at: r.data.created_at }
+          this.recordHosts = (r.data.hosts || []).map(h => ({ ...h }))
         }
-      } catch (e) { ElMessage.error('加载任务详情失败') }
+      } catch (e) { /* */ }
+      this.connectLog(row.id)
     },
+    closeDrawer() {
+      this.disconnectLog()
+      this.drawerVisible = false
+      this.recordMeta = null; this.recordHosts = []; this.recordLogs = []; this.logFilter = ''
+    },
+    connectLog(taskId) {
+      this.disconnectLog()
+      const source = new EventSource('/api/sse/deploy/log?task_id=' + taskId, { withCredentials: true })
+      this.sseLog = source
+      source.addEventListener('init', (e) => {
+        try {
+          const d = JSON.parse(e.data)
+          this.recordLogs = (d.logs || []).map(l => ({ id: l.id, ts: l.ts, ip: l.ip, text: l.text }))
+          if (d.task_status && d.task_status !== 'running') this.disconnectLog()
+          this.$nextTick(() => this.scrollLogsBottom())
+        } catch (err) { /* */ }
+      })
+      source.addEventListener('log', (e) => {
+        try {
+          const l = JSON.parse(e.data)
+          this.recordLogs.push({ id: l.id, ts: l.ts, ip: l.ip, text: l.text })
+          this.$nextTick(() => this.scrollLogsBottom())
+        } catch (err) { /* */ }
+      })
+      source.addEventListener('done', (e) => {
+        try { const d = JSON.parse(e.data); if (d.task_status) this.recordMeta.status = d.task_status } catch (err) { /* */ }
+        this.disconnectLog(); this.loadTasks()
+      })
+      source.onerror = () => { /* */ }
+    },
+    disconnectLog() { if (this.sseLog) { this.sseLog.close(); this.sseLog = null } },
+    /* ===== 日志滚动 ===== */
+    onLogScroll(e) {
+      const el = e.target
+      this.logAutoScroll = el.scrollHeight - el.scrollTop - el.clientHeight < 30
+    },
+    scrollLogsBottom() {
+      if (!this.logAutoScroll) return
+      const el = this.$refs.deployLogBox
+      if (el) el.scrollTop = el.scrollHeight
+    },
+    /* ===== 渲染辅助 ===== */
     hostStatusCls(s) { if (s === 'success') return 'online'; if (s === 'failed') return 'offline'; if (s === 'running') return 'running'; return 'unverified' },
-    outputText(row) { const txt = (row.error ? row.error + '\n' : '') + (row.output || ''); return txt || '无输出' },
     hostStatusText(s) { return { pending: '等待中', running: '执行中', success: '成功', failed: '失败' }[s] || s },
+    logTime(ts) { return ts ? (ts.length >= 19 ? ts.slice(11, 19) : ts) : '' },
     taskTagType(s) { if (s === 'success') return 'success'; if (s === 'failed' || s === 'partial') return 'danger'; if (s === 'running') return 'warning'; return 'info' },
     taskStatusLabel(s) { return { running: '执行中', success: '已完成', partial: '部分成功', failed: '失败' }[s] || s },
     formatTime(t) {

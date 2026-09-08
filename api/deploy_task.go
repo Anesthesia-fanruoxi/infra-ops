@@ -2,6 +2,8 @@
 package api
 
 import (
+	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -62,6 +64,8 @@ type runReq struct {
 	HostIDs    []int64                     `json:"host_ids" binding:"required,min=1"`
 	Params     map[string]string           `json:"params"`      // 任务级默认变量
 	HostParams map[int64]map[string]string `json:"host_params"` // 主机级变量覆盖 host_id -> {k:v}
+	Configs    map[string]string           `json:"configs"`     // 任务级自定义配置 config_key -> 内容（非空则覆盖默认配置文件）
+	HostConfigs map[int64]map[string]string `json:"host_configs"` // 主机级自定义配置覆盖 host_id -> {key: content}
 }
 
 // deployProgress SSE 推送的进度事件。
@@ -77,6 +81,16 @@ type deployProgress struct {
 	TaskStatus string `json:"task_status"` // running 或任务终态
 }
 
+// deployLogEvent 日志行事件（TopicDeployLogs，先落库再发布）。
+type deployLogEvent struct {
+	TaskID int64  `json:"task_id"`
+	HostID int64  `json:"host_id"`
+	HostIP string `json:"host_ip"`
+	Text   string `json:"text"`
+	ID     int64  `json:"id"`
+	Ts     string `json:"ts,omitempty"`
+}
+
 // Run POST /api/deploy/run：创建任务并异步批量执行。
 func (h *deployHandler) Run(c *gin.Context) {
 	var req runReq
@@ -89,7 +103,7 @@ func (h *deployHandler) Run(c *gin.Context) {
 		resp.Fail(c, resp.CodeNotFound, "模板不存在")
 		return
 	}
-	taskID, err := h.createAndRun(tpl, req.HostIDs, req.Params, req.HostParams, "manual", 0, c.ClientIP())
+	taskID, err := h.createAndRun(tpl, req.HostIDs, req.Params, req.HostParams, req.Configs, req.HostConfigs, "manual", 0, c.ClientIP())
 	if err != nil {
 		resp.Fail(c, resp.CodeBadRequest, err.Error())
 		return
@@ -100,8 +114,11 @@ func (h *deployHandler) Run(c *gin.Context) {
 // createAndRun 校验渲染脚本、落库建任务并异步执行；手动与定时触发共用。
 // 主机列表允许为空：任务照常创建并落执行记录（total=0）。
 // hostParams 为逐主机变量覆盖（host_id -> {k:v}），为空则所有主机共用 params。
+// configs/hostConfigs 为任务级/主机级自定义配置覆盖（config_key -> 内容），非空内容会在渲染期覆盖默认配置文件。
 func (h *deployHandler) createAndRun(tpl *model.DeployTemplate, hostIDs []int64,
-	params map[string]string, hostParams map[int64]map[string]string, triggerType string, scheduleID int64, remoteIP string) (int64, error) {
+	params map[string]string, hostParams map[int64]map[string]string,
+	taskConfigs map[string]string, hostConfigs map[int64]map[string]string,
+	triggerType string, scheduleID int64, remoteIP string) (int64, error) {
 	ids := dedupInt64(hostIDs)
 
 	var hosts []model.DeployTaskHost
@@ -114,6 +131,14 @@ func (h *deployHandler) createAndRun(tpl *model.DeployTemplate, hostIDs []int64,
 		merged, err := mergeParams(tpl.Variables, params, hostParams[id])
 		if err != nil {
 			return 0, err
+		}
+		// 合并自定义配置（任务级 < 主机覆盖），以保留键 __cfg.<key> 并入 ParamsJSON 持久化
+		cfgMerged, err := mergeConfigs(tpl.Configs, taskConfigs, hostConfigs[id])
+		if err != nil {
+			return 0, fmt.Errorf("主机 %s 自定义配置校验失败: %w", hh.Name, err)
+		}
+		for k, v := range cfgMerged {
+			merged["__cfg."+k] = v
 		}
 		if _, err := renderScript(tpl.Script, tpl.Variables, merged); err != nil {
 			return 0, fmt.Errorf("主机 %s 变量校验失败: %w", hh.Name, err)
@@ -167,6 +192,96 @@ func mergeParams(rawVars json.RawMessage, taskParams, hostParams map[string]stri
 		merged[k] = val
 	}
 	return merged, nil
+}
+
+// parseConfigs 解析模板 configs 声明。
+func parseConfigs(raw json.RawMessage) ([]model.TemplateConfig, error) {
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return nil, nil
+	}
+	var cfgs []model.TemplateConfig
+	if err := json.Unmarshal(raw, &cfgs); err != nil {
+		return nil, err
+	}
+	return cfgs, nil
+}
+
+// mergeConfigs 合并自定义配置：任务级 < 主机级覆盖。模板声明 required 且结果为空时报错。
+func mergeConfigs(rawConfigs json.RawMessage, taskConfigs, hostConfigs map[string]string) (map[string]string, error) {
+	cfgs, err := parseConfigs(rawConfigs)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]string, len(cfgs))
+	for _, c := range cfgs {
+		if c.Key == "" {
+			continue
+		}
+		v, ok := hostConfigs[c.Key]
+		if !ok {
+			v, ok = taskConfigs[c.Key]
+		}
+		if !ok || strings.TrimSpace(v) == "" {
+			if c.Required {
+				return nil, fmt.Errorf("缺少必填自定义配置: %s(%s)", c.Label, c.Key)
+			}
+			continue
+		}
+		out[c.Key] = v
+	}
+	return out, nil
+}
+
+// applyConfigOverrides 渲染期覆盖默认配置文件：对提供了非空自定义内容的 config，
+// 用 base64 解码安全写入其目标文件。脚本中须用锚点
+// # __DEPLOY_CONF__ <key> … # __DEPLOY_CONF_END__ <key> 包裹默认写入块；无锚点则忽略并告警。
+func applyConfigOverrides(script string, tpl *model.DeployTemplate, merged map[string]string) string {
+	cfgs, err := parseConfigs(tpl.Configs)
+	if err != nil || len(cfgs) == 0 {
+		return script
+	}
+	out := script
+	for _, c := range cfgs {
+		if c.Key == "" {
+			continue
+		}
+		content, ok := merged["__cfg."+c.Key]
+		if !ok || strings.TrimSpace(content) == "" {
+			continue // 未提供 → 保持脚本默认
+		}
+		beginTag := "# __DEPLOY_CONF__ " + c.Key
+		endTag := "# __DEPLOY_CONF_END__ " + c.Key
+		b := strings.Index(out, beginTag)
+		if b < 0 {
+			log.Printf("deploy: 模板 config %s(%s) 未在脚本中找到锚点，自定义配置已忽略", c.Key, c.Label)
+			continue
+		}
+		e := strings.Index(out[b+len(beginTag):], endTag)
+		if e < 0 {
+			continue
+		}
+		ePos := b + len(beginTag) + e + len(endTag)
+		file := renderConfigFile(c.File, merged)
+		b64 := base64.StdEncoding.EncodeToString([]byte(content))
+		quoted := strings.ReplaceAll(file, "'", "'\\''")
+		injected := beginTag + "\n" +
+			"# 用户自定义配置覆盖：" + c.Label + "\n" +
+			"printf '%s\\n' \"$(printf '%s' '" + b64 + "' | base64 -d)\" > '" + quoted + "'\n" +
+			endTag + "\n"
+		out = out[:b] + injected + out[ePos:]
+	}
+	return out
+}
+
+// renderConfigFile 渲染 config.file 中的 {{var}} 占位（跳过 __cfg.* 保留键）。
+func renderConfigFile(f string, merged map[string]string) string {
+	for k, v := range merged {
+		if strings.HasPrefix(k, "__cfg.") {
+			continue
+		}
+		f = strings.ReplaceAll(f, "{{"+k+"}}", v)
+	}
+	return f
 }
 
 // Tasks GET /api/deploy/tasks
@@ -321,15 +436,32 @@ func (h *deployHandler) execute(taskID int64) {
 				})
 			}
 
-			// 执行过程中增量推送日志片段（SSE 实时输出）
+			// 执行过程中增量日志：拆行落库后再发布（日志抽屉 init 快照回放 + 实时追加）
 			onLog := func(chunk string) {
-				if chunk == "" || h.bus == nil {
+				if chunk == "" {
 					return
 				}
-				h.bus.Publish(eventbus.TopicDeployProgress, deployProgress{
-					TaskID: taskID, HostID: rec.HostID, Status: "output",
-					Output: chunk, Total: len(records), TaskStatus: "running",
-				})
+				lines := splitLogLines(chunk)
+				if len(lines) == 0 {
+					return
+				}
+				rows := make([]model.DeployLog, 0, len(lines))
+				for _, ln := range lines {
+					rows = append(rows, model.DeployLog{HostID: rec.HostID, HostIP: rec.HostIP, Text: ln})
+				}
+				persisted, err := h.tplRepo.AppendTaskLogs(taskID, rows)
+				if err != nil {
+					log.Printf("deploy: 写日志失败 task=%d host=%d: %v", taskID, rec.HostID, err)
+					return
+				}
+				if h.bus != nil {
+					for _, l := range persisted {
+						h.bus.Publish(eventbus.TopicDeployLogs, deployLogEvent{
+							TaskID: taskID, HostID: l.HostID, HostIP: l.HostIP,
+							Text: l.Text, ID: l.ID, Ts: l.CreatedAt,
+						})
+					}
+				}
 			}
 
 			// 按本主机变量覆盖渲染（模板默认 < 任务默认 < 主机覆盖）
@@ -340,6 +472,8 @@ func (h *deployHandler) execute(taskID int64) {
 			var params map[string]string
 			_ = json.Unmarshal([]byte(rec.ParamsJSON), &params)
 			rendered, rerr := renderScript(tpl.Script, tpl.Variables, params)
+			// 自定义配置覆盖：若用户提供了非空内容，渲染期替换默认写入块
+			rendered = applyConfigOverrides(rendered, tpl, params)
 			if rerr != nil {
 				publish(rec, "failed", "", "脚本渲染失败: "+rerr.Error())
 				return
@@ -351,6 +485,7 @@ func (h *deployHandler) execute(taskID int64) {
 				publish(rec, "failed", "", "前置依赖不满足："+hint)
 				return
 			}
+			h.appendLog(taskID, rec.HostID, rec.HostIP, "开始执行")
 			output, execErr := h.execOnHost(rec.HostID, rendered, onLog)
 			status, errMsg := "success", ""
 			if execErr != nil {
@@ -365,6 +500,11 @@ func (h *deployHandler) execute(taskID int64) {
 						rec.HostName = newName
 					}
 				}
+			}
+			if status == "success" {
+				h.appendLog(taskID, rec.HostID, rec.HostIP, "执行成功")
+			} else {
+				h.appendLog(taskID, rec.HostID, rec.HostIP, "执行失败："+errMsg)
 			}
 			publish(rec, status, output, errMsg)
 		}(records[i], i+1)
@@ -381,6 +521,151 @@ func (h *deployHandler) execute(taskID int64) {
 			Total: len(records), TaskStatus: finalStatus,
 		})
 	}
+}
+
+// appendLog 写一条状态日志行：先落库再发布（与 onLog 共用日志抽屉闭环）。
+func (h *deployHandler) appendLog(taskID, hostID int64, hostIP, text string) {
+	persisted, err := h.tplRepo.AppendTaskLogs(taskID, []model.DeployLog{{HostID: hostID, HostIP: hostIP, Text: text}})
+	if err != nil {
+		log.Printf("deploy: 写日志失败 task=%d host=%d: %v", taskID, hostID, err)
+		return
+	}
+	if h.bus != nil {
+		for _, l := range persisted {
+			h.bus.Publish(eventbus.TopicDeployLogs, deployLogEvent{
+				TaskID: taskID, HostID: l.HostID, HostIP: l.HostIP,
+				Text: l.Text, ID: l.ID, Ts: l.CreatedAt,
+			})
+		}
+	}
+}
+
+// SSESetup GET /api/sse/deploy/setup：执行记录常驻状态流（不传 task_id）。
+// 连接时查询是否存在运行中任务：有则带快照并按主机粒度进度事件转发（运行→终态）；
+// 无则只发 idle 并保持连接；常驻监听下，之后任意新启动的任务也会被实时转发。
+func (h *deployHandler) SSESetup(c *gin.Context) {
+	flusher, ok := sseSetup(c)
+	if !ok {
+		return
+	}
+
+	running, _ := h.tplRepo.ListRunningTasks()
+	snap := make([]gin.H, 0, len(running))
+	for _, t := range running {
+		snap = append(snap, gin.H{"task_id": t.ID, "template_name": t.TemplateName, "status": t.Status,
+			"total": t.Total, "success_cnt": t.SuccessCnt, "fail_cnt": t.FailCnt})
+	}
+	c.SSEvent("init", gin.H{"idle": len(snap) == 0, "running": snap})
+	flusher.Flush()
+
+	ch := make(chan deployProgress, 128)
+	if h.bus != nil {
+		subID := h.bus.Subscribe(eventbus.TopicDeployProgress, func(ev eventbus.Event) {
+			if p, ok := ev.Data.(deployProgress); ok {
+				select {
+				case ch <- p:
+				default:
+				}
+			}
+		})
+		defer h.bus.Unsubscribe(eventbus.TopicDeployProgress, subID)
+	}
+
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+	c.Stream(func(w io.Writer) bool {
+		select {
+		case p := <-ch:
+			if p.TaskStatus != "running" { // 任务终态
+				c.SSEvent("done", gin.H{"task_id": p.TaskID, "status": p.TaskStatus,
+					"success_cnt": p.SuccessCnt, "fail_cnt": p.FailCnt, "total": p.Total})
+			} else { // 主机级进度增量（含新任务开始的首个 running 事件）
+				c.SSEvent("track", gin.H{"task_id": p.TaskID, "status": p.Status,
+					"success_cnt": p.SuccessCnt, "fail_cnt": p.FailCnt, "total": p.Total})
+			}
+		case <-ticker.C:
+			_, _ = io.WriteString(w, ": ping\n\n")
+		case <-c.Request.Context().Done():
+			return false
+		}
+		flusher.Flush()
+		return true
+	})
+}
+
+// SSELog GET /api/sse/deploy/log?task_id=N：执行记录日志流。
+// 事件：init（快照：已落库日志最近 2000 行 + 任务状态）→ log（实时行）→ done（结束关闭）。已结束任务仅 init+done 回溯。
+func (h *deployHandler) SSELog(c *gin.Context) {
+	taskID, err := strconv.ParseInt(c.Query("task_id"), 10, 64)
+	if err != nil || taskID <= 0 {
+		resp.Fail(c, resp.CodeBadRequest, "task_id 无效")
+		return
+	}
+	flusher, ok := sseSetup(c)
+	if !ok {
+		return
+	}
+
+	taskStatus := "running"
+	if t, _ := h.tplRepo.GetTask(taskID); t != nil {
+		taskStatus = t.Status
+	}
+	logs, _ := h.tplRepo.TaskLogs(taskID)
+	ls := make([]gin.H, 0, len(logs))
+	for _, l := range logs {
+		ls = append(ls, gin.H{"id": l.ID, "ts": l.CreatedAt, "ip": l.HostIP, "text": l.Text})
+	}
+	c.SSEvent("init", gin.H{"task_id": taskID, "task_status": taskStatus, "logs": ls})
+	flusher.Flush()
+
+	if taskStatus != "running" { // 已结束任务：init → done 立即关闭（回溯语义）
+		c.SSEvent("done", gin.H{"task_status": taskStatus})
+		flusher.Flush()
+		return
+	}
+
+	ch := make(chan deployLogEvent, 256)
+	doneCh := make(chan string, 4) // 任务终态信号，收到即关闭日志流
+	if h.bus != nil {
+		subLog := h.bus.Subscribe(eventbus.TopicDeployLogs, func(ev eventbus.Event) {
+			if l, ok := ev.Data.(deployLogEvent); ok && l.TaskID == taskID {
+				select {
+				case ch <- l:
+				default:
+				}
+			}
+		})
+		defer h.bus.Unsubscribe(eventbus.TopicDeployLogs, subLog)
+		// 任务终态走进度总线：同时监听，保证日志流能感知任务从运行中→已完成/失败
+		subProg := h.bus.Subscribe(eventbus.TopicDeployProgress, func(ev eventbus.Event) {
+			if p, ok := ev.Data.(deployProgress); ok && p.TaskID == taskID && p.TaskStatus != "running" {
+				select {
+				case doneCh <- p.TaskStatus:
+				default:
+				}
+			}
+		})
+		defer h.bus.Unsubscribe(eventbus.TopicDeployProgress, subProg)
+	}
+
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+	c.Stream(func(w io.Writer) bool {
+		select {
+		case l := <-ch:
+			c.SSEvent("log", gin.H{"id": l.ID, "ts": l.Ts, "ip": l.HostIP, "text": l.Text})
+		case ts := <-doneCh:
+			c.SSEvent("done", gin.H{"task_status": ts})
+			flusher.Flush()
+			return false
+		case <-ticker.C:
+			_, _ = io.WriteString(w, ": ping\n\n")
+		case <-c.Request.Context().Done():
+			return false
+		}
+		flusher.Flush()
+		return true
+	})
 }
 
 // execOnHost 解密凭据→SSH 拨号→执行渲染后脚本；onLog 在执行过程中接收增量输出。
