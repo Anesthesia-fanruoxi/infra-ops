@@ -23,6 +23,10 @@ const (
 	TopicOrchestrationSteps = "orchestration.steps"
 	// TopicOrchestrationLogs 在编排运行日志行落库后发布。
 	TopicOrchestrationLogs = "orchestration.logs"
+	// TopicStackProgress 在套件运行主机/阶段状态变化后发布。
+	TopicStackProgress = "stack.progress"
+	// TopicStackLogs 在套件运行日志行落库后发布。
+	TopicStackLogs = "stack.logs"
 )
 
 // Event 事件。

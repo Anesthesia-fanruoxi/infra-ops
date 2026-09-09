@@ -11,7 +11,7 @@ import (
 	"infra-ops/common/eventbus"
 	"infra-ops/common/sysutil"
 	"infra-ops/model"
-	"infra-ops/store"
+	"infra-ops/store/repo"
 )
 
 // orchProgress 主机状态事件（TopicOrchestrationProgress）。
@@ -107,7 +107,7 @@ func (h *orchHandler) executeRun(orchID, runID int64) {
 		publishLogs(persisted)
 	}
 
-	execCell := func(cell store.RunStepRef, def *model.OrchestrationStep) {
+	execCell := func(cell repo.RunStepRef, def *model.OrchestrationStep) {
 		attempts := def.RetryCount + 1
 		interval := def.RetryIntervalSec
 		if interval <= 0 {
@@ -145,7 +145,7 @@ func (h *orchHandler) executeRun(orchID, runID int64) {
 				lastErr = rerr.Error()
 				break // 渲染错误重试无意义
 			}
-			hr := store.HostRecord{DeployTaskHost: model.DeployTaskHost{
+			hr := repo.HostRecord{DeployTaskHost: model.DeployTaskHost{
 				HostID: cell.HostID, HostName: cell.HostName, HostIP: cell.HostIP}}
 			rendered = applyHostVars(rendered, cell.Seq, hr)
 
@@ -243,7 +243,7 @@ func (h *orchHandler) executeRun(orchID, runID int64) {
 				continue
 			}
 			wg.Add(1)
-			go func(cell store.RunStepRef, def *model.OrchestrationStep) {
+			go func(cell repo.RunStepRef, def *model.OrchestrationStep) {
 				defer wg.Done()
 				sem <- struct{}{}
 				defer func() { <-sem }()
@@ -263,7 +263,7 @@ func (h *orchHandler) executeRun(orchID, runID int64) {
 }
 
 // aggregateSeqStatus 纯函数：由内存中的明细行聚合步骤状态。
-func aggregateSeqStatus(rows []store.RunStepRef, seq int) string {
+func aggregateSeqStatus(rows []repo.RunStepRef, seq int) string {
 	var running, pending, skipped, okN, failN int
 	for _, r := range rows {
 		if r.Seq != seq {

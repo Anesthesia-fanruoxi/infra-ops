@@ -14,17 +14,17 @@ import (
 
 	"infra-ops/common/resp"
 	"infra-ops/model"
-	"infra-ops/store"
+	"infra-ops/store/repo"
 )
 
 // deployScheduleHandler 定时任务 CRUD 与启停。
 type deployScheduleHandler struct {
-	schedRepo *store.DeployScheduleRepo
-	tplRepo   *store.DeployRepo
+	schedRepo *repo.DeployScheduleRepo
+	tplRepo   *repo.DeployRepo
 	dh        *deployHandler
 }
 
-func NewDeployScheduleHandler(schedRepo *store.DeployScheduleRepo, tplRepo *store.DeployRepo, dh *deployHandler) *deployScheduleHandler {
+func NewDeployScheduleHandler(schedRepo *repo.DeployScheduleRepo, tplRepo *repo.DeployRepo, dh *deployHandler) *deployScheduleHandler {
 	return &deployScheduleHandler{schedRepo: schedRepo, tplRepo: tplRepo, dh: dh}
 }
 

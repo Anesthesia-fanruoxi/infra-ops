@@ -4,15 +4,15 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"infra-ops/common/resp"
-	"infra-ops/store"
+	"infra-ops/store/repo"
 )
 
 type miscHandler struct {
-	hostRepo  *store.HostRepo
-	auditRepo *store.AuditRepo
+	hostRepo  *repo.HostRepo
+	auditRepo *repo.AuditRepo
 }
 
-func NewMiscHandler(hostRepo *store.HostRepo, auditRepo *store.AuditRepo) *miscHandler {
+func NewMiscHandler(hostRepo *repo.HostRepo, auditRepo *repo.AuditRepo) *miscHandler {
 	return &miscHandler{hostRepo: hostRepo, auditRepo: auditRepo}
 }
 

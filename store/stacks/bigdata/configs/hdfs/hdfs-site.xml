@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?xml-stylesheet type="text/xsl" href="configuration.xsl"?>
+<!-- hdfs-site 由 infra-ops 注入；{{__master_ip}}/{{nn_rpc_port}}/{{replication}} 运行时渲染 -->
+<configuration>
+  <property>
+    <name>dfs.replication</name>
+    <value>{{replication}}</value>
+  </property>
+  <property>
+    <name>dfs.namenode.name.dir</name>
+    <value>file:/hadoop/dfs/name</value>
+  </property>
+  <property>
+    <name>dfs.datanode.data.dir</name>
+    <value>file:/hadoop/dfs/data</value>
+  </property>
+  <property>
+    <name>dfs.namenode.rpc-address</name>
+    <value>{{__master_ip}}:{{nn_rpc_port}}</value>
+  </property>
+  <property>
+    <name>dfs.namenode.http-address</name>
+    <value>0.0.0.0:9870</value>
+  </property>
+  <property>
+    <name>dfs.datanode.http.address</name>
+    <value>0.0.0.0:9864</value>
+  </property>
+  <!-- 平台化部署默认关闭 HDFS 权限校验，避免运维操作被拒；生产如需收紧请改回 true -->
+  <property>
+    <name>dfs.permissions.enabled</name>
+    <value>false</value>
+  </property>
+</configuration>

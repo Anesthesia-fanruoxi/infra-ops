@@ -13,7 +13,7 @@ import (
 	"infra-ops/common/eventbus"
 	"infra-ops/common/resp"
 	"infra-ops/model"
-	"infra-ops/store"
+	"infra-ops/store/repo"
 )
 
 // sseSetup 公共 SSE 响应头设置，返回 flusher。
@@ -93,7 +93,7 @@ func (h *orchHandler) SSESteps(c *gin.Context) {
 }
 
 // stepsSnapshot 由 run_steps 聚合每步骨架：seq/name/state/aggregate（按 seq 升序）。
-func (h *orchHandler) stepsSnapshot(rows []store.RunStepRef) []gin.H {
+func (h *orchHandler) stepsSnapshot(rows []repo.RunStepRef) []gin.H {
 	seqOrder := []int{}
 	names := map[int]string{}
 	seen := map[int]bool{}
@@ -227,7 +227,7 @@ func (h *orchHandler) SSEDetail(c *gin.Context) {
 }
 
 // detailHosts 该步骤的主机态快照（每台主机取一行，含 status）。
-func detailHosts(rows []store.RunStepRef, step int) []gin.H {
+func detailHosts(rows []repo.RunStepRef, step int) []gin.H {
 	out := []gin.H{}
 	seen := map[int64]bool{}
 	for _, r := range rows {

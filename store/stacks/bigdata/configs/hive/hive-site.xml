@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- hive-site 由 infra-ops 注入；{{__master_ip}}/{{nn_rpc_port}} 运行时渲染 -->
+<configuration>
+  <!-- HiveServer2/Metastore 需访问的 HDFS 入口（组合部署中 NameNode 固定为本次主节点） -->
+  <property>
+    <name>fs.defaultFS</name>
+    <value>hdfs://{{__master_ip}}:{{nn_rpc_port}}</value>
+  </property>
+  <!-- HiveServer2 经 thrift 连接同机 Metastore（Derby 单实例只允许 Metastore 一个 JVM 连接） -->
+  <property>
+    <name>hive.metastore.uris</name>
+    <value>thrift://{{__master_ip}}:9083</value>
+  </property>
+  <property>
+    <name>javax.jdo.option.ConnectionURL</name>
+    <value>jdbc:derby:;databaseName=/opt/hive/data/derby;create=true</value>
+  </property>
+  <property>
+    <name>hive.metastore.warehouse.dir</name>
+    <value>/apps/hive/warehouse</value>
+  </property>
+  <property>
+    <name>hive.server2.thrift.bind.host</name>
+    <value>0.0.0.0</value>
+  </property>
+  <property>
+    <name>hive.server2.thrift.port</name>
+    <value>10000</value>
+  </property>
+  <property>
+    <name>hive.server2.webui.port</name>
+    <value>10002</value>
+  </property>
+  <property>
+    <name>hive.server2.webui.host</name>
+    <value>0.0.0.0</value>
+  </property>
+  <!-- 平台化部署默认以 hive 用户执行，避免多用户映射问题 -->
+  <property>
+    <name>hive.server2.enable.doAs</name>
+    <value>false</value>
+  </property>
+</configuration>

@@ -24,7 +24,7 @@ import (
 	"infra-ops/common/sshx"
 	"infra-ops/common/sysutil"
 	"infra-ops/model"
-	"infra-ops/store"
+	"infra-ops/store/repo"
 )
 
 const (
@@ -34,14 +34,14 @@ const (
 
 // deployHandler 部署执行与任务查询。
 type deployHandler struct {
-	tplRepo   *store.DeployRepo
-	schedRepo *store.DeployScheduleRepo
-	hostRepo  *store.HostRepo
-	credRepo  *store.CredentialRepo
+	tplRepo   *repo.DeployRepo
+	schedRepo *repo.DeployScheduleRepo
+	hostRepo  *repo.HostRepo
+	credRepo  *repo.CredentialRepo
 	cryptoS   *icrypto.Service
 	sshC      *sshx.Client
 	bus       *eventbus.Bus
-	auditRepo *store.AuditRepo
+	auditRepo *repo.AuditRepo
 	sched     *deployScheduler
 	conc      int // 执行并发数；<=0 表示按主机数自适应
 }
@@ -52,19 +52,19 @@ func (h *deployHandler) StartScheduler() {
 	h.sched.start()
 }
 
-func NewDeployHandler(tplRepo *store.DeployRepo, schedRepo *store.DeployScheduleRepo, hostRepo *store.HostRepo,
-	credRepo *store.CredentialRepo, cryptoS *icrypto.Service, sshC *sshx.Client,
-	bus *eventbus.Bus, auditRepo *store.AuditRepo, concurrency int) *deployHandler {
+func NewDeployHandler(tplRepo *repo.DeployRepo, schedRepo *repo.DeployScheduleRepo, hostRepo *repo.HostRepo,
+	credRepo *repo.CredentialRepo, cryptoS *icrypto.Service, sshC *sshx.Client,
+	bus *eventbus.Bus, auditRepo *repo.AuditRepo, concurrency int) *deployHandler {
 	return &deployHandler{tplRepo: tplRepo, schedRepo: schedRepo, hostRepo: hostRepo, credRepo: credRepo,
 		cryptoS: cryptoS, sshC: sshC, bus: bus, auditRepo: auditRepo, conc: concurrency}
 }
 
 type runReq struct {
-	TemplateID int64                       `json:"template_id" binding:"required"`
-	HostIDs    []int64                     `json:"host_ids" binding:"required,min=1"`
-	Params     map[string]string           `json:"params"`      // 任务级默认变量
-	HostParams map[int64]map[string]string `json:"host_params"` // 主机级变量覆盖 host_id -> {k:v}
-	Configs    map[string]string           `json:"configs"`     // 任务级自定义配置 config_key -> 内容（非空则覆盖默认配置文件）
+	TemplateID  int64                       `json:"template_id" binding:"required"`
+	HostIDs     []int64                     `json:"host_ids" binding:"required,min=1"`
+	Params      map[string]string           `json:"params"`       // 任务级默认变量
+	HostParams  map[int64]map[string]string `json:"host_params"`  // 主机级变量覆盖 host_id -> {k:v}
+	Configs     map[string]string           `json:"configs"`      // 任务级自定义配置 config_key -> 内容（非空则覆盖默认配置文件）
 	HostConfigs map[int64]map[string]string `json:"host_configs"` // 主机级自定义配置覆盖 host_id -> {key: content}
 }
 
@@ -386,7 +386,7 @@ func (h *deployHandler) execute(taskID int64) {
 
 	var mu sync.Mutex
 	successCnt, failCnt := 0, 0
-	publish := func(rec store.HostRecord, status, output, errMsg string) {
+	publish := func(rec repo.HostRecord, status, output, errMsg string) {
 		mu.Lock()
 		switch status {
 		case "success":
@@ -424,7 +424,7 @@ func (h *deployHandler) execute(taskID int64) {
 	var wg sync.WaitGroup
 	for i := range records {
 		wg.Add(1)
-		go func(rec store.HostRecord, seq int) {
+		go func(rec repo.HostRecord, seq int) {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
@@ -686,7 +686,7 @@ func templateRequires(t *model.DeployTemplate) []model.TemplateDependency {
 }
 
 // checkRequires 对单主机逐条执行前置依赖检查；全部通过返回空串，否则返回阻断提示。
-func checkRequires(hostRepo *store.HostRepo, credRepo *store.CredentialRepo, cryptoS *icrypto.Service,
+func checkRequires(hostRepo *repo.HostRepo, credRepo *repo.CredentialRepo, cryptoS *icrypto.Service,
 	sshC *sshx.Client, hostID int64, reqs []model.TemplateDependency) string {
 	for _, d := range reqs {
 		if strings.TrimSpace(d.Check) == "" {
@@ -703,7 +703,7 @@ func checkRequires(hostRepo *store.HostRepo, credRepo *store.CredentialRepo, cry
 }
 
 // execHostWith 部署与编排共用的单主机执行：解密凭据→SSH 拨号→运行脚本。
-func execHostWith(hostRepo *store.HostRepo, credRepo *store.CredentialRepo, cryptoS *icrypto.Service,
+func execHostWith(hostRepo *repo.HostRepo, credRepo *repo.CredentialRepo, cryptoS *icrypto.Service,
 	sshC *sshx.Client, hostID int64, script string, onLog func(string)) (string, error) {
 	host, err := hostRepo.GetByID(hostID)
 	if err != nil || host == nil {
@@ -857,7 +857,7 @@ func extractSelfReportedName(output string) string {
 
 // applyHostVars 替换内置主机变量：{{__seq}} 任务内序号（1 起）、
 // {{__ip}} 主机 IP、{{__ip_last}} IP 末段、{{__name}} 当前主机名。
-func applyHostVars(script string, seq int, rec store.HostRecord) string {
+func applyHostVars(script string, seq int, rec repo.HostRecord) string {
 	return strings.NewReplacer(
 		"{{__seq}}", strconv.Itoa(seq),
 		"{{__ip}}", rec.HostIP,

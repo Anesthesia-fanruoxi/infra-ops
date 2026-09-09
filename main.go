@@ -20,6 +20,8 @@ import (
 	"infra-ops/config"
 	"infra-ops/router"
 	"infra-ops/store"
+	"infra-ops/store/repo"
+	"infra-ops/store/setting"
 	"infra-ops/template"
 )
 
@@ -40,7 +42,7 @@ func main() {
 		log.Fatalf("数据库迁移失败: %v", err)
 	}
 
-	settingsRepo := store.NewSettingsRepo()
+	settingsRepo := setting.NewSettingsRepo()
 
 	// 首次启动自动生成主密钥与默认账号
 	secretKey, err := icrypto.GenerateKey()
@@ -76,7 +78,7 @@ func main() {
 	}
 
 	// 初始化 SSH 通道
-	hkRepo := store.NewHostKeyRepo()
+	hkRepo := repo.NewHostKeyRepo()
 	insecure := cfg.SSH.HostKeyPolicy == "insecure"
 	sshClient := sshx.NewClient(cfg.SSH.Timeout, hkRepo, insecure)
 
@@ -87,8 +89,8 @@ func main() {
 	bus := eventbus.New()
 
 	// 启动巡检协程
-	hostRepo := store.NewHostRepo()
-	credRepo := store.NewCredentialRepo()
+	hostRepo := repo.NewHostRepo()
+	credRepo := repo.NewCredentialRepo()
 	probeSvc := probe.New(probe.Deps{
 		HostRepo:    hostRepo,
 		CredRepo:    credRepo,
@@ -143,13 +145,13 @@ func logNetworkInfo() {
 }
 
 // runRetentionLoop 周期清理超过保留期的部署任务及其日志（外键级联删除主机记录）。
-func runRetentionLoop(settingsRepo *store.SettingsRepo) {
+func runRetentionLoop(settingsRepo *setting.SettingsRepo) {
 	run := func() {
-		days, err := strconv.Atoi(mustSetting(settingsRepo, store.SettingLogRetentionDays))
+		days, err := strconv.Atoi(mustSetting(settingsRepo, setting.SettingLogRetentionDays))
 		if err != nil || days <= 0 {
 			return
 		}
-		n, err := store.NewDeployRepo().CleanupFinishedBefore(days)
+		n, err := repo.NewDeployRepo().CleanupFinishedBefore(days)
 		if err != nil {
 			log.Printf("[retention] 清理部署历史失败: %v", err)
 			return
@@ -157,7 +159,7 @@ func runRetentionLoop(settingsRepo *store.SettingsRepo) {
 		if n > 0 {
 			log.Printf("[retention] 已清理 %d 天前的部署任务 %d 个", days, n)
 		}
-		m, err := store.NewOrchestrationRepo().CleanupRunsBefore(days)
+		m, err := repo.NewOrchestrationRepo().CleanupRunsBefore(days)
 		if err != nil {
 			log.Printf("[retention] 清理任务记录失败: %v", err)
 			return
@@ -175,7 +177,7 @@ func runRetentionLoop(settingsRepo *store.SettingsRepo) {
 	}
 }
 
-func mustSetting(r *store.SettingsRepo, key string) string {
+func mustSetting(r *setting.SettingsRepo, key string) string {
 	v, _ := r.Get(key)
 	return v
 }

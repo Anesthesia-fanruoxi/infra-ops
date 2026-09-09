@@ -12,7 +12,7 @@ import (
 
 	"infra-ops/common/resp"
 	"infra-ops/model"
-	"infra-ops/store"
+	"infra-ops/store/repo"
 )
 
 var (
@@ -22,11 +22,11 @@ var (
 )
 
 type deployTemplateHandler struct {
-	tplRepo   *store.DeployRepo
-	schedRepo *store.DeployScheduleRepo
+	tplRepo   *repo.DeployRepo
+	schedRepo *repo.DeployScheduleRepo
 }
 
-func NewDeployTemplateHandler(tplRepo *store.DeployRepo, schedRepo *store.DeployScheduleRepo) *deployTemplateHandler {
+func NewDeployTemplateHandler(tplRepo *repo.DeployRepo, schedRepo *repo.DeployScheduleRepo) *deployTemplateHandler {
 	return &deployTemplateHandler{tplRepo: tplRepo, schedRepo: schedRepo}
 }
 

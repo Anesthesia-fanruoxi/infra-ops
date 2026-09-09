@@ -1,5 +1,5 @@
 // 定时任务存取层。
-package store
+package repo
 
 import (
 	"database/sql"
@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"infra-ops/model"
+	"infra-ops/store"
 )
 
 // DeployScheduleRepo 定时任务存取。
@@ -59,7 +60,7 @@ func nullStrPtr(ns sql.NullString) *string {
 
 // ListSchedules 全量定时任务列表。
 func (r *DeployScheduleRepo) ListSchedules() ([]model.DeploySchedule, error) {
-	rows, err := DB.Query("SELECT " + schedCols + " FROM deploy_schedules ORDER BY id DESC")
+	rows, err := store.DB.Query("SELECT " + schedCols + " FROM deploy_schedules ORDER BY id DESC")
 	if err != nil {
 		return nil, err
 	}
@@ -79,7 +80,7 @@ func (r *DeployScheduleRepo) ListSchedules() ([]model.DeploySchedule, error) {
 // GetSchedule 按 ID 取定时任务。
 func (r *DeployScheduleRepo) GetSchedule(id int64) (*model.DeploySchedule, error) {
 	row := schedRow{}
-	err := DB.QueryRow("SELECT "+schedCols+" FROM deploy_schedules WHERE id=?", id).
+	err := store.DB.QueryRow("SELECT "+schedCols+" FROM deploy_schedules WHERE id=?", id).
 		Scan(&row.ID, &row.Name, &row.TemplateID, &row.HostIDs, &row.Params,
 			&row.CronExpr, &row.Enabled, &row.LastTaskID, &row.LastRunAt,
 			&row.NextRunAt, &row.CreatedAt, &row.UpdatedAt)
@@ -94,7 +95,7 @@ func (r *DeployScheduleRepo) GetSchedule(id int64) (*model.DeploySchedule, error
 
 // CreateSchedule 新建定时任务。
 func (r *DeployScheduleRepo) CreateSchedule(s *model.DeploySchedule) (int64, error) {
-	res, err := DB.Exec(
+	res, err := store.DB.Exec(
 		`INSERT INTO deploy_schedules(name,template_id,host_ids,params_json,cron_expr,enabled) VALUES(?,?,?,?,?,?)`,
 		s.Name, s.TemplateID, string(s.HostIDs), string(s.Params), s.CronExpr, s.Enabled,
 	)
@@ -106,7 +107,7 @@ func (r *DeployScheduleRepo) CreateSchedule(s *model.DeploySchedule) (int64, err
 
 // UpdateSchedule 编辑定时任务（名称/模板/主机/参数/cron）。
 func (r *DeployScheduleRepo) UpdateSchedule(s *model.DeploySchedule) error {
-	_, err := DB.Exec(
+	_, err := store.DB.Exec(
 		`UPDATE deploy_schedules SET name=?, template_id=?, host_ids=?, params_json=?, cron_expr=?,
 		updated_at=datetime('now','localtime') WHERE id=?`,
 		s.Name, s.TemplateID, string(s.HostIDs), string(s.Params), s.CronExpr, s.ID,
@@ -116,19 +117,19 @@ func (r *DeployScheduleRepo) UpdateSchedule(s *model.DeploySchedule) error {
 
 // DeleteSchedule 删除定时任务。
 func (r *DeployScheduleRepo) DeleteSchedule(id int64) error {
-	_, err := DB.Exec("DELETE FROM deploy_schedules WHERE id=?", id)
+	_, err := store.DB.Exec("DELETE FROM deploy_schedules WHERE id=?", id)
 	return err
 }
 
 // SetEnabled 启用/停用。
 func (r *DeployScheduleRepo) SetEnabled(id int64, enabled bool) error {
-	_, err := DB.Exec(`UPDATE deploy_schedules SET enabled=?, updated_at=datetime('now','localtime') WHERE id=?`, enabled, id)
+	_, err := store.DB.Exec(`UPDATE deploy_schedules SET enabled=?, updated_at=datetime('now','localtime') WHERE id=?`, enabled, id)
 	return err
 }
 
 // UpdateRunInfo 触发后回写最近任务与时间。
 func (r *DeployScheduleRepo) UpdateRunInfo(id, lastTaskID int64) error {
-	_, err := DB.Exec(
+	_, err := store.DB.Exec(
 		`UPDATE deploy_schedules SET last_task_id=?, last_run_at=datetime('now','localtime') WHERE id=?`,
 		lastTaskID, id,
 	)
@@ -137,14 +138,14 @@ func (r *DeployScheduleRepo) UpdateRunInfo(id, lastTaskID int64) error {
 
 // SetNextRun 回写下次触发时间（展示用）。
 func (r *DeployScheduleRepo) SetNextRun(id int64, next string) error {
-	_, err := DB.Exec(`UPDATE deploy_schedules SET next_run_at=? WHERE id=?`, next, id)
+	_, err := store.DB.Exec(`UPDATE deploy_schedules SET next_run_at=? WHERE id=?`, next, id)
 	return err
 }
 
 // HasRunningTaskForSchedule 该定时任务是否存在未完成的执行（防堆积）。
 func (r *DeployScheduleRepo) HasRunningTaskForSchedule(scheduleID int64) (bool, error) {
 	var count int
-	err := DB.QueryRow(
+	err := store.DB.QueryRow(
 		`SELECT COUNT(*) FROM deploy_tasks WHERE schedule_id=? AND status='running'`, scheduleID,
 	).Scan(&count)
 	return count > 0, err
@@ -153,18 +154,18 @@ func (r *DeployScheduleRepo) HasRunningTaskForSchedule(scheduleID int64) (bool, 
 // CountByTemplate 统计引用某模板的定时任务数（删除保护用）。
 func (r *DeployScheduleRepo) CountByTemplate(templateID int64) (int64, error) {
 	var count int64
-	err := DB.QueryRow(`SELECT COUNT(*) FROM deploy_schedules WHERE template_id=?`, templateID).Scan(&count)
+	err := store.DB.QueryRow(`SELECT COUNT(*) FROM deploy_schedules WHERE template_id=?`, templateID).Scan(&count)
 	return count, err
 }
 
 // ListTasksBySchedule 某定时任务的历次触发记录（分页）。
 func (r *DeployScheduleRepo) ListTasksBySchedule(scheduleID int64, page, pageSize int) ([]model.DeployTask, int64, error) {
 	var total int64
-	if err := DB.QueryRow(`SELECT COUNT(*) FROM deploy_tasks WHERE schedule_id=?`, scheduleID).Scan(&total); err != nil {
+	if err := store.DB.QueryRow(`SELECT COUNT(*) FROM deploy_tasks WHERE schedule_id=?`, scheduleID).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 	offset := (page - 1) * pageSize
-	rows, err := DB.Query(
+	rows, err := store.DB.Query(
 		`SELECT id,template_id,template_name,status,total,success_cnt,fail_cnt,schedule_id,trigger_type,created_at,finished_at
 		FROM deploy_tasks WHERE schedule_id=? ORDER BY id DESC LIMIT ? OFFSET ?`,
 		scheduleID, pageSize, offset,

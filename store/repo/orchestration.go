@@ -1,5 +1,5 @@
 // 编排存取层：定义/步骤 CRUD 与运行记录。
-package store
+package repo
 
 import (
 	"database/sql"
@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"infra-ops/model"
+	"infra-ops/store"
 )
 
 // OrchestrationRepo 任务编排存取。
@@ -22,10 +23,12 @@ const orchCols = orchBaseCols + `,
 
 // List 全量任务记录列表（数量小，不分页）。
 // 每条记录 LEFT JOIN 最近一次运行（id 最大），派生：
-//   无运行 → not_started；最近运行 status=running → running；否则 → finished。
+//
+//	无运行 → not_started；最近运行 status=running → running；否则 → finished。
+//
 // stateFilter 可选：running / not_started / finished；为空返回全部。
 func (r *OrchestrationRepo) List(stateFilter string) ([]model.Orchestration, error) {
-	rows, err := DB.Query(`
+	rows, err := store.DB.Query(`
 		SELECT ` + orchCols + `
 		FROM orchestrations o
 		LEFT JOIN orchestration_runs r ON r.id = (
@@ -81,7 +84,7 @@ func (r *OrchestrationRepo) List(stateFilter string) ([]model.Orchestration, err
 // HasRun 判断任务记录是否已有任何运行记录（一次性守卫用）。
 func (r *OrchestrationRepo) HasRun(orchID int64) (bool, error) {
 	var one int
-	err := DB.QueryRow(`SELECT 1 FROM orchestration_runs WHERE orchestration_id=? LIMIT 1`, orchID).Scan(&one)
+	err := store.DB.QueryRow(`SELECT 1 FROM orchestration_runs WHERE orchestration_id=? LIMIT 1`, orchID).Scan(&one)
 	if err == sql.ErrNoRows {
 		return false, nil
 	}
@@ -94,7 +97,7 @@ func (r *OrchestrationRepo) HasRun(orchID int64) (bool, error) {
 // Get 编排详情（含步骤与步骤主机变量）。
 func (r *OrchestrationRepo) Get(id int64) (*model.Orchestration, []model.OrchestrationStep, []model.OrchestrationStepVar, error) {
 	var o model.Orchestration
-	err := DB.QueryRow(`SELECT `+orchBaseCols+` FROM orchestrations o WHERE o.id=?`, id).
+	err := store.DB.QueryRow(`SELECT `+orchBaseCols+` FROM orchestrations o WHERE o.id=?`, id).
 		Scan(&o.ID, &o.Name, &o.Description, &o.ExecMode, &o.Enabled, &o.CreatedAt, &o.UpdatedAt, &o.StepCount)
 	if err == sql.ErrNoRows {
 		return nil, nil, nil, nil
@@ -103,7 +106,7 @@ func (r *OrchestrationRepo) Get(id int64) (*model.Orchestration, []model.Orchest
 		return nil, nil, nil, err
 	}
 
-	rows, err := DB.Query(`
+	rows, err := store.DB.Query(`
 		SELECT s.id,s.orchestration_id,s.seq,s.template_id,t.name,s.params_json,s.host_scope,
 			s.continue_on_error,s.retry_count,s.retry_interval_sec,s.timeout_sec
 		FROM orchestration_steps s JOIN deploy_templates t ON t.id=s.template_id
@@ -137,7 +140,7 @@ func (r *OrchestrationRepo) Get(id int64) (*model.Orchestration, []model.Orchest
 
 // stepVars 步骤主机级变量覆盖。
 func (r *OrchestrationRepo) stepVars(id int64) ([]model.OrchestrationStepVar, error) {
-	rows, err := DB.Query(
+	rows, err := store.DB.Query(
 		`SELECT seq,host_id,params_json FROM orchestration_step_host_vars WHERE orchestration_id=? ORDER BY seq,host_id`, id)
 	if err != nil {
 		return nil, err
@@ -158,7 +161,7 @@ func (r *OrchestrationRepo) stepVars(id int64) ([]model.OrchestrationStepVar, er
 // Save 新建或更新编排（步骤/步骤变量全量替换）。返回编排 ID。
 func (r *OrchestrationRepo) Save(o *model.Orchestration, steps []model.OrchestrationStep,
 	stepVars []model.OrchestrationStepVar) (int64, error) {
-	tx, err := DB.Begin()
+	tx, err := store.DB.Begin()
 	if err != nil {
 		return 0, err
 	}
@@ -223,7 +226,7 @@ func (r *OrchestrationRepo) Save(o *model.Orchestration, steps []model.Orchestra
 // Delete 删除任务记录（事务）：删编排（级联 steps / step_host_vars）+ 显式删运行记录。
 // orchestration_runs 无外键，run_steps 随 run 级联删除（表内已建级联）。
 func (r *OrchestrationRepo) Delete(id int64) error {
-	tx, err := DB.Begin()
+	tx, err := store.DB.Begin()
 	if err != nil {
 		return err
 	}
@@ -247,7 +250,7 @@ func orDefaultJSON(s string) string {
 
 // CreateRun 建运行实例并批量写入全部 pending 明细。
 func (r *OrchestrationRepo) CreateRun(run *model.OrchestrationRun, steps []model.OrchestrationRunStep) (int64, error) {
-	tx, err := DB.Begin()
+	tx, err := store.DB.Begin()
 	if err != nil {
 		return 0, err
 	}
@@ -283,7 +286,7 @@ type RunStepRef struct {
 
 // RunSteps 运行明细（按主机、步骤排序）。
 func (r *OrchestrationRepo) RunSteps(runID int64) ([]RunStepRef, error) {
-	rows, err := DB.Query(
+	rows, err := store.DB.Query(
 		`SELECT id,run_id,host_id,host_name,host_ip,seq,template_id,template_name,status,attempt,output,error,started_at,finished_at
 		 FROM orchestration_run_steps WHERE run_id=? ORDER BY host_id,seq`, runID)
 	if err != nil {
@@ -305,7 +308,7 @@ func (r *OrchestrationRepo) RunSteps(runID int64) ([]RunStepRef, error) {
 
 // UpdateRunStepStatus 回写单步状态与输出。
 func (r *OrchestrationRepo) UpdateRunStepStatus(recID int64, status string, attempt int, output, errMsg string) error {
-	_, err := DB.Exec(
+	_, err := store.DB.Exec(
 		`UPDATE orchestration_run_steps SET status=?, attempt=?, output=CASE WHEN ?<>'' THEN ? ELSE output END, error=?,
 		 started_at=COALESCE(started_at, datetime('now','localtime')),
 		 finished_at=CASE WHEN ? IN ('success','failed','skipped') THEN datetime('now','localtime') ELSE finished_at END
@@ -316,7 +319,7 @@ func (r *OrchestrationRepo) UpdateRunStepStatus(recID int64, status string, atte
 
 // SkipRemaining 将某主机尚未执行的后续步骤标记 skipped。
 func (r *OrchestrationRepo) SkipRemaining(runID, hostID int64, afterSeq int) error {
-	_, err := DB.Exec(
+	_, err := store.DB.Exec(
 		`UPDATE orchestration_run_steps SET status='skipped',
 		 finished_at=datetime('now','localtime')
 		 WHERE run_id=? AND host_id=? AND seq>? AND status='pending'`, runID, hostID, afterSeq)
@@ -326,7 +329,7 @@ func (r *OrchestrationRepo) SkipRemaining(runID, hostID int64, afterSeq int) err
 // FinishRun 汇总主机成败并落终态。一台主机存在 failed 步骤即失败。
 func (r *OrchestrationRepo) FinishRun(runID int64) (string, error) {
 	var failN, okN sql.NullInt64
-	err := DB.QueryRow(`
+	err := store.DB.QueryRow(`
 		SELECT
 		  SUM(CASE WHEN cnt>0 THEN 1 ELSE 0 END),
 		  SUM(CASE WHEN cnt=0 THEN 1 ELSE 0 END)
@@ -346,7 +349,7 @@ func (r *OrchestrationRepo) FinishRun(runID int64) (string, error) {
 	case fails > 0 && oks > 0:
 		status = "partial"
 	}
-	_, uerr := DB.Exec(
+	_, uerr := store.DB.Exec(
 		`UPDATE orchestration_runs SET status=?, ok_hosts=?, fail_hosts=?, finished_at=datetime('now','localtime') WHERE id=?`,
 		status, oks, fails, runID)
 	return status, uerr
@@ -355,7 +358,7 @@ func (r *OrchestrationRepo) FinishRun(runID int64) (string, error) {
 // GetRun 单条运行记录。
 func (r *OrchestrationRepo) GetRun(id int64) (*model.OrchestrationRun, error) {
 	it := &model.OrchestrationRun{}
-	err := DB.QueryRow(
+	err := store.DB.QueryRow(
 		`SELECT id,orchestration_id,name,exec_mode,status,total_hosts,ok_hosts,fail_hosts,trigger_type,created_at,finished_at
 		 FROM orchestration_runs WHERE id=?`, id).
 		Scan(&it.ID, &it.OrchestrationID, &it.Name, &it.ExecMode, &it.Status,
@@ -375,10 +378,11 @@ func (r *OrchestrationRepo) GetRun(id int64) (*model.OrchestrationRun, error) {
 //  2. 排除存在 status='running' 运行的编排（防误杀进行中任务）
 //  3. 事务：删运行 + 删编排（级联明细）
 //  4. 附带清扫孤儿运行（orchestration_id 已不在 orchestrations 表中的行）
+//
 // 返回清理的编排记录数。
 func (r *OrchestrationRepo) CleanupRunsBefore(days int) (int64, error) {
 	cutoff := fmt.Sprintf("-%d days", days)
-	rows, err := DB.Query(
+	rows, err := store.DB.Query(
 		`SELECT DISTINCT orchestration_id FROM orchestration_runs
 		 WHERE finished_at IS NOT NULL AND finished_at < datetime('now','localtime', ?)`,
 		cutoff)
@@ -407,7 +411,7 @@ func (r *OrchestrationRepo) CleanupRunsBefore(days int) (int64, error) {
 		for _, id := range ids {
 			args = append(args, id)
 		}
-		runningRows, err := DB.Query(
+		runningRows, err := store.DB.Query(
 			`SELECT DISTINCT orchestration_id FROM orchestration_runs
 			 WHERE orchestration_id IN (`+ph+`) AND status='running'`, args...)
 		if err != nil {
@@ -432,7 +436,7 @@ func (r *OrchestrationRepo) CleanupRunsBefore(days int) (int64, error) {
 		ids = kept
 	}
 
-	tx, err := DB.Begin()
+	tx, err := store.DB.Begin()
 	if err != nil {
 		return 0, err
 	}

@@ -10,19 +10,19 @@ import (
 	"infra-ops/common/eventbus"
 	"infra-ops/common/resp"
 	"infra-ops/model"
-	"infra-ops/store"
+	"infra-ops/store/repo"
 
 	"github.com/gin-gonic/gin"
 )
 
 type sseHandler struct {
 	bus       *eventbus.Bus
-	hostRepo  *store.HostRepo
-	credRepo  *store.CredentialRepo
-	auditRepo *store.AuditRepo
+	hostRepo  *repo.HostRepo
+	credRepo  *repo.CredentialRepo
+	auditRepo *repo.AuditRepo
 }
 
-func NewSSEHandler(bus *eventbus.Bus, hostRepo *store.HostRepo, credRepo *store.CredentialRepo, auditRepo *store.AuditRepo) *sseHandler {
+func NewSSEHandler(bus *eventbus.Bus, hostRepo *repo.HostRepo, credRepo *repo.CredentialRepo, auditRepo *repo.AuditRepo) *sseHandler {
 	return &sseHandler{bus: bus, hostRepo: hostRepo, credRepo: credRepo, auditRepo: auditRepo}
 }
 
@@ -257,7 +257,7 @@ func (h *sseHandler) Audits(c *gin.Context) {
 	if !h.prepareStream(c) {
 		return
 	}
-	q := store.AuditQuery{
+	q := repo.AuditQuery{
 		Action:  c.Query("action"),
 		Status:  c.Query("status"),
 		Keyword: c.Query("keyword"),
@@ -324,7 +324,7 @@ func (h *sseHandler) Audits(c *gin.Context) {
 }
 
 // matchAuditQuery 内存侧筛选判定，与 store 层 SQL 条件保持一致。
-func matchAuditQuery(a model.AuditLog, q store.AuditQuery) bool {
+func matchAuditQuery(a model.AuditLog, q repo.AuditQuery) bool {
 	if q.Action != "" && !strings.HasPrefix(a.Action, q.Action) {
 		return false
 	}

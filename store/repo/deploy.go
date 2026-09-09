@@ -1,5 +1,5 @@
 // 部署中心存取层：模板 CRUD 与任务执行记录。
-package store
+package repo
 
 import (
 	"bytes"
@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	"infra-ops/model"
+	"infra-ops/store"
 )
 
 // DeployRepo 部署模板与任务存取。
@@ -19,7 +20,7 @@ const tplCols = "id,name,description,category,script,variables,services,requires
 
 // ListTemplates 全量模板列表（数量小，不分页）。
 func (r *DeployRepo) ListTemplates() ([]model.DeployTemplate, error) {
-	rows, err := DB.Query("SELECT " + tplCols + " FROM deploy_templates ORDER BY is_builtin DESC, id ASC")
+	rows, err := store.DB.Query("SELECT " + tplCols + " FROM deploy_templates ORDER BY is_builtin DESC, id ASC")
 	if err != nil {
 		return nil, err
 	}
@@ -67,10 +68,25 @@ func scanTplRow(rows *sql.Rows, r *tplRow) error {
 		&r.Services, &r.Requires, &r.Configs, &r.IsBuiltin, &r.CreatedAt, &r.UpdatedAt)
 }
 
+// GetTemplateByName 按名称取模板（套件 Docker 前置等按内置名查找）。
+func (r *DeployRepo) GetTemplateByName(name string) (*model.DeployTemplate, error) {
+	row := tplRow{}
+	err := store.DB.QueryRow("SELECT "+tplCols+" FROM deploy_templates WHERE name=?", name).
+		Scan(&row.ID, &row.Name, &row.Description, &row.Category, &row.Script, &row.Variables,
+			&row.Services, &row.Requires, &row.Configs, &row.IsBuiltin, &row.CreatedAt, &row.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return row.toModel(), nil
+}
+
 // GetTemplate 按 ID 取模板。
 func (r *DeployRepo) GetTemplate(id int64) (*model.DeployTemplate, error) {
 	row := tplRow{}
-	err := DB.QueryRow("SELECT "+tplCols+" FROM deploy_templates WHERE id=?", id).
+	err := store.DB.QueryRow("SELECT "+tplCols+" FROM deploy_templates WHERE id=?", id).
 		Scan(&row.ID, &row.Name, &row.Description, &row.Category, &row.Script, &row.Variables,
 			&row.Services, &row.Requires, &row.Configs, &row.IsBuiltin, &row.CreatedAt, &row.UpdatedAt)
 	if err == sql.ErrNoRows {
@@ -92,7 +108,7 @@ func normalizeJSON(s json.RawMessage) string {
 
 // CreateTemplate 新建模板。
 func (r *DeployRepo) CreateTemplate(t *model.DeployTemplate) (int64, error) {
-	res, err := DB.Exec(
+	res, err := store.DB.Exec(
 		`INSERT INTO deploy_templates(name,description,category,script,variables,services,requires,configs,is_builtin) VALUES(?,?,?,?,?,?,?,?,0)`,
 		t.Name, t.Description, t.Category, t.Script, string(t.Variables),
 		normalizeJSON(t.Services), normalizeJSON(t.Requires), normalizeJSON(t.Configs),
@@ -105,7 +121,7 @@ func (r *DeployRepo) CreateTemplate(t *model.DeployTemplate) (int64, error) {
 
 // UpdateTemplate 更新模板内容（内置模板仅允许改描述以外的场景由上层限制）。
 func (r *DeployRepo) UpdateTemplate(t *model.DeployTemplate) error {
-	_, err := DB.Exec(
+	_, err := store.DB.Exec(
 		`UPDATE deploy_templates SET name=?, description=?, category=?, script=?, variables=?, services=?, requires=?, configs=?,
 		updated_at=datetime('now','localtime') WHERE id=?`,
 		t.Name, t.Description, t.Category, t.Script, string(t.Variables),
@@ -116,13 +132,13 @@ func (r *DeployRepo) UpdateTemplate(t *model.DeployTemplate) error {
 
 // DeleteTemplate 删除模板。
 func (r *DeployRepo) DeleteTemplate(id int64) error {
-	_, err := DB.Exec("DELETE FROM deploy_templates WHERE id=?", id)
+	_, err := store.DB.Exec("DELETE FROM deploy_templates WHERE id=?", id)
 	return err
 }
 
 // CreateTask 事务创建任务与其全部主机记录（pending 态）。
 func (r *DeployRepo) CreateTask(task *model.DeployTask, hosts []model.DeployTaskHost) (int64, error) {
-	tx, err := DB.Begin()
+	tx, err := store.DB.Begin()
 	if err != nil {
 		return 0, err
 	}
@@ -153,7 +169,7 @@ func (r *DeployRepo) CreateTask(task *model.DeployTask, hosts []model.DeployTask
 
 // UpdateHostStatus 更新单台主机执行结果。
 func (r *DeployRepo) UpdateHostStatus(recID int64, status, output, errMsg string) error {
-	_, err := DB.Exec(
+	_, err := store.DB.Exec(
 		`UPDATE deploy_task_hosts SET status=?, output=?, error=?,
 		started_at=COALESCE(started_at, datetime('now','localtime')),
 		finished_at=CASE WHEN ? IN ('success','failed') THEN datetime('now','localtime') ELSE finished_at END
@@ -171,7 +187,7 @@ type HostRecord struct {
 
 // TaskHosts 取任务下全部主机记录。
 func (r *DeployRepo) TaskHosts(taskID int64) ([]HostRecord, error) {
-	rows, err := DB.Query(
+	rows, err := store.DB.Query(
 		`SELECT id,host_id,host_name,host_ip,status,output,error,params_json FROM deploy_task_hosts WHERE task_id=? ORDER BY id`,
 		taskID,
 	)
@@ -194,7 +210,7 @@ func (r *DeployRepo) TaskHosts(taskID int64) ([]HostRecord, error) {
 // CleanupFinishedBefore 删除 finished_at 早于保留期的已结束任务（级联删除主机记录与日志输出）。
 // 返回删除的任务数。
 func (r *DeployRepo) CleanupFinishedBefore(days int) (int64, error) {
-	res, err := DB.Exec(
+	res, err := store.DB.Exec(
 		`DELETE FROM deploy_tasks
 		WHERE finished_at IS NOT NULL
 		AND finished_at < datetime('now','localtime', ?)`,
@@ -208,7 +224,7 @@ func (r *DeployRepo) CleanupFinishedBefore(days int) (int64, error) {
 
 // MarkHostInstalled 标记主机成功安装过某模板（每模板一条，重复执行刷新任务号与时间）。
 func (r *DeployRepo) MarkHostInstalled(hostID, templateID int64, templateName string, taskID int64) error {
-	_, err := DB.Exec(
+	_, err := store.DB.Exec(
 		`INSERT INTO host_installs(host_id,template_id,template_name,task_id) VALUES(?,?,?,?)
 		ON CONFLICT(host_id,template_name) DO UPDATE SET
 			template_id=excluded.template_id, task_id=excluded.task_id,
@@ -223,7 +239,7 @@ func (r *DeployRepo) MarkHostInstalled(hostID, templateID int64, templateName st
 
 // HostInstalls 主机已执行过的安装记录（按最近执行倒序）。
 func (r *DeployRepo) HostInstalls(hostID int64) ([]model.HostInstall, error) {
-	rows, err := DB.Query(
+	rows, err := store.DB.Query(
 		`SELECT id,host_id,template_id,template_name,task_id,created_at,updated_at
 		FROM host_installs WHERE host_id=? ORDER BY updated_at DESC`, hostID,
 	)
@@ -245,7 +261,7 @@ func (r *DeployRepo) HostInstalls(hostID int64) ([]model.HostInstall, error) {
 
 // UpsertHostService 按 host_id+service_name 登记/刷新一条服务。
 func (r *DeployRepo) UpsertHostService(svc *model.HostService) error {
-	_, err := DB.Exec(
+	_, err := store.DB.Exec(
 		`INSERT INTO host_services(host_id,host_ip,service_name,url,web,template_id) VALUES(?,?,?,?,?,?)
 		ON CONFLICT(host_id,service_name) DO UPDATE SET
 			host_ip=excluded.host_ip, url=excluded.url, web=excluded.web,
@@ -260,7 +276,7 @@ func (r *DeployRepo) UpsertHostService(svc *model.HostService) error {
 
 // ListServices 全量服务清单，联表填充主机名与 IP，供总览聚合。
 func (r *DeployRepo) ListServices() ([]model.HostService, error) {
-	rows, err := DB.Query(
+	rows, err := store.DB.Query(
 		`SELECT s.id,s.host_id,s.host_ip,s.service_name,s.url,s.web,s.template_id,s.updated_at,
 			COALESCE(h.name,'')
 		FROM host_services s LEFT JOIN hosts h ON h.id=s.host_id
@@ -286,7 +302,7 @@ func (r *DeployRepo) ListServices() ([]model.HostService, error) {
 
 // HostServices 单台主机的服务清单。
 func (r *DeployRepo) HostServices(hostID int64) ([]model.HostService, error) {
-	rows, err := DB.Query(
+	rows, err := store.DB.Query(
 		`SELECT id,host_id,host_ip,service_name,url,web,template_id,updated_at
 		FROM host_services WHERE host_id=? ORDER BY web DESC, updated_at DESC, id`, hostID,
 	)
@@ -311,7 +327,7 @@ func (r *DeployRepo) HostServices(hostID int64) ([]model.HostService, error) {
 // FinishTask 汇总成败计数并落任务终态。
 func (r *DeployRepo) FinishTask(taskID int64) (string, error) {
 	var successCnt, failCnt, total int
-	if err := DB.QueryRow(
+	if err := store.DB.QueryRow(
 		`SELECT
 			SUM(CASE WHEN status='success' THEN 1 ELSE 0 END),
 			SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END),
@@ -328,7 +344,7 @@ func (r *DeployRepo) FinishTask(taskID int64) (string, error) {
 	case successCnt > 0:
 		status = "partial"
 	}
-	_, err := DB.Exec(
+	_, err := store.DB.Exec(
 		`UPDATE deploy_tasks SET status=?, success_cnt=?, fail_cnt=?, finished_at=datetime('now','localtime') WHERE id=?`,
 		status, successCnt, failCnt, taskID,
 	)
@@ -338,11 +354,11 @@ func (r *DeployRepo) FinishTask(taskID int64) (string, error) {
 // ListTasks 分页任务列表。
 func (r *DeployRepo) ListTasks(page, pageSize int) ([]model.DeployTask, int64, error) {
 	var total int64
-	if err := DB.QueryRow("SELECT COUNT(*) FROM deploy_tasks").Scan(&total); err != nil {
+	if err := store.DB.QueryRow("SELECT COUNT(*) FROM deploy_tasks").Scan(&total); err != nil {
 		return nil, 0, err
 	}
 	offset := (page - 1) * pageSize
-	rows, err := DB.Query(
+	rows, err := store.DB.Query(
 		`SELECT id,template_id,template_name,status,total,success_cnt,fail_cnt,schedule_id,trigger_type,created_at,finished_at
 		FROM deploy_tasks ORDER BY id DESC LIMIT ? OFFSET ?`, pageSize, offset,
 	)
@@ -366,7 +382,7 @@ func (r *DeployRepo) ListTasks(page, pageSize int) ([]model.DeployTask, int64, e
 // GetTask 任务详情（不含主机明细，用 TaskHosts 查）。
 func (r *DeployRepo) GetTask(id int64) (*model.DeployTask, error) {
 	t := &model.DeployTask{}
-	err := DB.QueryRow(
+	err := store.DB.QueryRow(
 		`SELECT id,template_id,template_name,status,total,success_cnt,fail_cnt,schedule_id,trigger_type,created_at,finished_at
 		FROM deploy_tasks WHERE id=?`, id,
 	).Scan(&t.ID, &t.TemplateID, &t.TemplateName, &t.Status, &t.Total,
@@ -379,7 +395,7 @@ func (r *DeployRepo) GetTask(id int64) (*model.DeployTask, error) {
 
 // ListRunningTasks 当前状态为 running 的任务（setup sse 用于判断是否存在运行中任务）。
 func (r *DeployRepo) ListRunningTasks() ([]model.DeployTask, error) {
-	rows, err := DB.Query(
+	rows, err := store.DB.Query(
 		`SELECT id,template_id,template_name,status,total,success_cnt,fail_cnt,schedule_id,trigger_type,created_at,finished_at
 		FROM deploy_tasks WHERE status='running' ORDER BY id ASC`)
 	if err != nil {
@@ -403,7 +419,7 @@ func (r *DeployRepo) AppendTaskLogs(taskID int64, rows []model.DeployLog) ([]mod
 	if len(rows) == 0 {
 		return nil, nil
 	}
-	tx, err := DB.Begin()
+	tx, err := store.DB.Begin()
 	if err != nil {
 		return nil, err
 	}
@@ -436,7 +452,7 @@ func (r *DeployRepo) AppendTaskLogs(taskID int64, rows []model.DeployLog) ([]mod
 
 // TaskLogs 某任务已落库日志（id 升序，最近 2000 行封顶）。
 func (r *DeployRepo) TaskLogs(taskID int64) ([]model.DeployLog, error) {
-	rows, err := DB.Query(
+	rows, err := store.DB.Query(
 		`SELECT id,task_id,host_id,host_ip,text,created_at
 		 FROM (
 		   SELECT id,task_id,host_id,host_ip,text,created_at

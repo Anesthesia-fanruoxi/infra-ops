@@ -1,0 +1,37 @@
+# Elasticsearch 9.x+ 集群 —— 引导主节点（首个 master）配置素材
+# 说明：仅用于「首个」master 节点启动时完成集群 bootstrap。
+# 这些占位符（{{xxx}}）与部署脚本 node.sh 的变量保持一致，接入平台模板时经渲染填充。
+# 其余节点用 elasticsearch-member.yml 加入。默认关闭 xpack 安全以简化局域网集群，
+# 如需加密通信请额外共享 CA/节点证书后再安全开启。
+# ES 9 适配: discovery.zen.minimum_master_nodes 已在 9 移除（不配置）；本文件用
+#           cluster.initial_master_nodes（9 仍支持，静态），集群成形后建议删除该行。
+
+cluster.name: {{cluster_name}}
+node.name: {{__node_name}}
+node.roles: [ {{__roles}} ]
+
+path.data: /usr/share/elasticsearch/data
+path.logs: /usr/share/elasticsearch/logs
+
+network.host: 0.0.0.0
+http.port: {{port}}
+transport.port: {{transport_port}}
+transport.host: 0.0.0.0
+network.publish_host: {{__ip}}
+
+discovery.seed_hosts: [ {{__seed_hosts}} ]
+cluster.initial_master_nodes: [ "{{__node_name}}" ]
+
+# 局域网部署简化产项：关闭安全认证（http/transport 均免 TLS）
+xpack.security.enabled: false
+xpack.security.enrollment.enabled: false
+
+# 预留：如需开启安全，用下面这份取代，并先就绪 CA 与节点证书再启动
+# xpack.security.transport.ssl.enabled: true
+# xpack.security.transport.ssl.verification_mode: certificate
+# xpack.security.transport.ssl.keystore.path: certs/elastic-certificates.p12
+# xpack.security.transport.ssl.truststore.path: certs/elastic-certificates.p12
+# xpack.security.http.ssl.enabled: true
+# xpack.security.http.ssl.keystore.path: certs/http.p12
+
+# 内存堆由部署脚本经 compose 的 ES_JAVA_OPTS 注入，此处不重复配置

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"strconv"
 	"strings"
 	"sync"
@@ -63,8 +64,11 @@ func parseIPList(raw string) ([]string, error) {
 	return out, nil
 }
 
-// expandRange 展开单个 IP 或范围项。
+// expandRange 展开单个 IP、范围项或 CIDR 网段。
 func expandRange(item string) ([]string, error) {
+	if strings.Contains(item, "/") {
+		return expandCIDR(item)
+	}
 	parts := strings.Split(item, "-")
 	switch len(parts) {
 	case 1:
@@ -91,6 +95,40 @@ func expandRange(item string) ([]string, error) {
 	default:
 		return nil, fmt.Errorf("非法范围: %s", item)
 	}
+}
+
+// expandCIDR 展开 IPv4 网段（a.b.c.d/prefix，prefix 2-30）：排出网络地址与广播地址，
+// 返回可用主机 IP。展开总数 > maxBatchIPs 时返回 errTooManyIPs。
+func expandCIDR(item string) ([]string, error) {
+	ip, ipnet, err := net.ParseCIDR(item)
+	if err != nil {
+		return nil, fmt.Errorf("非法网段: %s", item)
+	}
+	ip4 := ip.To4()
+	if ip4 == nil {
+		return nil, fmt.Errorf("仅支持 IPv4 网段: %s", item)
+	}
+	ones, bits := ipnet.Mask.Size()
+	if bits != 32 || ones < 2 || ones > 30 {
+		return nil, fmt.Errorf("非法掩码: %s", item)
+	}
+	// 网络地址 -> 网络号；hostMask 覆盖主机位
+	var network [4]byte
+	for i := 0; i < 4; i++ {
+		network[i] = ip4[i] & ipnet.Mask[i]
+	}
+	hostMask := uint32(0xFFFFFFFF) >> uint(ones)
+	base := uint32(network[0])<<24 | uint32(network[1])<<16 | uint32(network[2])<<8 | uint32(network[3])
+	first := base + 1       // 排网络地址
+	last := base | hostMask // 广播地址
+	if last-first > uint32(maxBatchIPs) {
+		return nil, errTooManyIPs
+	}
+	out := make([]string, 0, int(last-first))
+	for a := first; a < last; a++ {
+		out = append(out, fmt.Sprintf("%d.%d.%d.%d", a>>24, a>>16&0xFF, a>>8&0xFF, a&0xFF))
+	}
+	return out, nil
 }
 
 // validIPv4 校验 IPv4 格式（4 段，每段 0-255 纯数字）。

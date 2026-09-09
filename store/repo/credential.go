@@ -1,4 +1,4 @@
-package store
+package repo
 
 import (
 	"database/sql"
@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"infra-ops/model"
+	"infra-ops/store"
 )
 
 // CredentialRepo 凭据数据存取。
@@ -18,7 +19,7 @@ func NewCredentialRepo() *CredentialRepo {
 // GetByID 按 ID 查询凭据。
 func (r *CredentialRepo) GetByID(id int64) (*model.Credential, error) {
 	c := &model.Credential{}
-	err := DB.QueryRow(
+	err := store.DB.QueryRow(
 		"SELECT id,name,type,username,encrypted_secret,fingerprint,remark,created_at,updated_at FROM credentials WHERE id=?",
 		id,
 	).Scan(&c.ID, &c.Name, &c.Type, &c.Username, &c.EncryptedSecret, &c.Fingerprint, &c.Remark, &c.CreatedAt, &c.UpdatedAt)
@@ -42,7 +43,7 @@ func (r *CredentialRepo) List(keyword string, page, pageSize int) ([]model.Crede
 
 	var total int64
 	countSQL := "SELECT COUNT(*) FROM credentials " + where
-	if err := DB.QueryRow(countSQL, args...).Scan(&total); err != nil {
+	if err := store.DB.QueryRow(countSQL, args...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("credential count: %w", err)
 	}
 
@@ -50,7 +51,7 @@ func (r *CredentialRepo) List(keyword string, page, pageSize int) ([]model.Crede
 	query := "SELECT id,name,type,username,encrypted_secret,fingerprint,remark,created_at,updated_at FROM credentials " + where + " ORDER BY id DESC LIMIT ? OFFSET ?"
 	queryArgs := append(args, pageSize, offset)
 
-	rows, err := DB.Query(query, queryArgs...)
+	rows, err := store.DB.Query(query, queryArgs...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("credential list: %w", err)
 	}
@@ -69,7 +70,7 @@ func (r *CredentialRepo) List(keyword string, page, pageSize int) ([]model.Crede
 
 // Create 新增凭据，返回新 ID。
 func (r *CredentialRepo) Create(c *model.Credential) (int64, error) {
-	res, err := DB.Exec(
+	res, err := store.DB.Exec(
 		"INSERT INTO credentials(name,type,username,encrypted_secret,fingerprint,remark) VALUES(?,?,?,?,?,?)",
 		c.Name, c.Type, c.Username, c.EncryptedSecret, c.Fingerprint, c.Remark,
 	)
@@ -85,13 +86,13 @@ func (r *CredentialRepo) Create(c *model.Credential) (int64, error) {
 // Update 更新凭据（encryptedSecret 为空则不改密钥材料）。
 func (r *CredentialRepo) Update(id int64, name, username, remark, fingerprint string, encryptedSecret []byte) error {
 	if encryptedSecret != nil {
-		_, err := DB.Exec(
+		_, err := store.DB.Exec(
 			"UPDATE credentials SET name=?, username=?, encrypted_secret=?, fingerprint=?, remark=?, updated_at=datetime('now','localtime') WHERE id=?",
 			name, username, encryptedSecret, fingerprint, remark, id,
 		)
 		return err
 	}
-	_, err := DB.Exec(
+	_, err := store.DB.Exec(
 		"UPDATE credentials SET name=?, username=?, remark=?, updated_at=datetime('now','localtime') WHERE id=?",
 		name, username, remark, id,
 	)
@@ -100,21 +101,21 @@ func (r *CredentialRepo) Update(id int64, name, username, remark, fingerprint st
 
 // Delete 删除凭据。
 func (r *CredentialRepo) Delete(id int64) error {
-	_, err := DB.Exec("DELETE FROM credentials WHERE id=?", id)
+	_, err := store.DB.Exec("DELETE FROM credentials WHERE id=?", id)
 	return err
 }
 
 // Count 统计凭据总数。
 func (r *CredentialRepo) Count() (int64, error) {
 	var total int64
-	err := DB.QueryRow("SELECT COUNT(*) FROM credentials").Scan(&total)
+	err := store.DB.QueryRow("SELECT COUNT(*) FROM credentials").Scan(&total)
 	return total, err
 }
 
 // CountByCredentialID 统计引用该凭据的主机数。
 func (r *CredentialRepo) CountByCredentialID(id int64) (int, error) {
 	var count int
-	err := DB.QueryRow("SELECT COUNT(*) FROM hosts WHERE credential_id=?", id).Scan(&count)
+	err := store.DB.QueryRow("SELECT COUNT(*) FROM hosts WHERE credential_id=?", id).Scan(&count)
 	return count, err
 }
 

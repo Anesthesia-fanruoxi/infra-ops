@@ -9,13 +9,13 @@ import (
 
 	"infra-ops/common/resp"
 	"infra-ops/model"
-	"infra-ops/store"
+	"infra-ops/store/repo"
 )
 
 // registerTemplateServices 模板在某主机成功执行后，按其 services 声明登记/刷新服务清单。
 // url 支持占位符：{{ip}} 替换为主机 IP，{{变量名}} 替换为该主机执行时的变量值。
 // 模板无服务声明时静默跳过。
-func registerTemplateServices(tplRepo *store.DeployRepo, hostID int64, hostIP string, templateID int64, vars map[string]string) error {
+func registerTemplateServices(tplRepo *repo.DeployRepo, hostID int64, hostIP string, templateID int64, vars map[string]string) error {
 	tpl, err := tplRepo.GetTemplate(templateID)
 	if err != nil || tpl == nil {
 		return err
@@ -43,10 +43,10 @@ func registerTemplateServices(tplRepo *store.DeployRepo, hostID int64, hostIP st
 }
 
 type serviceHandler struct {
-	tplRepo *store.DeployRepo
+	tplRepo *repo.DeployRepo
 }
 
-func NewServiceHandler(tplRepo *store.DeployRepo) *serviceHandler {
+func NewServiceHandler(tplRepo *repo.DeployRepo) *serviceHandler {
 	return &serviceHandler{tplRepo: tplRepo}
 }
 

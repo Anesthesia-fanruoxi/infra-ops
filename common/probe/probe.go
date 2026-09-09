@@ -14,13 +14,13 @@ import (
 	"infra-ops/common/sshx"
 	"infra-ops/common/sysutil"
 	"infra-ops/model"
-	"infra-ops/store"
+	"infra-ops/store/repo"
 )
 
 // Probe 巡检服务。
 type Probe struct {
-	hostRepo    *store.HostRepo
-	credRepo    *store.CredentialRepo
+	hostRepo    *repo.HostRepo
+	credRepo    *repo.CredentialRepo
 	cryptoS     *crypto.Service
 	sshC        *sshx.Client
 	bus         *eventbus.Bus
@@ -31,8 +31,8 @@ type Probe struct {
 
 // Deps 巡检依赖。
 type Deps struct {
-	HostRepo    *store.HostRepo
-	CredRepo    *store.CredentialRepo
+	HostRepo    *repo.HostRepo
+	CredRepo    *repo.CredentialRepo
 	CryptoS     *crypto.Service
 	SSHC        *sshx.Client
 	Bus         *eventbus.Bus
@@ -163,10 +163,10 @@ func (p *Probe) probeHost(h *model.Host) {
 	// 发布状态更新事件
 	if p.bus != nil {
 		p.bus.Publish("host.status", map[string]interface{}{
-			"id":     h.ID,
-			"status": "online",
+			"id":         h.ID,
+			"status":     "online",
 			"latency_ms": result.LatencyMs,
-			"info_json": string(infoJSON),
+			"info_json":  string(infoJSON),
 		})
 	}
 }
@@ -176,10 +176,10 @@ func (p *Probe) markOffline(hostID int64) {
 	// 发布状态更新事件
 	if p.bus != nil {
 		p.bus.Publish("host.status", map[string]interface{}{
-			"id":     hostID,
-			"status": "offline",
+			"id":         hostID,
+			"status":     "offline",
 			"latency_ms": 0,
-			"info_json": "{}",
+			"info_json":  "{}",
 		})
 	}
 }

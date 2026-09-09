@@ -1,4 +1,4 @@
-package store
+package repo
 
 import (
 	"database/sql"
@@ -7,6 +7,7 @@ import (
 
 	"infra-ops/common/eventbus"
 	"infra-ops/model"
+	"infra-ops/store"
 )
 
 // AuditRepo 审计日志存取。
@@ -45,7 +46,7 @@ const auditCols = "id,action,target_type,target_id,detail,remote_ip,created_at"
 
 // Create 写入审计日志。
 func (r *AuditRepo) Create(logEntry *model.AuditLog) error {
-	res, err := DB.Exec(
+	res, err := store.DB.Exec(
 		"INSERT INTO audit_logs(action,target_type,target_id,detail,remote_ip) VALUES(?,?,?,?,?)",
 		logEntry.Action, logEntry.TargetType, logEntry.TargetID, logEntry.Detail, logEntry.RemoteIP,
 	)
@@ -67,7 +68,7 @@ func (r *AuditRepo) List(q AuditQuery) ([]model.AuditLog, int64, error) {
 	where, args := buildAuditWhere(q)
 
 	var total int64
-	if err := DB.QueryRow("SELECT COUNT(*) FROM audit_logs"+where, args...).Scan(&total); err != nil {
+	if err := store.DB.QueryRow("SELECT COUNT(*) FROM audit_logs"+where, args...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("audit count: %w", err)
 	}
 
@@ -76,7 +77,7 @@ func (r *AuditRepo) List(q AuditQuery) ([]model.AuditLog, int64, error) {
 		" ORDER BY id DESC LIMIT ? OFFSET ?"
 	queryArgs := append(args, q.PageSize, offset)
 
-	rows, err := DB.Query(query, queryArgs...)
+	rows, err := store.DB.Query(query, queryArgs...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("audit list: %w", err)
 	}
@@ -92,7 +93,7 @@ func (r *AuditRepo) List(q AuditQuery) ([]model.AuditLog, int64, error) {
 // Stats 返回审计统计概览。
 func (r *AuditRepo) Stats() (*AuditStats, error) {
 	s := &AuditStats{}
-	err := DB.QueryRow(
+	err := store.DB.QueryRow(
 		`SELECT
 			COALESCE(SUM(CASE WHEN date(created_at)=date('now','localtime') THEN 1 ELSE 0 END),0),
 			COALESCE(SUM(CASE WHEN action='auth.login_fail' AND created_at>=datetime('now','localtime','-24 hours') THEN 1 ELSE 0 END),0),
@@ -107,7 +108,7 @@ func (r *AuditRepo) Stats() (*AuditStats, error) {
 
 // Recent 获取最近 N 条审计日志。
 func (r *AuditRepo) Recent(limit int) ([]model.AuditLog, error) {
-	rows, err := DB.Query("SELECT "+auditCols+" FROM audit_logs ORDER BY id DESC LIMIT ?", limit)
+	rows, err := store.DB.Query("SELECT "+auditCols+" FROM audit_logs ORDER BY id DESC LIMIT ?", limit)
 	if err != nil {
 		return nil, err
 	}

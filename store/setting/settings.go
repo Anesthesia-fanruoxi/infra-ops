@@ -1,7 +1,11 @@
 // settings KV 配置存取与首次启动引导初始化。
-package store
+package setting
 
-import "database/sql"
+import (
+	"database/sql"
+
+	"infra-ops/store"
+)
 
 // settings 表键常量。
 const (
@@ -28,7 +32,7 @@ func NewSettingsRepo() *SettingsRepo { return &SettingsRepo{} }
 // Get 读取单个配置项，不存在返回空串。
 func (r *SettingsRepo) Get(key string) (string, error) {
 	var v string
-	err := DB.QueryRow(`SELECT value FROM settings WHERE key=?`, key).Scan(&v)
+	err := store.DB.QueryRow(`SELECT value FROM settings WHERE key=?`, key).Scan(&v)
 	if err == sql.ErrNoRows {
 		return "", nil
 	}
@@ -37,7 +41,7 @@ func (r *SettingsRepo) Get(key string) (string, error) {
 
 // GetAll 读取全部配置项。
 func (r *SettingsRepo) GetAll() (map[string]string, error) {
-	rows, err := DB.Query(`SELECT key, value FROM settings`)
+	rows, err := store.DB.Query(`SELECT key, value FROM settings`)
 	if err != nil {
 		return nil, err
 	}
@@ -56,7 +60,7 @@ func (r *SettingsRepo) GetAll() (map[string]string, error) {
 
 // Set 写入单个配置项（upsert）。
 func (r *SettingsRepo) Set(key, value string) error {
-	_, err := DB.Exec(`INSERT INTO settings(key, value) VALUES(?, ?)
+	_, err := store.DB.Exec(`INSERT INTO settings(key, value) VALUES(?, ?)
 		ON CONFLICT(key) DO UPDATE SET value=excluded.value,
 		updated_at=datetime('now','localtime')`, key, value)
 	return err
@@ -104,7 +108,7 @@ func (r *SettingsRepo) EnsureRuntimeDefaults() error {
 		{SettingLogRetentionDays, "30"},
 	}
 	for _, kv := range defaults {
-		if _, err := DB.Exec(`INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO NOTHING`, kv[0], kv[1]); err != nil {
+		if _, err := store.DB.Exec(`INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO NOTHING`, kv[0], kv[1]); err != nil {
 			return err
 		}
 	}

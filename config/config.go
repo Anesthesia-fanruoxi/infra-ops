@@ -4,7 +4,7 @@ package config
 import (
 	"strconv"
 
-	"infra-ops/store"
+	"infra-ops/store/setting"
 )
 
 // Config 全局配置结构。
@@ -56,32 +56,32 @@ type ProbeConfig struct {
 // FromSettings 从 settings KV 构建配置，缺失项回退默认值。
 func FromSettings(m map[string]string) *Config {
 	cfg := defaultConfig()
-	if h := m[store.SettingServerHost]; h != "" {
+	if h := m[setting.SettingServerHost]; h != "" {
 		cfg.Server.Host = h
 	}
-	cfg.Security.SecretKey = m[store.SettingSecretKey]
-	cfg.Auth.Username = m[store.SettingAuthUsername]
-	cfg.Auth.PasswordHash = m[store.SettingAuthPasswordHash]
-	cfg.Auth.MustChangePassword = m[store.SettingAuthMustChange] == "1"
-	if p, err := strconv.Atoi(m[store.SettingServerPort]); err == nil && p > 0 {
+	cfg.Security.SecretKey = m[setting.SettingSecretKey]
+	cfg.Auth.Username = m[setting.SettingAuthUsername]
+	cfg.Auth.PasswordHash = m[setting.SettingAuthPasswordHash]
+	cfg.Auth.MustChangePassword = m[setting.SettingAuthMustChange] == "1"
+	if p, err := strconv.Atoi(m[setting.SettingServerPort]); err == nil && p > 0 {
 		cfg.Server.Port = p
 	}
-	if t, err := strconv.Atoi(m[store.SettingSSHTimeout]); err == nil && t > 0 {
+	if t, err := strconv.Atoi(m[setting.SettingSSHTimeout]); err == nil && t > 0 {
 		cfg.SSH.Timeout = t
 	}
-	if v := m[store.SettingSSHHostKeyPolicy]; v != "" {
+	if v := m[setting.SettingSSHHostKeyPolicy]; v != "" {
 		cfg.SSH.HostKeyPolicy = v
 	}
-	if i, err := strconv.Atoi(m[store.SettingProbeInterval]); err == nil && i > 0 {
+	if i, err := strconv.Atoi(m[setting.SettingProbeInterval]); err == nil && i > 0 {
 		cfg.Probe.Interval = i
 	}
-	if c, err := strconv.Atoi(m[store.SettingProbeConcurrency]); err == nil && c > 0 {
+	if c, err := strconv.Atoi(m[setting.SettingProbeConcurrency]); err == nil && c > 0 {
 		cfg.Probe.Concurrency = c
 	}
-	if c, err := strconv.Atoi(m[store.SettingDeployConc]); err == nil && c > 0 {
+	if c, err := strconv.Atoi(m[setting.SettingDeployConc]); err == nil && c > 0 {
 		cfg.Deploy.Concurrency = c
 	}
-	if d, err := strconv.Atoi(m[store.SettingLogRetentionDays]); err == nil && d > 0 {
+	if d, err := strconv.Atoi(m[setting.SettingLogRetentionDays]); err == nil && d > 0 {
 		cfg.Deploy.LogRetentionDays = d
 	}
 	return cfg

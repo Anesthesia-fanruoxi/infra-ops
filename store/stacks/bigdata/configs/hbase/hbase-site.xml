@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?xml-stylesheet type="text/xsl" href="configuration.xsl"?>
+<!-- hbase-site 由 infra-ops 注入；{{__master_ip}}/{{__ip}}/{{__node_ips}}/{{nn_rpc_port}} 运行时渲染 -->
+<configuration>
+  <property>
+    <name>hbase.cluster.distributed</name>
+    <value>true</value>
+  </property>
+  <property>
+    <name>hbase.rootdir</name>
+    <value>hdfs://{{__master_ip}}:{{nn_rpc_port}}/hbase</value>
+  </property>
+  <property>
+    <name>hbase.zookeeper.quorum</name>
+    <value>{{__node_ips}}</value>
+  </property>
+  <property>
+    <name>hbase.zookeeper.property.clientPort</name>
+    <value>2181</value>
+  </property>
+  <property>
+    <name>hbase.master.hostname</name>
+    <value>{{__ip}}</value>
+  </property>
+  <property>
+    <name>hbase.regionserver.hostname</name>
+    <value>{{__ip}}</value>
+  </property>
+  <property>
+    <name>hbase.master.info.bindAddress</name>
+    <value>0.0.0.0</value>
+  </property>
+  <property>
+    <name>hbase.wal.provider</name>
+    <value>filesystem</value>
+  </property>
+  <property>
+    <name>hbase.unsafe.stream.capability.enforce</name>
+    <value>false</value>
+  </property>
+</configuration>

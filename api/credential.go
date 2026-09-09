@@ -13,16 +13,16 @@ import (
 	"infra-ops/common/eventbus"
 	"infra-ops/common/resp"
 	"infra-ops/model"
-	"infra-ops/store"
+	"infra-ops/store/repo"
 )
 
 type credentialHandler struct {
-	repo    *store.CredentialRepo
+	repo    *repo.CredentialRepo
 	cryptoS *crypto.Service
 	bus     *eventbus.Bus
 }
 
-func NewCredentialHandler(repo *store.CredentialRepo, cs *crypto.Service, bus *eventbus.Bus) *credentialHandler {
+func NewCredentialHandler(repo *repo.CredentialRepo, cs *crypto.Service, bus *eventbus.Bus) *credentialHandler {
 	return &credentialHandler{repo: repo, cryptoS: cs, bus: bus}
 }
 

@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"strings"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -18,12 +18,13 @@ import (
 	"infra-ops/common/middleware"
 	"infra-ops/common/resp"
 	"infra-ops/common/sshx"
-	"infra-ops/store"
+	"infra-ops/store/repo"
+	"infra-ops/store/setting"
 )
 
 // Deps 路由所需依赖。
 type Deps struct {
-	Settings          *store.SettingsRepo
+	Settings          *setting.SettingsRepo
 	CryptoService     *crypto.Service
 	SSHClient         *sshx.Client
 	Sessions          *middleware.SessionStore
@@ -38,7 +39,7 @@ func Setup(staticFS fs.FS, deps Deps) *gin.Engine {
 	r.Use(gin.Recovery())
 
 	// 审计中间件（全局，只对写操作生效）
-	auditRepo := store.NewAuditRepo(deps.Bus)
+	auditRepo := repo.NewAuditRepo(deps.Bus)
 	r.Use(middleware.Audit(auditRepo))
 
 	// 公开接口（无需鉴权）
@@ -66,11 +67,11 @@ func Setup(staticFS fs.FS, deps Deps) *gin.Engine {
 	protected.Use(middleware.Auth(deps.Sessions))
 	protected.GET("/auth/me", authHandler.Me)
 	protected.POST("/auth/password", authHandler.ChangePassword)
-	protected.Use(middleware.RequirePasswordChanged(deps.Settings, store.SettingAuthMustChange,
+	protected.Use(middleware.RequirePasswordChanged(deps.Settings, setting.SettingAuthMustChange,
 		"/api/auth/password", "/api/auth/me", "/api/auth/logout"))
 
 	// 凭据管理
-	credRepo := store.NewCredentialRepo()
+	credRepo := repo.NewCredentialRepo()
 	credHandler := api.NewCredentialHandler(credRepo, deps.CryptoService, deps.Bus)
 	cred := protected.Group("/credentials")
 	{
@@ -81,14 +82,14 @@ func Setup(staticFS fs.FS, deps Deps) *gin.Engine {
 	}
 
 	// 主机管理
-	hostRepo := store.NewHostRepo()
+	hostRepo := repo.NewHostRepo()
 	hostHandler := api.NewHostHandler(api.HostDeps{
 		HostRepo: hostRepo,
 		CredRepo: credRepo,
 		CryptoS:  deps.CryptoService,
 		SSHC:     deps.SSHClient,
 		Bus:      deps.Bus,
-		TplRepo:  store.NewDeployRepo(),
+		TplRepo:  repo.NewDeployRepo(),
 	})
 	hosts := protected.Group("/hosts")
 	{
@@ -107,8 +108,8 @@ func Setup(staticFS fs.FS, deps Deps) *gin.Engine {
 	protected.GET("/services", api.NewServiceHandler(hostHandler.TplRepo()).List)
 
 	// 部署中心
-	deployRepo := store.NewDeployRepo()
-	scheduleRepo := store.NewDeployScheduleRepo()
+	deployRepo := repo.NewDeployRepo()
+	scheduleRepo := repo.NewDeployScheduleRepo()
 	deployTplHandler := api.NewDeployTemplateHandler(deployRepo, scheduleRepo)
 	tpl := protected.Group("/deploy/templates")
 	{
@@ -135,8 +136,8 @@ func Setup(staticFS fs.FS, deps Deps) *gin.Engine {
 	}
 
 	// 任务编排
-	orchRepo := store.NewOrchestrationRepo()
-	orchLogRepo := store.NewOrchestrationLogRepo()
+	orchRepo := repo.NewOrchestrationRepo()
+	orchLogRepo := repo.NewOrchestrationLogRepo()
 	orchHandler := api.NewOrchHandler(orchRepo, deployRepo, hostRepo, credRepo,
 		deps.CryptoService, deps.SSHClient, deps.Bus, auditRepo, orchLogRepo)
 	orch := protected.Group("/orchestrations")
@@ -149,6 +150,28 @@ func Setup(staticFS fs.FS, deps Deps) *gin.Engine {
 		orch.POST("/:id/run", orchHandler.Run)
 	}
 	protected.GET("/orchestration/runs/:id", orchHandler.RunsDetail)
+
+	// 套件部署
+	stackHandler := api.NewStackHandler(repo.NewStackRepo(), deployRepo, hostRepo, credRepo,
+		deps.CryptoService, deps.SSHClient, deps.Bus, auditRepo, deps.DeployConcurrency)
+	stacks := protected.Group("/stacks")
+	{
+		stacks.GET("", stackHandler.List)
+		stacks.POST("/preflight", stackHandler.Preflight)
+		stacks.POST("/run", stackHandler.Run)
+		stacks.GET("/runs", stackHandler.Runs)
+		stacks.GET("/runs/:id", stackHandler.RunDetail)
+		stacks.GET("/instances", stackHandler.ListInstances)
+		stacks.GET("/instances/:id", stackHandler.GetInstance)
+		stacks.PATCH("/instances/:id", stackHandler.PatchInstance)
+		stacks.DELETE("/instances/:id", stackHandler.DeleteInstance)
+		stacks.POST("/instances/:id/scale-out", stackHandler.ScaleOut)
+		stacks.POST("/instances/:id/scale-in", stackHandler.ScaleIn)
+		stacks.POST("/instances/:id/add-component", stackHandler.AddComponent)
+		stacks.POST("/instances/:id/remove-component", stackHandler.RemoveComponent)
+		stacks.POST("/instances/:id/uninstall", stackHandler.Uninstall)
+		stacks.GET("/instances/:id/runs", stackHandler.InstanceRuns)
+	}
 
 	// 总览 & 审计日志（审计日志统一走 /api/sse/audits 单一查询流）
 	miscHandler := api.NewMiscHandler(hostRepo, auditRepo)
@@ -164,6 +187,8 @@ func Setup(staticFS fs.FS, deps Deps) *gin.Engine {
 	protected.GET("/sse/deploy/log", deployTaskHandler.SSELog)
 	protected.GET("/sse/orchestration/steps", orchHandler.SSESteps)
 	protected.GET("/sse/orchestration/detail", orchHandler.SSEDetail)
+	protected.GET("/sse/stacks/setup", stackHandler.SSESetup)
+	protected.GET("/sse/stacks/log", stackHandler.SSELog)
 
 	// 前端静态资源
 	if staticFS != nil {

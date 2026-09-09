@@ -8,11 +8,11 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"infra-ops/model"
-	"infra-ops/store"
+	"infra-ops/store/repo"
 )
 
 // Audit 审计中间件：拦截写操作，响应成功后落库。
-func Audit(repo *store.AuditRepo) gin.HandlerFunc {
+func Audit(repo *repo.AuditRepo) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// 先执行 handler
 		c.Next()

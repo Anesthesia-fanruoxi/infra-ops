@@ -7,17 +7,18 @@ import (
 	"infra-ops/common/middleware"
 	"infra-ops/common/resp"
 	"infra-ops/model"
-	"infra-ops/store"
+	"infra-ops/store/repo"
+	"infra-ops/store/setting"
 )
 
 type authHandler struct {
-	settings  *store.SettingsRepo
+	settings  *setting.SettingsRepo
 	sessions  *middleware.SessionStore
-	auditRepo *store.AuditRepo
+	auditRepo *repo.AuditRepo
 }
 
 // NewAuthHandler 创建认证 handler。
-func NewAuthHandler(settings *store.SettingsRepo, sessions *middleware.SessionStore, auditRepo *store.AuditRepo) *authHandler {
+func NewAuthHandler(settings *setting.SettingsRepo, sessions *middleware.SessionStore, auditRepo *repo.AuditRepo) *authHandler {
 	return &authHandler{settings: settings, sessions: sessions, auditRepo: auditRepo}
 }
 
@@ -39,17 +40,17 @@ func (h *authHandler) Login(c *gin.Context) {
 		return
 	}
 
-	username, err := h.settings.Get(store.SettingAuthUsername)
+	username, err := h.settings.Get(setting.SettingAuthUsername)
 	if err != nil {
 		resp.Fail(c, resp.CodeInternal, "读取账号配置失败")
 		return
 	}
-	hash, err := h.settings.Get(store.SettingAuthPasswordHash)
+	hash, err := h.settings.Get(setting.SettingAuthPasswordHash)
 	if err != nil {
 		resp.Fail(c, resp.CodeInternal, "读取账号配置失败")
 		return
 	}
-	mustChange, _ := h.settings.Get(store.SettingAuthMustChange)
+	mustChange, _ := h.settings.Get(setting.SettingAuthMustChange)
 
 	if req.Username != username ||
 		bcrypt.CompareHashAndPassword([]byte(hash), []byte(req.Password)) != nil {
@@ -73,7 +74,7 @@ func (h *authHandler) ChangePassword(c *gin.Context) {
 	}
 	username, _ := c.Get("username")
 
-	hash, err := h.settings.Get(store.SettingAuthPasswordHash)
+	hash, err := h.settings.Get(setting.SettingAuthPasswordHash)
 	if err != nil {
 		resp.Fail(c, resp.CodeInternal, "读取账号配置失败")
 		return
@@ -88,11 +89,11 @@ func (h *authHandler) ChangePassword(c *gin.Context) {
 		resp.Fail(c, resp.CodeInternal, "生成密码哈希失败")
 		return
 	}
-	if err := h.settings.Set(store.SettingAuthPasswordHash, string(newHash)); err != nil {
+	if err := h.settings.Set(setting.SettingAuthPasswordHash, string(newHash)); err != nil {
 		resp.Fail(c, resp.CodeInternal, "保存新密码失败")
 		return
 	}
-	if err := h.settings.Set(store.SettingAuthMustChange, "0"); err != nil {
+	if err := h.settings.Set(setting.SettingAuthMustChange, "0"); err != nil {
 		resp.Fail(c, resp.CodeInternal, "更新改密标记失败")
 		return
 	}
@@ -114,7 +115,7 @@ func (h *authHandler) Logout(c *gin.Context) {
 // Me GET /api/auth/me
 func (h *authHandler) Me(c *gin.Context) {
 	username, _ := c.Get("username")
-	mustChange, _ := h.settings.Get(store.SettingAuthMustChange)
+	mustChange, _ := h.settings.Get(setting.SettingAuthMustChange)
 	resp.OK(c, gin.H{"username": username, "must_change_password": mustChange == "1"})
 }
 

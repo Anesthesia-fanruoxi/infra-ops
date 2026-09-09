@@ -14,25 +14,25 @@ import (
 	"infra-ops/common/resp"
 	"infra-ops/common/sshx"
 	"infra-ops/model"
-	"infra-ops/store"
+	"infra-ops/store/repo"
 )
 
 // orchHandler 任务编排。
 type orchHandler struct {
-	repo      *store.OrchestrationRepo
-	tplRepo   *store.DeployRepo
-	hostRepo  *store.HostRepo
-	credRepo  *store.CredentialRepo
+	repo      *repo.OrchestrationRepo
+	tplRepo   *repo.DeployRepo
+	hostRepo  *repo.HostRepo
+	credRepo  *repo.CredentialRepo
 	cryptoS   *icrypto.Service
 	sshC      *sshx.Client
 	bus       *eventbus.Bus
-	auditRepo *store.AuditRepo
-	logRepo   *store.OrchestrationLogRepo
+	auditRepo *repo.AuditRepo
+	logRepo   *repo.OrchestrationLogRepo
 }
 
-func NewOrchHandler(repo *store.OrchestrationRepo, tplRepo *store.DeployRepo, hostRepo *store.HostRepo,
-	credRepo *store.CredentialRepo, cryptoS *icrypto.Service, sshC *sshx.Client,
-	bus *eventbus.Bus, auditRepo *store.AuditRepo, logRepo *store.OrchestrationLogRepo) *orchHandler {
+func NewOrchHandler(repo *repo.OrchestrationRepo, tplRepo *repo.DeployRepo, hostRepo *repo.HostRepo,
+	credRepo *repo.CredentialRepo, cryptoS *icrypto.Service, sshC *sshx.Client,
+	bus *eventbus.Bus, auditRepo *repo.AuditRepo, logRepo *repo.OrchestrationLogRepo) *orchHandler {
 	return &orchHandler{repo: repo, tplRepo: tplRepo, hostRepo: hostRepo, credRepo: credRepo,
 		cryptoS: cryptoS, sshC: sshC, bus: bus, auditRepo: auditRepo, logRepo: logRepo}
 }
@@ -41,9 +41,9 @@ func NewOrchHandler(repo *store.OrchestrationRepo, tplRepo *store.DeployRepo, ho
 
 type orchStepReq struct {
 	TemplateID       int64                        `json:"template_id" binding:"required"`
-	Params           map[string]string            `json:"params"`   // 步骤级默认参数
+	Params           map[string]string            `json:"params"`                            // 步骤级默认参数
 	HostIDs          []int64                      `json:"host_ids" binding:"required,min=1"` // 本步骤目标主机
-	HostVars         map[string]map[string]string `json:"host_vars"` // 主机覆盖: hostID -> {k:v}
+	HostVars         map[string]map[string]string `json:"host_vars"`                         // 主机覆盖: hostID -> {k:v}
 	ContinueOnError  bool                         `json:"continue_on_error"`
 	RetryCount       int                          `json:"retry_count"`
 	RetryIntervalSec int                          `json:"retry_interval_sec"`

@@ -1,0 +1,29 @@
+# Elasticsearch 9.x+ 集群 —— 加入节点（master/data/协调 均可）配置素材
+# 与 elasticsearch-master.yml 的唯一差别：不含 cluster.initial_master_nodes，
+# 通过 seed_hosts 单播发现已形成的集群并加入，避免重复 bootstrap / 脑裂。
+# {{xxx}} 占位符与部署脚本 node.sh 变量一致，接入平台模板时经渲染填充。
+# ES 9 适配: discovery.zen.minimum_master_nodes 已在 9 移除（不配置）；
+#           加入节点完全依赖 discovery.seed_hosts 单播发现，无需引导配置。
+
+cluster.name: {{cluster_name}}
+node.name: {{__node_name}}
+node.roles: [ {{__roles}} ]
+
+path.data: /usr/share/elasticsearch/data
+path.logs: /usr/share/elasticsearch/logs
+
+network.host: 0.0.0.0
+http.port: {{port}}
+transport.port: {{transport_port}}
+transport.host: 0.0.0.0
+network.publish_host: {{__ip}}
+
+discovery.seed_hosts: [ {{__seed_hosts}} ]
+
+# 无 initial_master_nodes，节点在检测到现有集群（经 seed_hosts）后自动加入
+
+# 局域网部署简化：关闭安全认证（与引导节点保持一致）
+xpack.security.enabled: false
+xpack.security.enrollment.enabled: false
+
+# 如需开启安全，与 master 素材对齐并先共享 CA/节点证书

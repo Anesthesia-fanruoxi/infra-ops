@@ -31,6 +31,10 @@ fi
 umask 077
 printf 'requirepass %s\nappendonly yes\ndir /data\n' "${REDIS_PASS}" > "${HOME_DIR}/redis.conf"
 umask 022
+# 官方 redis 镜像以 uid 999 运行；root:600 会导致 can't open config file: Permission denied
+chown 999:999 "${HOME_DIR}/redis.conf" 2>/dev/null || true
+chmod 644 "${HOME_DIR}/redis.conf"
+chown -R 999:999 "${HOME_DIR}/data" 2>/dev/null || true
 
 # ==== 迁移旧版 docker run 容器（数据目录保留） ====
 if docker ps -a --format '{{.Names}}' | grep -qx "${CONTAINER}"; then

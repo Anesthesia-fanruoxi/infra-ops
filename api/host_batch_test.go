@@ -26,6 +26,32 @@ func TestParseIPList(t *testing.T) {
 		{"简写范围", "172.16.1.11-20", ipSeq(11, 20), false},
 		{"完整范围", "172.16.1.11-172.16.1.13", ipSeq(11, 13), false},
 		{"混合输入", "172.16.1.11-12\n172.16.2.5", append(ipSeq(11, 12), "172.16.2.5"), false},
+		{"CIDR /29 六主机", "172.16.1.0/29", func() []string {
+			var out []string
+			for i := 1; i <= 6; i++ {
+				out = append(out, fmt.Sprintf("172.16.1.%d", i))
+			}
+			return out
+		}(), false},
+		{"CIDR /30 四主机", "10.1.2.0/30", func() []string {
+			var out []string
+			for i := 1; i <= 2; i++ {
+				out = append(out, fmt.Sprintf("10.1.2.%d", i))
+			}
+			return out
+		}(), false},
+		{"CIDR 地址非网段起点", "172.16.1.5/28", func() []string {
+			var out []string
+			for i := 1; i <= 14; i++ {
+				out = append(out, fmt.Sprintf("172.16.1.%d", i))
+			}
+			return out
+		}(), false},
+		{"CIDR 与范围混合", "172.16.3.0/30\n172.16.4.1-2", []string{"172.16.3.1", "172.16.3.2", "172.16.4.1", "172.16.4.2"}, false},
+		{"CIDR 非法掩码", "172.16.1.0/31", nil, true},
+		{"CIDR 非法掩码0", "172.16.1.0/0", nil, true},
+		{"CIDR IPV6", "::1/128", nil, true},
+		{"CIDR 超上限", "10.0.0.0/25", nil, true},
 		{"四种分隔符", "1.1.1.1,2.2.2.2;3.3.3.3 4.4.4.4", []string{"1.1.1.1", "2.2.2.2", "3.3.3.3", "4.4.4.4"}, false},
 		{"重复去重", "172.16.1.5\n172.16.1.5", []string{"172.16.1.5"}, false},
 		{"范围与单IP重复", "172.16.1.11-12\n172.16.1.12", ipSeq(11, 12), false},

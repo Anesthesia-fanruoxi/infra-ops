@@ -45,6 +45,7 @@ const ICONS = {
   audit: '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>',
   templates: '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="16" y2="17"/></svg>',
   deploy: '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg>',
+  stacks: '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>',
   schedules: '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>'
 }
 
@@ -56,6 +57,7 @@ const routes = {
   templates: { title: '部署模板', sub: '管理部署脚本与变量' },
   deploy: { title: '基础建设', sub: '批量部署与实时监控' },
   orchestrations: { title: '任务编排', sub: '多模板顺序编排执行' },
+  stacks: { title: '套件部署', sub: '集群实例 · 扩容 / 缩容 / 加装 / 卸载' },
   schedules: { title: '定时任务', sub: '周期性自动化执行' }
 }
 
@@ -187,6 +189,7 @@ app.component('app-layout', {
       <div class="nav-item" :class="{active:currentPage==='templates'}" @click="$emit('nav','templates')"><span class="nav-icon">` + ICONS.templates + `</span>部署模板</div>
       <div class="nav-item" :class="{active:currentPage==='deploy'}" @click="$emit('nav','deploy')"><span class="nav-icon">` + ICONS.deploy + `</span>基础建设</div>
       <div class="nav-item" :class="{active:currentPage==='orchestrations'}" @click="$emit('nav','orchestrations')"><span class="nav-icon">` + ICONS.deploy + `</span>任务编排</div>
+      <div class="nav-item" :class="{active:currentPage==='stacks'}" @click="$emit('nav','stacks')"><span class="nav-icon">` + ICONS.stacks + `</span>套件部署</div>
       <div class="nav-item" :class="{active:currentPage==='schedules'}" @click="$emit('nav','schedules')"><span class="nav-icon">` + ICONS.schedules + `</span>定时任务</div>
       <div class="nav-group">安全审计</div>
       <div class="nav-item" :class="{active:currentPage==='credentials'}" @click="$emit('nav','credentials')"><span class="nav-icon">` + ICONS.credentials + `</span>凭据管理</div>
@@ -234,6 +237,7 @@ app.component('page-audit', window.AuditPage)
 app.component('page-templates', window.TemplatesPage)
 app.component('page-deploy', window.DeployPage)
 app.component('page-orchestrations', window.OrchestrationsPage)
+app.component('page-stacks', window.StacksPage)
 app.component('page-schedules', window.SchedulesPage)
 app.component('change-password-dialog', window.ChangePasswordDialog)
 

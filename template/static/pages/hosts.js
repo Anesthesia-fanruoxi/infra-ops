@@ -128,7 +128,7 @@ window.HostsPage = {
     <el-form :model="batchForm" label-position="top" :disabled="batchSubmitting">
       <el-form-item label="凭据" required><el-select v-model="batchForm.credential_id" placeholder="请选择凭据" style="width:100%" :loading="credLoading" @visible-change="onCredDropdown"><el-option v-for="c in creds" :key="c.id" :label="c.name" :value="c.id" /></el-select></el-form-item>
       <el-form-item label="IP 列表" required>
-        <el-input v-model="batchForm.ips" type="textarea" :rows="6" placeholder="172.16.1.11-20&#10;172.16.2.5" @input="onIpsInput" />
+        <el-input v-model="batchForm.ips" type="textarea" :rows="6" placeholder="每行一个，支持断行/逗号/分号/空格分隔&#10;单独 IP：172.16.2.5&#10;连续范围：172.16.1.11-20&#10;CIDR 网段：172.16.1.0/28" @input="onIpsInput" />
         <div class="batch-preview" :class="{err:preview.err}">{{preview.err || ('共 '+preview.count+' 个 IP'+(preview.dup?('，其中 '+preview.dup+' 个已存在'):''))}}</div>
       </el-form-item>
       <div class="form-grid">
@@ -239,6 +239,7 @@ window.HostsPage = {
       return { ips: out }
     },
     expandRange(item) {
+      if (item.indexOf('/') >= 0) return this.expandCIDR(item)
       const parts = item.split('-')
        if (parts.length === 1) { if (!this.validIPv4(item)) return { error: '非法 IP: ' + item }; return { ips: [item] } }
       if (parts.length === 2) {
@@ -250,6 +251,30 @@ window.HostsPage = {
         return this.expandRange2(start, this.joinIP(start, n))
       }
        return { error: '非法范围: ' + item }
+    },
+    expandCIDR(item) {
+      // a.b.c.d/prefix（2-30），排出网络/广播地址，展开总数超 100 报错
+      const m = item.split('/')
+      if (m.length !== 2) return { error: '非法网段: ' + item }
+      if (!this.validIPv4(m[0]) || !/^\d{1,2}$/.test(m[1])) return { error: '非法网段: ' + item }
+      const prefix = parseInt(m[1], 10)
+      if (prefix < 2 || prefix > 30) return { error: '非法掩码: ' + item }
+      const parts = m[0].split('.'), mask = []
+      for (let i = 0; i < 4; i++) {
+        const bits = Math.max(0, Math.min(8, prefix - i * 8))
+        const filler = Math.max(0, i * 8 + 8 - prefix)
+        mask.push(((2 ** bits) - 1) << filler)
+      }
+      // 逐字节网络号 = ip & mask
+      const network = parts.map((v, i) => (+v) & mask[i])
+      const base = ((network[0] << 24) | (network[1] << 16) | (network[2] << 8) | network[3]) >>> 0
+      const hostMask = (0xFFFFFFFF >>> prefix)
+      const first = base + 1
+      const last = (base | hostMask) >>> 0
+      if (last - first > 100) return { error: '数量超过上限（100 台/批）' }
+      const out = []
+      for (let a = first; a < last; a++) out.push((a >>> 24) + '.' + ((a >>> 16) & 255) + '.' + ((a >>> 8) & 255) + '.' + (a & 255))
+      return { ips: out }
     },
     validIPv4(s) { const p = s.split('.'); return p.length === 4 && p.every(x => /^\d{1,3}$/.test(x) && +x >= 0 && +x <= 255) },
     expandRange2(start, end) {

@@ -72,7 +72,7 @@ window.TemplatesPage = {
     <!-- 卡片视图：平铺展示 -->
     <template v-else>
       <div class="tpl-card-grid">
-        <div v-for="t in filtered" :key="t.id" class="tpl-card">
+        <div v-for="t in filtered" :key="t.id" class="tpl-card" @click="openView(t)">
           <div class="tpl-card-head">
             <strong class="tpl-card-name" :title="t.name">{{t.name}}</strong>
             <div class="tpl-card-badges">
@@ -86,7 +86,7 @@ window.TemplatesPage = {
             <span v-if="(t.variables||[]).length" class="tpl-meta-chip">变量 {{(t.variables||[]).length}}</span>
             <span v-if="(t.services||[]).filter(s=>s&&s.web).length" class="tpl-meta-chip svc">Web 服务</span>
           </div>
-          <div class="tpl-card-ops">
+          <div class="tpl-card-ops" @click.stop>
             <el-button size="small" text @click="openView(t)">查看</el-button>
             <el-button v-if="t.is_builtin" size="small" text @click="duplicate(t)">另存副本</el-button>
             <template v-else>
@@ -104,12 +104,12 @@ window.TemplatesPage = {
   </div>
 
   <!-- 查看 / 编辑弹窗 -->
-  <el-dialog v-model="dlgVisible" :title="dlgTitle" class="tpl-dlg" :class="viewMode ? 'tpl-dlg-view' : ''" width="85%" :close-on-click-modal="viewMode">
+  <el-dialog v-model="dlgVisible" :title="dlgTitle" class="tpl-dlg tpl-dlg-view" :close-on-click-modal="viewMode">
     <div v-if="viewMode && editing.is_builtin" class="tpl-view-hint">
       <svg viewBox="0 0 16 16" width="13" height="13" fill="currentColor"><path d="M8 15A7 7 0 1 1 8 1a7 7 0 0 1 0 14zm0 1A8 8 0 1 0 8 0a8 8 0 0 0 0 16z"/><path d="m8.93 6.588-2.29.287-.082.38.45.083c.294.07.352.176.288.469l-.738 3.468c-.194.897.105 1.319.808 1.319.545 0 1.178-.252 1.465-.598l.088-.416c-.2.176-.492.246-.686.246-.275 0-.375-.193-.304-.533L8.93 6.588zM9 4.5a1 1 0 1 1-2 0 1 1 0 0 1 2 0z"/></svg>
       <span>内置模板为只读，可另存为副本后修改</span>
     </div>
-    <el-form :model="editing" label-position="top" ref="editFormRef" :rules="formRules" :class="viewMode ? 'tpl-form-view' : ''">
+    <el-form :model="editing" label-position="top" ref="editFormRef" :rules="formRules" class="tpl-form-view">
       <div class="tpl-left-col">
       <div class="form-grid">
         <el-form-item label="模板名称" prop="name" required>
@@ -175,7 +175,16 @@ window.TemplatesPage = {
             <span class="shell-bar-meta">{{lineCount}} 行 · {{(editing.variables||[]).length}} 个变量</span>
           </div>
           <pre v-if="viewMode" class="shell-box shell-pre" v-html="highlightedHtml"></pre>
-          <textarea v-else class="shell-box shell-textarea" v-model="editing.script" wrap="off" spellcheck="false" placeholder="# 支持 {{var_name}} 占位符，变量须在上方声明&#10;#!/bin/bash&#10;echo 'Deploying to {{target}}...'"></textarea>
+          <template v-else>
+            <div class="shell-edit">
+              <div class="shell-gutter" aria-hidden="true">
+                <div class="shell-gutter-inner" :style="{ transform: 'translateY(' + (-gutterScroll) + 'px)' }">
+                  <div v-for="i in lineCount" :key="i" class="shell-gutter-line" :class="{ err: warningLines.has(i) }">{{i}}</div>
+                </div>
+              </div>
+              <textarea class="shell-box shell-textarea shell-edit-text" v-model="editing.script" @scroll="onScriptScroll" wrap="off" spellcheck="false" placeholder="# 支持 {{var_name}} 占位符，变量须在上方声明&#10;#!/bin/bash&#10;echo 'Deploying to {{target}}...'"></textarea>
+            </div>
+          </template>
         </div>
         <div v-if="!viewMode && scriptWarnings.length" class="tpl-script-warn">
           <svg viewBox="0 0 16 16" width="13" height="13" fill="currentColor"><path d="M8.982 1.566a1.13 1.13 0 0 0-1.96 0L.165 13.233c-.457.778.091 1.767.98 1.767h13.713c.889 0 1.438-.99.98-1.767L8.982 1.566zM8 5c.535 0 .954.462.9.995l-.35 3.507a.552.552 0 0 1-1.1 0L7.1 5.995A.905.905 0 0 1 8 5zm.002 6a1 1 0 1 1 0 2 1 1 0 0 1 0-2z"/></svg>
@@ -202,9 +211,10 @@ window.TemplatesPage = {
   data() {
     return {
       list: [], loading: false, saving: false, dlgVisible: false, viewMode: false,
+      gutterScroll: 0,
       mode: localStorage.getItem('tpl-view-mode') || 'card',
       activeCat: '全部',
-      categoryOptions: ['系统', '工具', '中间件', '监控', '其他'],
+      categoryOptions: ['系统', '工具', '数据库', '可视化', '消息队列', '配置注册中心', '其他'],
       editing: { name: '', description: '', category: '其他', script: '', variables: [], requires: [], configs: [] },
       formRules: {
         name: [{ required: true, message: '请输入模板名称', trigger: 'blur' }],
@@ -216,7 +226,10 @@ window.TemplatesPage = {
     builtinCount() { return this.list.filter(t => t.is_builtin).length },
     categories() {
       const s = new Set(this.list.map(t => t.category || '未分类').filter(Boolean))
-      return [...s].filter(c => c !== '其他').concat((s.has('其他') || s.has('')) ? '其他' : '')
+      // 按 categoryOptions 预设顺序输出存在的分类，「其他」固定排末尾，保证筛选顺序稳定
+      const want = [...this.categoryOptions]
+      if (s.has('其他') || s.has('')) want.push('其他')
+      return want.filter(c => s.has(c))
     },
     filtered() {
       if (this.activeCat === '全部') return this.list
@@ -227,10 +240,22 @@ window.TemplatesPage = {
       return this.editing.id ? '编辑模板' : '新增模板'
     },
     scriptWarnings() {
+      // 平台注入的内置占位符（{{__ip}}/{{n}}/{{__seq}} 等），无需在 variables 声明
+      const builtin = new Set(['__ip','__ip_last','__name','__seq','HostID','ip','ip_last','n','n_last'])
       const vars = new Set(this.editing.variables.map(v => v.name).filter(Boolean))
       const placeholders = [...(this.editing.script || '').matchAll(/\{\{(\w+)\}\}/g)].map(m => m[1])
-      const undeclared = [...new Set(placeholders)].filter(p => !vars.has(p))
+      const undeclared = [...new Set(placeholders)].filter(p => !vars.has(p) && !builtin.has(p))
       return undeclared.map(p => '未声明的占位符: {{' + p + '}}')
+    },
+    warningLines() {
+      const builtin = new Set(['__ip','__ip_last','__name','__seq','HostID','ip','ip_last','n','n_last'])
+      const vars = new Set(this.editing.variables.map(v => v.name).filter(Boolean))
+      const out = new Set()
+      ;(this.editing.script || '').split('\n').forEach((ln, i) => {
+        const ps = [...ln.matchAll(/\{\{(\w+)\}\}/g)].map(m => m[1])
+        if (ps.some(p => !vars.has(p) && !builtin.has(p))) out.add(i + 1)
+      })
+      return out
     },
     highlightedHtml() {
       if (!this.viewMode) return ''
@@ -243,6 +268,8 @@ window.TemplatesPage = {
   mounted() { this.load() },
   methods: {
     setMode(m) { this.mode = m; localStorage.setItem('tpl-view-mode', m) },
+    // 编辑时行号 gutter 跟随 textarea 纵向滚动
+    onScriptScroll(e) { this.gutterScroll = e.target.scrollTop },
     // 轻量 shell 语法高亮（查看模式），输出 HTML，配合暗色护眼主题
     highlightShell(src) {
       const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')

@@ -1,9 +1,10 @@
-package store
+package repo
 
 import (
 	"fmt"
 
 	"infra-ops/model"
+	"infra-ops/store"
 )
 
 // OrchestrationLogRepo 运行日志存取。
@@ -16,7 +17,7 @@ func (r *OrchestrationLogRepo) AppendRunLogs(runID int64, rows []model.Orchestra
 	if len(rows) == 0 {
 		return nil, nil
 	}
-	tx, err := DB.Begin()
+	tx, err := store.DB.Begin()
 	if err != nil {
 		return nil, err
 	}
@@ -49,7 +50,7 @@ func (r *OrchestrationLogRepo) AppendRunLogs(runID int64, rows []model.Orchestra
 
 // RunStepLogs 某步骤已落库日志（id 升序，最近 2000 行封顶）。
 func (r *OrchestrationLogRepo) RunStepLogs(runID int64, seq int) ([]model.OrchestrationRunLog, error) {
-	rows, err := DB.Query(
+	rows, err := store.DB.Query(
 		`SELECT id,run_id,seq,host_id,host_ip,text,created_at
 		 FROM (
 		   SELECT id,run_id,seq,host_id,host_ip,text,created_at

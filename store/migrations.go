@@ -25,11 +25,109 @@ var migrations = []migration{
 	{15, migrateV15},
 	{16, migrateV16},
 	{17, migrateV17},
+	{18, migrateV18},
+	{19, migrateV19},
 }
 
 // migrateV17 deploy_templates 增加 configs 列：声明可被用户覆盖的配置文件（JSON 数组）。
 func migrateV17(db *sql.DB) error {
 	return addColumnIfMissing(db, "deploy_templates", "configs", `TEXT NOT NULL DEFAULT '[]'`)
+}
+
+// migrateV18 套件部署运行记录：蓝图在代码中，这里只存每次执行。
+func migrateV18(db *sql.DB) error {
+	stmts := []string{
+		`CREATE TABLE IF NOT EXISTS stack_runs (
+			id          INTEGER PRIMARY KEY AUTOINCREMENT,
+			stack_key   TEXT NOT NULL,
+			stack_name  TEXT NOT NULL,
+			mode        TEXT NOT NULL,
+			status      TEXT NOT NULL DEFAULT 'running',
+			total       INTEGER NOT NULL DEFAULT 0,
+			success_cnt INTEGER NOT NULL DEFAULT 0,
+			fail_cnt    INTEGER NOT NULL DEFAULT 0,
+			params_json TEXT NOT NULL DEFAULT '{}',
+			created_at  TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+			finished_at TEXT
+		)`,
+		`CREATE TABLE IF NOT EXISTS stack_run_hosts (
+			id                INTEGER PRIMARY KEY AUTOINCREMENT,
+			run_id            INTEGER NOT NULL REFERENCES stack_runs(id) ON DELETE CASCADE,
+			host_id           INTEGER NOT NULL,
+			host_name         TEXT NOT NULL,
+			host_ip           TEXT NOT NULL,
+			role              TEXT NOT NULL DEFAULT '',
+			seq               INTEGER NOT NULL,
+			params_json       TEXT NOT NULL DEFAULT '{}',
+			status            TEXT NOT NULL DEFAULT 'pending',
+			prereq_status     TEXT NOT NULL DEFAULT 'pending',
+			node_status       TEXT NOT NULL DEFAULT 'pending',
+			bootstrap_status  TEXT NOT NULL DEFAULT 'skipped',
+			output            TEXT NOT NULL DEFAULT '',
+			error             TEXT NOT NULL DEFAULT '',
+			started_at        TEXT,
+			finished_at       TEXT
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_stack_run_hosts_run ON stack_run_hosts(run_id, seq)`,
+		`CREATE TABLE IF NOT EXISTS stack_run_logs (
+			id         INTEGER PRIMARY KEY AUTOINCREMENT,
+			run_id     INTEGER NOT NULL REFERENCES stack_runs(id) ON DELETE CASCADE,
+			phase      TEXT NOT NULL DEFAULT '',
+			host_id    INTEGER NOT NULL DEFAULT 0,
+			host_ip    TEXT NOT NULL DEFAULT '',
+			text       TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_stack_run_logs_run ON stack_run_logs(run_id, id)`,
+	}
+	for _, s := range stmts {
+		if _, err := db.Exec(s); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// migrateV19 套件集群实例：长期记录成员与组件，运行记录挂到实例上支持扩容/缩容/加装。
+func migrateV19(db *sql.DB) error {
+	stmts := []string{
+		`CREATE TABLE IF NOT EXISTS stack_instances (
+			id               INTEGER PRIMARY KEY AUTOINCREMENT,
+			name             TEXT NOT NULL,
+			stack_key        TEXT NOT NULL,
+			stack_name       TEXT NOT NULL,
+			mode             TEXT NOT NULL,
+			category         TEXT NOT NULL DEFAULT 'service',
+			status           TEXT NOT NULL DEFAULT 'ready',
+			params_json      TEXT NOT NULL DEFAULT '{}',
+			components_json  TEXT NOT NULL DEFAULT '[]',
+			created_at       TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+			updated_at       TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+		)`,
+		`CREATE TABLE IF NOT EXISTS stack_instance_hosts (
+			id               INTEGER PRIMARY KEY AUTOINCREMENT,
+			instance_id      INTEGER NOT NULL REFERENCES stack_instances(id) ON DELETE CASCADE,
+			host_id          INTEGER NOT NULL,
+			host_name        TEXT NOT NULL,
+			host_ip          TEXT NOT NULL,
+			role             TEXT NOT NULL DEFAULT 'node',
+			seq              INTEGER NOT NULL DEFAULT 0,
+			params_json      TEXT NOT NULL DEFAULT '{}',
+			components_json  TEXT NOT NULL DEFAULT '[]',
+			status           TEXT NOT NULL DEFAULT 'active'
+		)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_stack_instance_hosts_uniq ON stack_instance_hosts(instance_id, host_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_stack_instances_key ON stack_instances(stack_key, status)`,
+	}
+	for _, s := range stmts {
+		if _, err := db.Exec(s); err != nil {
+			return err
+		}
+	}
+	if err := addColumnIfMissing(db, "stack_runs", "instance_id", `INTEGER NOT NULL DEFAULT 0`); err != nil {
+		return err
+	}
+	return addColumnIfMissing(db, "stack_runs", "op", `TEXT NOT NULL DEFAULT 'create'`)
 }
 
 // migrateV16 部署任务运行时日志表：按行落库，供日志抽屉快照回放与实时追加；任务删除时级联清理。

@@ -10,7 +10,12 @@ import (
 
 func TestMergeConfigs(t *testing.T) {
 	raw := json.RawMessage(`[{"key":"nginx_conf","label":"nginx","file":"/x","required":false},{"key":"my_cnf","label":"mysql","file":"{{data_dir}}/my.cnf","required":true}]`)
-	must := func(m map[string]string, err error) map[string]string { if err != nil { t.Fatal(err) }; return m }
+	must := func(m map[string]string, err error) map[string]string {
+		if err != nil {
+			t.Fatal(err)
+		}
+		return m
+	}
 
 	// 任务级 + 主机覆盖
 	out := must(mergeConfigs(raw, map[string]string{"nginx_conf": "A", "my_cnf": "B"}, map[string]string{"nginx_conf": "A2"}))
