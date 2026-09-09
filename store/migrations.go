@@ -27,6 +27,7 @@ var migrations = []migration{
 	{17, migrateV17},
 	{18, migrateV18},
 	{19, migrateV19},
+	{20, migrateV20},
 }
 
 // migrateV17 deploy_templates 增加 configs 列：声明可被用户覆盖的配置文件（JSON 数组）。
@@ -128,6 +129,11 @@ func migrateV19(db *sql.DB) error {
 		return err
 	}
 	return addColumnIfMissing(db, "stack_runs", "op", `TEXT NOT NULL DEFAULT 'create'`)
+}
+
+// migrateV20 host_services 增加 instance_id 列：将服务记录关联到套件集群实例。
+func migrateV20(db *sql.DB) error {
+	return addColumnIfMissing(db, "host_services", "instance_id", `INTEGER NOT NULL DEFAULT 0`)
 }
 
 // migrateV16 部署任务运行时日志表：按行落库，供日志抽屉快照回放与实时追加；任务删除时级联清理。

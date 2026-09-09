@@ -17,31 +17,34 @@ import (
 )
 
 type hostHandler struct {
-	hostRepo *repo.HostRepo
-	credRepo *repo.CredentialRepo
-	cryptoS  *crypto.Service
-	sshC     *sshx.Client
-	bus      *eventbus.Bus
-	tplRepo  *repo.DeployRepo
+	hostRepo  *repo.HostRepo
+	credRepo  *repo.CredentialRepo
+	cryptoS   *crypto.Service
+	sshC      *sshx.Client
+	bus       *eventbus.Bus
+	tplRepo   *repo.DeployRepo
+	stackRepo *repo.StackRepo
 }
 
 type HostDeps struct {
-	HostRepo *repo.HostRepo
-	CredRepo *repo.CredentialRepo
-	CryptoS  *crypto.Service
-	SSHC     *sshx.Client
-	Bus      *eventbus.Bus
-	TplRepo  *repo.DeployRepo
+	HostRepo  *repo.HostRepo
+	CredRepo  *repo.CredentialRepo
+	CryptoS   *crypto.Service
+	SSHC      *sshx.Client
+	Bus       *eventbus.Bus
+	TplRepo   *repo.DeployRepo
+	StackRepo *repo.StackRepo
 }
 
 func NewHostHandler(deps HostDeps) *hostHandler {
 	return &hostHandler{
-		hostRepo: deps.HostRepo,
-		credRepo: deps.CredRepo,
-		cryptoS:  deps.CryptoS,
-		sshC:     deps.SSHC,
-		bus:      deps.Bus,
-		tplRepo:  deps.TplRepo,
+		hostRepo:  deps.HostRepo,
+		credRepo:  deps.CredRepo,
+		cryptoS:   deps.CryptoS,
+		sshC:      deps.SSHC,
+		bus:       deps.Bus,
+		tplRepo:   deps.TplRepo,
+		stackRepo: deps.StackRepo,
 	}
 }
 
@@ -239,6 +242,25 @@ func (h *hostHandler) Installs(c *gin.Context) {
 	}
 	if items == nil {
 		items = []model.HostInstall{}
+	}
+	resp.OK(c, items)
+}
+
+// Clusters GET /api/hosts/:id/clusters 主机参与的套件集群列表。
+func (h *hostHandler) Clusters(c *gin.Context) {
+	id := parseID(c)
+	if id == 0 {
+		resp.Fail(c, resp.CodeBadRequest, "无效的主机 ID")
+		return
+	}
+	if h.stackRepo == nil {
+		resp.OK(c, []interface{}{})
+		return
+	}
+	items, err := h.stackRepo.GetHostClusters(id)
+	if err != nil {
+		resp.ErrHTTP(c, 500, resp.CodeInternal, "查询集群信息失败")
+		return
 	}
 	resp.OK(c, items)
 }

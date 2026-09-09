@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <?xml-stylesheet type="text/xsl" href="configuration.xsl"?>
-<!-- yarn-site 由 infra-ops 注入；{{__master_ip}}/{{__ip}}/{{nm_mem}}/{{nm_vcores}} 运行时渲染 -->
+<!-- yarn-site 由 infra-ops 注入；{{__master_yarn}}/{{__ip}}/{{nm_mem}}/{{nm_vcores}} 运行时渲染 -->
 <configuration>
   <property>
     <name>yarn.resourcemanager.hostname</name>
-    <value>{{__master_ip}}</value>
+    <value>{{__master_yarn}}</value>
   </property>
   <property>
     <name>yarn.resourcemanager.bind-host</name>
@@ -42,4 +42,4 @@
     <name>yarn.log-aggregation-enable</name>
     <value>true</value>
   </property>
-</configuration>
+{{__ha_yarn_props}}</configuration>

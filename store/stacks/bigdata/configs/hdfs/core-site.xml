@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <?xml-stylesheet type="text/xsl" href="configuration.xsl"?>
-<!-- core-site 由 infra-ops 注入；{{__master_ip}}/{{nn_rpc_port}} 运行时渲染 -->
+<!-- core-site 由 infra-ops 注入；{{__hdfs_entry}} 运行时渲染（HA=nameservice，非 HA=nn:port） -->
 <configuration>
   <property>
     <name>fs.defaultFS</name>
-    <value>hdfs://{{__master_ip}}:{{nn_rpc_port}}</value>
+    <value>{{__hdfs_entry}}</value>
   </property>
-  <property>
+{{__ha_core_props}}  <property>
     <name>hadoop.tmp.dir</name>
     <value>/hadoop/dfs/tmp</value>
   </property>

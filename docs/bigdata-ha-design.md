@@ -1,0 +1,356 @@
+# 大数据底座 · 全组件高可用（HA）总体设计
+
+> 状态：评审中（未实施）｜单文档自包含：总体机制（§一~§八）+ 组件级方案（§九）
+> 关联：`store/stacks/bigdata/`、`store/builtin_stacks.go`、`api/stack_engine.go`、`api/stack_instance.go`
+> 目标：为 bigdata 组合套件的**全部可 HA 组件**提供独立开关的双实例高可用能力，单机模式零回归。
+
+---
+
+## 一、方案总览
+
+### 1.1 组件 HA 能力矩阵
+
+| 组件 | 套件 HA 开启时 | 双实例机制 | 依赖 | 最低主机数 | 原生支持 |
+|------|---------------|-----------|------|-----------|---------|
+| HDFS | 双实例 | QJM：2×NN + 3×JN + 2×ZKFC | ZK | 3 | ✔ |
+| YARN | 双实例 | 2×RM（ZK RMStateStore + 自动选主） | ZK | 2 | ✔ |
+| Spark | 双实例 | 2×Master（recoveryMode=ZOOKEEPER） | ZK + HDFS | 2 | ✔ |
+| Flink | 双实例 | 2×JobManager（ZK 选举 + HA 元数据存 HDFS） | ZK + HDFS | 2 | ✔ |
+| HBase | 双实例 | 2×HMaster（原生 backup-master，ZK 选主） | ZK + HDFS | 2 | ✔ |
+| Hive | 双实例 + DB | 2×Metastore + 2×HiveServer2（ZK 服务发现）+ 外部 DB | ZK + HDFS + DB | 3 | ✔（需外部 DB） |
+| ZooKeeper | 天生 HA | 3 节点 ensemble（现有实现） | — | 3 | ✔ |
+| Trino | 不参与（保持单点） | Coordinator 为开源版 SPOF，官方无多 Coordinator | — | — | ✘（见 §9.8） |
+
+### 1.2 设计原则
+
+1. **套件级开关**：「高可用」开关放在**选择套件卡片**上（而非组件级控制）——本次安装开启 HA，则所有支持 HA 的已选组件**全部**以双实例部署，一步到位
+2. **一套脚本两个分支**：node.sh / 配置模板以 `{{ha}}` 占位符切分，非 HA 路径零改动
+3. **从角色自动规划 + 全角色可指定**：从实例主机由引擎**确定性算法**自动分配（见 §4.2）；HA 模式下角色规划展示**全角色矩阵**（NN1/NN2/JN/RM1/RM2…，见 §3.2），每个角色都可手动指定主机，不再是单一主从逻辑
+4. **ZK 是 HA 基石**：HA 开关开启 → 强制勾选 zookeeper；ZK ensemble（现有）天然提供选主能力
+
+## 二、变量机制（bool 化）
+
+### 2.1 StackVar 类型扩展（model/stack.go）
+
+```go
+type StackVar struct {
+    Name     string   `json:"name"`
+    Label    string   `json:"label"`
+    Default  string   `json:"default"`        // bool 型为 "true"/"false"
+    Type     string   `json:"type,omitempty"` // "bool"=前端渲染开关
+    Required bool     `json:"required"`
+    Modes    []string `json:"modes,omitempty"`
+}
+```
+
+- params 落库统一为 `"true"/"false"` 字符串；脚本判定 `[ "{{ha}}" = "true" ]`，引擎/脚本零特殊兼容
+- 套件声明扩展：`StackBlueprint` 新增 `HaSupport bool`——声明该套件支持 HA，前端据此在**套件卡片**上渲染开关
+
+### 2.2 bigdata 蓝图新增变量
+
+| 变量 | 类型 | 默认 | 说明 |
+|------|------|------|------|
+| `ha` | bool | false | **套件级 HA 总开关**（渲染在套件卡片上） |
+| `hdfs_nameservice` | string | ns1 | HDFS HA nameservice ID |
+| `jn_http_port` / `jn_rpc_port` | string | 8484 / 8485 | JournalNode 端口 |
+| `hive_db_image` | string | mysql:8.4 | Hive HA 元数据库镜像 |
+| `hive_db_password` | string | （随机生成） | Hive 元数据库 root 密码 |
+
+组件参与规则：hdfs/yarn/spark/flink/hbase/hive 在 `ha=true` 时全部双实例；zookeeper 天生 ensemble；trino 不参与（保持单实例）；metastore_db 组件在 `ha=true` 且勾选 hive 时自动加入 components。
+
+## 三、前端修改逻辑
+
+### 3.1 套件卡片 HA 开关（第 1 步 · 选择套件）
+
+| 位置 | 行为 |
+|------|------|
+| 套件卡片头部 | `HaSupport` 套件（bigdata）卡片头部右侧渲染 `el-switch`「高可用」开关；开启后卡片显示「HA」角标 |
+| 开启联动 ① | 未勾选 zookeeper → 自动勾选并 toast 提示「HA 依赖 ZooKeeper，已自动勾选」 |
+| 开启联动 ② | 组件区出现提示条：「本次安装所有支持 HA 的组件将双实例部署，最低需 3 台主机」；主机数不足时「下一步」禁用 |
+| 参数联动 | `hdfs_nameservice` / `jn_*` / `hive_db_*` 辅助变量仅 `ha=true` 时显示；`ha` 随 params 提交并持久化 |
+| 可回退 | 开关可随时切换，切换后组件勾选与提示条实时刷新 |
+
+### 3.2 角色规划重构（第 2 步 · 选择主机）——从「单主从」到「全角色矩阵」
+
+**现状**：每组件仅一行主角色下拉（跟随主节点 / 指定主机）。**HA 模式下重构为分组角色矩阵**：
+
+| 模式 | 角色规划 UI |
+|------|------------|
+| 非 HA（`ha=false`） | **保持现状零改动**：每组件一行主角色（跟随主节点） |
+| HA（`ha=true`） | 按已选组件分组渲染「组件角色卡片」，每张卡片列出该组件**全部实例角色行** |
+
+HA 模式各组件角色行：
+
+| 组件 | 角色行 |
+|------|--------|
+| HDFS | NN1 (Active)、NN2 (Standby)、JN-1、JN-2、JN-3 |
+| YARN | RM1 (Active)、RM2 (Standby) |
+| Spark | Master-1、Master-2 |
+| Flink | JobManager-1、JobManager-2 |
+| HBase | HMaster-1、HMaster-2 |
+| Hive | Metastore-1、Metastore-2、HiveServer2-1、HiveServer2-2、MetaDB |
+| ZooKeeper | ZK-1、ZK-2、ZK-3（现有 ensemble 落点改为可视化指定） |
+
+**交互规则**：
+1. 每角色行一个下拉：默认「自动分配」（引擎按 §4.2 算法落位）；主角色行额外保留「跟随主节点」选项
+2. 同组件角色落点互斥：前端即时标红冲突行（如 NN1=NN2 同机），提交时后端兜底拦截
+3. 未选角色不出现：HDFS 未勾选 → HDFS 角色卡不渲染；trino 无角色卡
+4. 未指定全部留空 = 全自动分配，与现状一致的最短路径
+
+**样式改动**（style.css）：现有 `.stack-role-plan/.stack-role-grid` 扩展为分组卡片网格——外层组件卡片（图标+组件名+HA 标识），内层角色行列表（角色名徽标 + 主机下拉），复用现有下拉与网格基础样式。
+
+### 3.3 实例展示（stacks.js）
+
+- 卡片：`ha=true` 创建的实例显示「HA」小徽标（状态胶囊左侧）
+- 抽屉成员区：每行成员追加角色标签（如 `NN1·Active` `NN2·Standby` `JN` `RM2`），数据来自引擎登记的服务角色（§4.4）
+
+### 3.4 校验联动
+
+- `ha=true`：minHosts=3、zookeeper 强制勾选、勾选 hive 时自动追加 metastore_db 组件（前端联动 + 后端兜底）
+- 角色矩阵冲突检测：同组件任两角色同机即标红拦截（后端同规则兜底）
+
+## 四、引擎修改逻辑（stack_engine.go / stack_instance.go / stack.go）
+
+### 4.1 新增占位符（mergeBigdataMasterExtra 扩展）
+
+| 占位符 | 含义 | 非 HA / 非 HA 组件 |
+|--------|------|------|
+| `{{__zk_ips}}` | ZK ensemble 主机 IP 逗号列表（前 3 台） | 始终注入 |
+| `{{__hdfs_entry}}` | HDFS 入口 URI | 非 HA `hdfs://{nn_ip}:{nn_rpc_port}`；HA `hdfs://{ns}` |
+| `{{__nn1_ip}}` / `{{__nn2_ip}}` / `{{__jn_ips}}` | HDFS HA | 空 |
+| `{{__rm1_ip}}` / `{{__rm2_ip}}` | YARN HA | 空 |
+| `{{__spark_m2_ip}}` | Spark HA 第二 Master | 空 |
+| `{{__flink_jm2_ip}}` | Flink HA standby JM | 空 |
+| `{{__hmaster2_ip}}` | HBase backup master | 空 |
+| `{{__hs2_ips}}` / `{{__ms_ips}}` / `{{__hive_db_ip}}` | Hive HA | 空 |
+
+现有 `{{__fs_default}}`（HDFS HA 方案中提出）统一并入 `{{__hdfs_entry}}`，HDFS/HBase/Hive/Spark/Flink 的 HDFS 指向全部走它（HDFS HA 后 hbase.rootdir 等自动切 nameservice）。
+
+### 4.2 从角色分配算法（确定性）
+
+```
+primary(comp)   = 角色矩阵指定 ?? 主节点
+secondary(comp) = 角色矩阵指定 ?? seq 最小的 primary 之外的主机
+jn / zk         = 角色矩阵指定 ?? seq 前 3 台主机
+hive_db_host    = 角色矩阵指定 ?? primary(hive) 所在主机
+```
+
+分配结果随 masters JSON 持久化（扩展 key：`hdfs_nn2`、`yarn_rm2`、`spark_m2`、`flink_jm2`、`hbase_hm2`、`hive_ms2`、`hive_hs2b`、`hive_db`、`hdfs_jns`（逗号列表）等），白名单与 IP⊆所选主机校验同步扩展；reinstall 重放继承。
+
+### 4.3 校验规则（validateBigdataMasters 扩展）
+
+1. `ha=true` → components 含 zookeeper；所有支持 HA 的已选组件自动双实例（无需逐组件确认）
+2. `ha=true` → 主机数 ≥ 3
+3. 同组件任两角色不同机（覆盖自动分配与用户显式指定两种来源）
+4. `ha=true` 且勾选 hive → components 强制含 metastore_db
+5. 缩容/移除主机保护：承载以下角色的主机不可缩容——NN1/NN2/JN/RM1/RM2/双 Master/双 JM/双 HMaster/HS2×2/MS×2/metastore_db/ZK ensemble（`ha=true` 时）
+6. 组件卸载依赖追加：`ha=true` 时卸载 zookeeper / metastore_db 前须先卸载对应组件或整体重装为非 HA（重装降级路径明确标注）
+
+### 4.4 bootstrap 与服务登记
+
+- **落点**：各组件 bootstrap 步骤落在其 primary 主机（沿用现有 per-comp 机制，仅扩展 HA 校验命令）
+- **bootstrap 追加校验**（对应组件 HA 开启时）：HDFS `haadmin -getAllServiceState`、YARN `rmadmin -getAllServiceState`、HBase `hbase shell status`、Spark/Flink ZK leader 存在、Hive 双 HS2/MS 端口
+- **registerBigdataServices**：从角色容器同样登记（角色名标注 Standby/JN/backup），供抽屉角色标签与探活路由使用
+
+## 五、生命周期兼容矩阵
+
+| 操作 | 非 HA | HA | 说明 |
+|------|-------|-----|------|
+| 创建 | 现有 | 套件卡片开关开启，全组件双实例 + 从角色自动规划 | ZK 自动勾选；主机 <3 台提交拦截 |
+| 重装 | ✔ | ✔ | 各组件幂等标记（HDFS `.formatted` 等），元数据不重置 |
+| 整体卸载 | ✔ | ✔ | migrate_old 容器清单追加：journalnode/zkfc/rm 备实例/master 备实例/jm 备实例/hs2×2/ms×2/metastore_db |
+| 加装/卸载组件 | ✔ | §4.3-6 约束 | — |
+| 缩容 | ✔ | 受保护主机拒绝 | §4.3-5 |
+| 扩容 | ✔ | 新机自动 DataNode/NM/Worker/TM/RegionServer | — |
+| 单机 → HA 转换 | — | 本期不做 | 需停机迁移，列后续演进 |
+
+## 六、涉及文件修改清单
+
+### 后端（Go）
+
+| 文件 | 改动 |
+|------|------|
+| `model/stack.go` | StackVar 加 `Type`；StackBlueprint 加 `HaSupport` |
+| `store/builtin_stacks.go` | bigdata 蓝图：6 个 bool 变量 + 4 辅助变量；组件 HaVar 标注；模板清单追加 spark/flink 配置注入项 |
+| `api/stack_engine.go` | `mergeBigdataMasterExtra` 扩展（§4.1 全部占位符 + 从角色分配算法）；`registerBigdataServices` 从角色登记；探活 per-role 端口/命令适配 |
+| `api/stack_instance.go` | `validateBigdataMasters` 扩展（§4.3）；`buildCreateHosts`/reinstall 的 bootstrap 落点扩展到各组件 primary；缩容保护校验 |
+| `api/stack.go` | 创建入口校验透传（现有 validate 调用扩展参数） |
+
+### 前端（Vue/JS）
+
+| 文件 | 改动 |
+|------|------|
+| `template/static/pages/stacks-forms.js` | 套件卡片 HA 开关渲染与联动（ZK 自动勾选、提示条、下一步禁用）、bool 变量开关渲染、辅助变量条件显隐 |
+| `template/static/pages/stacks.js` | **角色规划重构为分组角色矩阵**（§3.2：HA 全角色行 + 每行主机下拉 + 冲突标红）；masters JSON 组装扩展全部从角色 key；卡片 HA 徽标；抽屉成员角色标签 |
+| `template/static/style.css` | 套件卡片开关/HA 角标、**角色矩阵分组卡片网格**（组件卡 + 角色行 + 冲突标红）、抽屉角色标签样式 |
+
+### 脚本与配置（go:embed，改后需重编译）
+
+| 文件 | 改动 |
+|------|------|
+| `store/stacks/bigdata/scripts/node.sh` | 8 组件部署分支重构：HDFS 三分支（JN/NN1/NN2/其余 DN）、YARN 双 RM、Spark/Flink 双实例、HBase backup master、Hive 2×MS+2×HS2+DB；`{{ha}}` 分支判定；幂等标记 |
+| `store/stacks/bigdata/scripts/bootstrap.sh` | 各组件 primary 上追加 HA 状态校验命令；分角色汇总输出扩展 |
+| `configs/hdfs/core-site.xml` / `hdfs-site.xml` | `{{__hdfs_entry}}` + `{{__ha_core_props}}` / `{{__ha_hdfs_props}}` 条件块 |
+| `configs/yarn/yarn-site.xml` | `{{__ha_yarn_props}}`（ha.rm-ids/hostname×2/ZKStateStore/proxy）；非 HA 保留单 hostname |
+| `configs/hbase/hbase-site.xml` | `hbase.rootdir` 改 `{{__hdfs_entry}}`；无其他新增（backup master 靠多容器） |
+| `configs/hive/hive-site.xml` | 外部 DB 连接变量化 + ZK 服务发现属性 + `{{__hdfs_entry}}` |
+| （新增）configs 内 spark-defaults / flink properties 注入 | 以 node.sh 内嵌 env/heredoc 实现，不新增独立文件（与现有 Flink FLINK_PROPERTIES 方式一致） |
+
+### 文档与校验
+
+| 文件 | 改动 |
+|------|------|
+| `docs/bigdata-ha-design.md` | 本文档随实施同步更新 |
+| `docs/bigdata-stack.md` | 用户侧使用文档：HA 用法 + 故障演练说明 |
+| `script/check_bigdata_tpl.py` | 渲染校验扩展：HA 全开/单开/全关三场景 × 角色分离 |
+
+## 七、实施计划（六阶段）
+
+| 阶段 | 内容 | 验证 |
+|------|------|------|
+| P1 变量机制 + 前端框架 | model/stack.go Type+HaSupport、蓝图 `ha` 变量、**套件卡片开关**（stacks-forms）、**角色矩阵 UI 重构**（stacks.js §3.2）、样式扩展 | go build + node --check + 表单/矩阵联动 |
+| P2 引擎通用化 | 占位符/分配算法/校验/缩容保护/服务登记 | go build/vet + 单元场景 |
+| P3 HDFS HA 落地 | core/hdfs-site 条件块、node.sh HDFS 三分支、bootstrap/探活 | bash -n + 渲染校验 + 3 台真机部署 |
+| P4 ZK 系组件 HA | YARN/Spark/Flink/HBase（同 pattern 批量落地） | 渲染校验 + 真机各组件故障演练 |
+| P5 Hive HA | metastore_db 组件、双 MS/HS2、ZK 服务发现、schematool 初始化 | 真机 + JDBC zk 模式连接验证 |
+| P6 回归 + 文档 | 非 HA 全回归、生命周期矩阵实测、故障演练矩阵（§八）、docs 更新 | 全量 check + 真机验收 |
+
+**故障演练验收标准**（P6）：逐组件 stop 主实例容器 → 30s 内 Standby 自动接管 → 客户端读写不中断 → 原实例重启后自动回归 Standby。
+
+## 八、风险与开放问题
+
+1. **Fencing 强度**：HDFS 采用 `shell(/bin/true)`（容器无 SSH 免密），依赖 ZK 会话过期，极端分区理论双活窗口；YRM/RM 与 Spark/Flink/HBase 用 ZK 选举天然互斥，风险仅限 HDFS
+2. **部署时序**：Standby 实例依赖主实例/ZK 就绪，node.sh 并行执行引入等待循环（上限 120s，超时节点失败并保留日志）
+3. **资源占用**：全 HA 开启较非 HA 多约 12 个 JVM 容器（2NN+3JN+2ZKFC+RM+M2+JM2+HM2+2HS2+2MS+DB），文档标注最低资源建议（每台 ≥16G 内存）
+4. **Hive 存量实例**：Derby → MySQL 不支持原地迁移；Hive HA 仅对新实例开放
+5. **metastore_db 单点**：MySQL 8 单实例部署，是 Hive HA 链路中剩余单点；后续可演进双主/主从（标注）
+6. **Trino SPOF**：无原生 HA，仅快速重装缓解
+7. **并行会话冲突**：P2-P5 触及 stack_engine.go / node.sh 热区，各阶段开工前需确认无其他会话在改同一文件
+
+---
+
+## 九、组件级 HA 方案详情
+
+### 9.1 ZooKeeper（天生 HA，无开关）
+
+| 项 | 说明 |
+|----|------|
+| 拓扑 | 3 节点 ensemble（现有实现），部署于所选主机前 3 台，myid 1/2/3，quorum 容忍 1 台故障 |
+| 改动 | 仅校验增强：套件 HA 开关开启 → ZK 必勾；新增 `{{__zk_ips}}` 占位符注入各 HA 配置 |
+| 探活 | 2181 端口（现有） |
+
+### 9.2 HDFS（QJM）
+
+**拓扑**
+
+| 角色 | 实例数 | 落点 | 端口 |
+|------|--------|------|------|
+| NameNode (Active) | 1 | 角色规划 `hdfs` 或主节点 | 9000 / 9870 |
+| NameNode (Standby) | 1 | `hdfs_nn2` 或自动第二台 | 9000 / 9870 |
+| JournalNode | 3 | 前 3 台主机 | 8485 / 8484 |
+| ZKFC | 2 | 与 NN 同机 sidecar 容器 | — |
+| DataNode | N | 全部所选主机 | 9866 |
+
+**新增配置**（由 `{{__ha_core_props}}` / `{{__ha_hdfs_props}}` 条件注入）：
+
+| 属性 | 值 |
+|------|-----|
+| core: ha.zookeeper.quorum | `{{__zk_ips}}` |
+| dfs.nameservices / dfs.ha.namenodes | `{{hdfs_nameservice}}` / `nn1,nn2` |
+| dfs.namenode.rpc-address.{ns}.nn1 / nn2 | `{{__nn1_ip}}:{{nn_rpc_port}}` / `{{__nn2_ip}}:{{nn_rpc_port}}` |
+| dfs.namenode.http-address.{ns}.nn1 / nn2 | `{{__nn1_ip}}:9870` / `{{__nn2_ip}}:9870` |
+| dfs.namenode.shared.edits.dir | `qjournal://{{__jn_ips}}/{{hdfs_nameservice}}` |
+| dfs.journalnode.edits.dir | `/hadoop/dfs/journal` |
+| dfs.client.failover.proxy.provider.{ns} | ConfiguredFailoverProxyProvider |
+| dfs.ha.automatic-failover.enabled | true |
+| dfs.ha.fencing.methods | `shell(/bin/true)` |
+
+**部署时序**：ZK 就绪 → JN×3 起并 wait 8485 → NN1 `namenode -format -nonInteractive`（幂等标记 `.formatted`）→ NN1 + ZKFC1 起 → NN2 `-bootstrapStandby`（wait JN quorum + NN1 RPC）→ NN2 + ZKFC2 起 → DN 注册。
+
+**探活**：NN1 主机执行 `hdfs haadmin -getAllServiceState`（nn1=active / nn2=standby）；端口 9000/9870/8485/9866按角色路由。
+
+**限制**：fencing 为 `shell(/bin/true)`，不做主动隔离（§八-1）。
+
+### 9.3 YARN
+
+**拓扑**：RM1（Active，主节点/角色规划 `yarn`）+ RM2（Standby，自动第二台）；NM 不变全部主机。端口沿用 8030-8033 / 8088（不同主机无冲突）。
+
+**yarn-site 新增**（由 `{{__ha_yarn_props}}` 注入，非 HA 保留现有单 `hostname` 属性）：
+
+| 属性 | 值 |
+|------|-----|
+| yarn.resourcemanager.ha.enabled / ha.rm-ids | true / `rm1,rm2` |
+| yarn.resourcemanager.hostname.rm1 / rm2 | `{{__rm1_ip}}` / `{{__rm2_ip}}` |
+| yarn.resourcemanager.cluster-id | `bigdata-yarn` |
+| yarn.resourcemanager.recovery.enabled / store.class | true / ZKRMStateStore |
+| yarn.resourcemanager.zk-address | `{{__zk_ips}}` |
+| yarn.resourcemanager.ha.automatic-failover.enabled | true |
+| yarn.resourcemanager.client.failover.proxy-provider | RMFailoverProxyProvider |
+
+**时序**：ZK 就绪 → RM1/RM2 并行起（Standby 自动待命）→ NM 注册任一 RM。
+**探活**：RM1 主机 `yarn rmadmin -getAllServiceState`；8088 UI。
+**限制**：无 fencing 需求（ZK 选举天然互斥）。
+
+### 9.4 Spark
+
+**拓扑**：Master×2（m1 主节点、m2 自动第二台），Worker 不变。
+**配置**（挂载 spark-defaults.conf，双 Master 同配置）：
+
+| 属性 | 值 |
+|------|-----|
+| spark.deploy.recoveryMode | ZOOKEEPER |
+| spark.deploy.zookeeper.url | `{{__zk_ips}}` |
+| spark.deploy.recoveryDirectory | `{{__hdfs_entry}}/spark/ha` |
+
+**提交地址**（文档说明）：`spark://m1:7077,m2:7077` 双写。
+**依赖**：ZK + HDFS（recovery 目录）。
+**探活**：任一 Master 8080 WebUI + ZK leader 存在。
+
+### 9.5 Flink
+
+**拓扑**：JobManager×2（主 + standby 第二台），TaskManager 不变。
+**配置**（compose env `FLINK_PROPERTIES` 注入，与现有方式一致）：
+
+| 属性 | 值 |
+|------|-----|
+| high-availability | zookeeper |
+| high-availability.zookeeper.quorum | `{{__zk_ips}}` |
+| high-availability.storageDir | `{{__hdfs_entry}}/flink/ha` |
+| high-availability.cluster-id | `bigdata-flink` |
+
+**依赖**：ZK + HDFS。**探活**：JM1 8081 + ZK。
+
+### 9.6 HBase
+
+**拓扑**：HMaster×2（原生 backup-master：第二台主机起同镜像 master 容器，自动注册 ZK 待命），RegionServer 不变。
+**配置**：无新增属性——`hbase.rootdir` 改为 `{{__hdfs_entry}}/hbase`，多 master 即多容器，ZK 自动选主。
+**时序**：ZK/HDFS → HM1 起 → HM2 起（自动待命）。
+**探活**：任一 HMaster 16010 + `hbase shell status`。
+
+### 9.7 Hive
+
+**前提**（`ha=true` 且勾选 hive 时生效）：现有 Derby 只允许单 JVM 连接 → 引入新内置组件 **`metastore_db`**（MySQL 8 单实例容器，落 Hive primary 主机；`hive_db_image`/`hive_db_password` 变量）。
+
+**拓扑**：DB×1 + Metastore×2（9083）+ HiveServer2×2（10000），ZK 服务发现。
+
+**hive-site 变化**：
+
+| 属性 | 值 |
+|------|-----|
+| javax.jdo.option.ConnectionURL | `jdbc:mysql://{{__hive_db_ip}}:3306/metastore?useSSL=false&allowPublicKeyRetrieval=true` |
+| javax.jdo.option.ConnectionDriverName / UserName / Password | com.mysql.cj.jdbc.Driver / root / `{{hive_db_password}}` |
+| hive.metastore.uris | `thrift://ms1:9083,thrift://ms2:9083` |
+| hive.server2.support.dynamic.service.discovery | true |
+| hive.zookeeper.quorum / zookeeper.namespace | `{{__zk_ips}}` / hiveserver2 |
+
+**JDBC 接入**（自动 failover）：`jdbc:hive2://zk1:2181,zk2:2181,zk3:2181/;serviceDiscoveryMode=zooKeeper;zooKeeperNamespace=hiveserver2`
+**初始化**：首次 `schematool -initSchema -dbType mysql`（幂等标记）。
+**联动**：Trino Coordinator 的 metastore thrift 地址改双 uri（`hive.metastore.thrift.uri.1/2`）。
+**限制**：metastore_db 为链路内剩余单点（§八-5）；存量 Derby 实例不支持原地开启 HA（§八-4）。
+
+### 9.8 Trino（不参与 HA）
+
+- 开源 Trino Coordinator 是官方声明的 SPOF，无多 Coordinator 能力，**不出开关**
+- 缓解：实例失败后走「重新安装」快速恢复（容器化重建 < 2 分钟）；卡片与文档标注单点属性
+- 后续演进可评估外部 gateway 方案，本期不做
+

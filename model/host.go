@@ -47,6 +47,7 @@ type HostService struct {
 	URL         string `json:"url"`
 	Web         bool   `json:"web"`
 	TemplateID  int64  `json:"template_id"`
+	InstanceID  int64  `json:"instance_id"`
 	UpdatedAt   string `json:"updated_at"`
 }
 

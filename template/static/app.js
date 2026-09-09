@@ -238,6 +238,11 @@ app.component('page-templates', window.TemplatesPage)
 app.component('page-deploy', window.DeployPage)
 app.component('page-orchestrations', window.OrchestrationsPage)
 app.component('page-stacks', window.StacksPage)
+// 套件表单子组件（差异化表单插槽，定义于 stacks-forms.js）
+app.component('stack-form-bigdata-select', window.StackFormBigdataSelect)
+app.component('stack-form-bigdata-op', window.StackFormBigdataOp)
+app.component('stack-form-bigdata-roles', window.StackFormBigdataRoles)
+app.component('stack-form-redis-topo', window.StackFormRedisTopo)
 app.component('page-schedules', window.SchedulesPage)
 app.component('change-password-dialog', window.ChangePasswordDialog)
 

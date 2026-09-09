@@ -262,11 +262,11 @@ func (r *DeployRepo) HostInstalls(hostID int64) ([]model.HostInstall, error) {
 // UpsertHostService 按 host_id+service_name 登记/刷新一条服务。
 func (r *DeployRepo) UpsertHostService(svc *model.HostService) error {
 	_, err := store.DB.Exec(
-		`INSERT INTO host_services(host_id,host_ip,service_name,url,web,template_id) VALUES(?,?,?,?,?,?)
+		`INSERT INTO host_services(host_id,host_ip,service_name,url,web,template_id,instance_id) VALUES(?,?,?,?,?,?,?)
 		ON CONFLICT(host_id,service_name) DO UPDATE SET
 			host_ip=excluded.host_ip, url=excluded.url, web=excluded.web,
-			template_id=excluded.template_id, updated_at=datetime('now','localtime')`,
-		svc.HostID, svc.HostIP, svc.ServiceName, svc.URL, svc.Web, svc.TemplateID,
+			template_id=excluded.template_id, instance_id=excluded.instance_id, updated_at=datetime('now','localtime')`,
+		svc.HostID, svc.HostIP, svc.ServiceName, svc.URL, svc.Web, svc.TemplateID, svc.InstanceID,
 	)
 	if err != nil {
 		return fmt.Errorf("upsert host service: %w", err)

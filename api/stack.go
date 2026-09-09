@@ -133,7 +133,7 @@ func (h *stackHandler) createAndRun(req stackRunReq, remoteIP string) (int64, er
 		op = "create"
 	}
 	switch op {
-	case "create", "scale_out", "scale_in", "add_component", "uninstall", "remove_component":
+	case "create", "reinstall", "scale_out", "scale_in", "add_component", "uninstall", "remove_component":
 	default:
 		return 0, fmt.Errorf("不支持的操作: %s", op)
 	}
@@ -176,7 +176,7 @@ func (h *stackHandler) createAndRun(req stackRunReq, remoteIP string) (int64, er
 			ids = append(ids, h.HostID)
 		}
 	}
-	if len(ids) == 0 {
+	if len(ids) == 0 && op != "reinstall" {
 		if op == "uninstall" && inst != nil {
 			_ = h.repo.UpdateInstance(inst.ID, "", "uninstalled", "", "")
 			return 0, nil
@@ -206,6 +206,11 @@ func (h *stackHandler) createAndRun(req stackRunReq, remoteIP string) (int64, er
 		}
 		if err := validateStackTopology(bp, mode, len(ids), replicas, req.MasterHostID, ids); err != nil {
 			return 0, err
+		}
+		if bp.Key == "bigdata" {
+			if err := h.validateBigdataMasters(params, ids, req.MasterHostID); err != nil {
+				return 0, err
+			}
 		}
 		if bp.Key == "kafka" && req.Mode == "kraft" && strings.TrimSpace(params["cluster_id"]) == "" {
 			id, err := randomKafkaClusterID()
@@ -239,6 +244,26 @@ func (h *stackHandler) createAndRun(req stackRunReq, remoteIP string) (int64, er
 			return 0, err
 		}
 		params["components"] = strings.Join(mergeComponentList(installed, added), ",")
+		// 合并角色规划：保留实例已有组件主角色，覆盖本次加装指定
+		baseParams := map[string]string{}
+		_ = json.Unmarshal([]byte(inst.ParamsJSON), &baseParams)
+		mergedMasters := map[string]string{}
+		_ = json.Unmarshal([]byte(baseParams["masters"]), &mergedMasters)
+		newMasters := map[string]string{}
+		_ = json.Unmarshal([]byte(params["masters"]), &newMasters)
+		for k, v := range newMasters {
+			if strings.TrimSpace(v) != "" {
+				mergedMasters[k] = v
+			}
+		}
+		if len(mergedMasters) > 0 {
+			if b, err := json.Marshal(mergedMasters); err == nil {
+				params["masters"] = string(b)
+			}
+		}
+		if err := h.validateBigdataMasters(params, ids, instanceMasterHostID(inst)); err != nil {
+			return 0, err
+		}
 	}
 	if op == "remove_component" {
 		if bp.Category != "platform" {
@@ -251,11 +276,21 @@ func (h *stackHandler) createAndRun(req stackRunReq, remoteIP string) (int64, er
 			installed = parseComponentsCSV(base["components"])
 		}
 		removing := parseComponentsCSV(reqComponents)
-		if err := validateBigdataRemove(removing, installed); err != nil {
+		base := map[string]string{}
+		_ = json.Unmarshal([]byte(inst.ParamsJSON), &base)
+		instHA := strings.EqualFold(strings.TrimSpace(base["ha"]), "true")
+		if err := validateBigdataRemove(removing, installed, instHA); err != nil {
 			return 0, err
 		}
 		params["remove_components"] = strings.Join(removing, ",")
 		params["components"] = strings.Join(subtractComponents(installed, removing), ",")
+	}
+	if op == "reinstall" && inst != nil {
+		switch inst.Status {
+		case "failed", "partial", "uninstalled":
+		default:
+			return 0, fmt.Errorf("仅失败、部分成功或已卸载的集群可重新安装")
+		}
 	}
 	if op == "uninstall" && inst != nil && inst.Status == "uninstalled" {
 		return 0, fmt.Errorf("集群已卸载")
@@ -279,6 +314,8 @@ func (h *stackHandler) createAndRun(req stackRunReq, remoteIP string) (int64, er
 		hosts, err = h.buildScaleOutHosts(bp, mode, inst, ids, params, hostParams)
 	case "add_component":
 		hosts, err = h.buildAddComponentHosts(bp, mode, inst, ids, req.MasterHostID, params, hostParams)
+	case "reinstall":
+		hosts, err = h.buildReinstallHosts(inst)
 	default:
 		hosts, err = h.buildCreateHosts(bp, mode, ids, req.MasterHostID, params, hostParams)
 	}
@@ -291,7 +328,7 @@ func (h *stackHandler) createAndRun(req stackRunReq, remoteIP string) (int64, er
 		if name == "" {
 			name = bp.Name + "-" + mode.Label
 		}
-		compList := []string{req.Mode}
+		compList := []string{}
 		if bp.Key == "bigdata" {
 			compList = parseComponentsCSV(params["components"])
 		}

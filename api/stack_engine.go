@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -78,6 +79,8 @@ func (h *stackHandler) execute(runID int64) {
 		}
 	}
 	extraAll := stackClusterExtraMerged(op, existing, hosts)
+	// bigdata：节点脚本里的 {{__master_<comp>}} 角色变量必须在节点阶段注入，否则 NameNode 不会被拉起
+	mergeBigdataMasterExtra(bp, hosts, extraAll)
 
 	if bp.RequiresDocker {
 		ok := h.runPhasePrereq(runID, hosts)
@@ -92,7 +95,7 @@ func (h *stackHandler) execute(runID int64) {
 		hosts, _ = h.repo.RunHosts(runID)
 	}
 
-	ok := h.runPhaseAllHosts(runID, run.Mode, bp, hosts, extraAll)
+	ok := h.runPhaseAllHosts(runID, run.InstanceID, run.Mode, bp, hosts, extraAll)
 	hosts, _ = h.repo.RunHosts(runID)
 	if !ok {
 		h.skipRemaining(hosts, false, true)
@@ -105,7 +108,7 @@ func (h *stackHandler) execute(runID int64) {
 		h.finish(runID)
 		return
 	}
-	if op == "create" && mode.HasBootstrap {
+	if stackInstallOp(op) && mode.HasBootstrap {
 		h.runPhaseBootstrap(runID, run.Mode, bp, hosts)
 		h.finish(runID)
 		return
@@ -253,7 +256,7 @@ func (h *stackHandler) runPhasePrereq(runID int64, hosts []model.StackRunHost) b
 	return atomic.LoadInt32(&failed) == 0
 }
 
-func (h *stackHandler) runPhaseAllHosts(runID int64, mode string, bp *store.BuiltinStack, hosts []model.StackRunHost, extraAll map[int64]map[string]string) bool {
+func (h *stackHandler) runPhaseAllHosts(runID int64, instanceID int64, mode string, bp *store.BuiltinStack, hosts []model.StackRunHost, extraAll map[int64]map[string]string) bool {
 	script, err := bp.LoadPhase(mode, "node")
 	if err != nil {
 		h.appendLog(runID, "node", 0, "", "加载节点脚本失败: "+err.Error())
@@ -307,9 +310,9 @@ func (h *stackHandler) runPhaseAllHosts(runID int64, mode string, bp *store.Buil
 			host.NodeStatus = "success"
 			h.appendLog(runID, "node", host.HostID, host.HostIP, "节点已就绪")
 			if bp.Key == "redis" {
-				h.registerRedisService(host, mode, params)
+				h.registerRedisService(host, mode, params, instanceID)
 			} else {
-				h.registerStackService(bp, host, mode, params)
+				h.registerStackService(bp, host, mode, params, instanceID, hosts)
 			}
 		}
 		_ = h.repo.UpdateHost(host)
@@ -358,6 +361,11 @@ func (h *stackHandler) runPhaseBootstrap(runID int64, mode string, bp *store.Bui
 		return
 	}
 	extra := stackClusterExtra(hosts)[leader.HostID]
+	if bp.Key == "bigdata" {
+		for k, v := range bigdataMasterExtra(hosts) {
+			extra[k] = v
+		}
+	}
 	rendered = applyStackVars(rendered, leader.Seq, *leader, extra)
 	h.appendLog(runID, "bootstrap", leader.HostID, leader.HostIP, "开始初始化集群")
 	out, execErr := h.execScript(leader, rendered, "bootstrap")
@@ -587,7 +595,7 @@ func (h *stackHandler) syncInstanceAfterRun(run *model.StackRun, status string, 
 				comps = parseComponentsCSV(params["components"])
 			} else if op == "add_component" {
 				comps = mergeStringList(comps, run.Mode)
-			} else if op == "create" && !containsString(comps, run.Mode) {
+			} else if stackInstallOp(op) && !containsString(comps, run.Mode) {
 				comps = mergeStringList(comps, run.Mode)
 			}
 			hostComps := comps
@@ -604,7 +612,7 @@ func (h *stackHandler) syncInstanceAfterRun(run *model.StackRun, status string, 
 				Role: host.Role, Seq: host.Seq, ParamsJSON: host.ParamsJSON,
 				ComponentsJSON: encodeJSONStringList(hostComps), Status: "active",
 			})
-			if op == "add_component" || op == "create" {
+			if op == "add_component" || stackInstallOp(op) {
 				_ = h.repo.UpdateInstance(run.InstanceID, "", "", "", encodeJSONStringList(comps))
 			}
 		}
@@ -617,7 +625,7 @@ func (h *stackHandler) syncInstanceAfterRun(run *model.StackRun, status string, 
 		instStatus = "ready"
 	case status == "partial":
 		instStatus = "partial"
-	case op == "create":
+	case stackInstallOp(op):
 		instStatus = "failed"
 	default:
 		instStatus = "partial"
@@ -724,7 +732,7 @@ func (h *stackHandler) publishHost(runID int64, host *model.StackRunHost, phase 
 	})
 }
 
-func (h *stackHandler) registerRedisService(host *model.StackRunHost, mode string, params map[string]string) {
+func (h *stackHandler) registerRedisService(host *model.StackRunHost, mode string, params map[string]string, instanceID int64) {
 	port := params["port"]
 	if port == "" {
 		port = "6379"
@@ -739,7 +747,7 @@ func (h *stackHandler) registerRedisService(host *model.StackRunHost, mode strin
 	}
 	_ = h.tplRepo.UpsertHostService(&model.HostService{
 		HostID: host.HostID, HostIP: host.HostIP, ServiceName: name,
-		URL: fmt.Sprintf("redis://%s:%s", host.HostIP, port), Web: false, TemplateID: 0,
+		URL: fmt.Sprintf("redis://%s:%s", host.HostIP, port), Web: false, TemplateID: 0, InstanceID: instanceID,
 	})
 	if mode == "sentinel" {
 		sPort := params["sentinel_port"]
@@ -748,14 +756,14 @@ func (h *stackHandler) registerRedisService(host *model.StackRunHost, mode strin
 		}
 		_ = h.tplRepo.UpsertHostService(&model.HostService{
 			HostID: host.HostID, HostIP: host.HostIP, ServiceName: "Redis Sentinel",
-			URL: fmt.Sprintf("redis-sentinel://%s:%s", host.HostIP, sPort), Web: false, TemplateID: 0,
+			URL: fmt.Sprintf("redis-sentinel://%s:%s", host.HostIP, sPort), Web: false, TemplateID: 0, InstanceID: instanceID,
 		})
 	}
 	_ = h.tplRepo.MarkHostInstalled(host.HostID, 0, "套件:Redis/"+mode, 0)
 }
 
 // registerStackService 通用套件服务注册：按套件 Key + 角色登记服务入口与安装台账。
-func (h *stackHandler) registerStackService(bp *store.BuiltinStack, host *model.StackRunHost, mode string, params map[string]string) {
+func (h *stackHandler) registerStackService(bp *store.BuiltinStack, host *model.StackRunHost, mode string, params map[string]string, instanceID int64, hosts []model.StackRunHost) {
 	type svcEntry struct {
 		name string
 		url  string
@@ -770,7 +778,7 @@ func (h *stackHandler) registerStackService(bp *store.BuiltinStack, host *model.
 	ip := host.HostIP
 	// 大数据底座：按勾选组件 + 角色登记多个服务入口
 	if bp.Key == "bigdata" {
-		h.registerBigdataServices(host, params)
+		h.registerBigdataServices(host, params, instanceID, hosts)
 		return
 	}
 	registry := map[string]map[string]svcEntry{
@@ -809,83 +817,542 @@ func (h *stackHandler) registerStackService(bp *store.BuiltinStack, host *model.
 	}
 	_ = h.tplRepo.UpsertHostService(&model.HostService{
 		HostID: host.HostID, HostIP: ip, ServiceName: svc.name,
-		URL: svc.url, Web: svc.web, TemplateID: 0,
+		URL: svc.url, Web: svc.web, TemplateID: 0, InstanceID: instanceID,
 	})
 	if bp.Key == "kafka" && mode == "zk" {
 		_ = h.tplRepo.UpsertHostService(&model.HostService{
 			HostID: host.HostID, HostIP: ip, ServiceName: "ZooKeeper",
-			URL: "zookeeper://" + ip + ":" + pick("zk_port", "2181"), Web: false, TemplateID: 0,
+			URL: "zookeeper://" + ip + ":" + pick("zk_port", "2181"), Web: false, TemplateID: 0, InstanceID: instanceID,
 		})
 	}
 	_ = h.tplRepo.MarkHostInstalled(host.HostID, 0, "套件:"+bp.Key+"/"+mode, 0)
 }
 
 // registerBigdataServices 大数据底座服务注册：按勾选组件 + 主/从角色登记服务入口。
-func (h *stackHandler) registerBigdataServices(host *model.StackRunHost, params map[string]string) {
+// hosts 为本次运行的全部主机（用于确定性从角色判定）；角色矩阵未指定时从角色自动落点。
+func (h *stackHandler) registerBigdataServices(host *model.StackRunHost, params map[string]string, instanceID int64, hosts []model.StackRunHost) {
 	comps := strings.Split(params["components"], ",")
+	r := stackBigdataRole(hosts)
+	ip := host.HostIP
+	// 角色矩阵：组件→主角色主机 IP；未规划时主角色跟随主节点（Role=="master"）
+	masters := map[string]string{}
+	_ = json.Unmarshal([]byte(params["masters"]), &masters)
+	compMaster := func(comp string) string {
+		if m := strings.TrimSpace(masters[comp]); m != "" {
+			return m
+		}
+		if r.Nn1 != "" { // primary 首落点即可
+			switch comp {
+			case "hdfs":
+				return r.Nn1
+			case "yarn":
+				return r.Rm1
+			case "spark":
+				return r.SparkM1
+			case "flink":
+				return r.FlinkJM1
+			case "hbase":
+				return r.HMaster1
+			case "hive":
+				return r.MSs[0]
+			}
+		}
+		return ""
+	}
 	up := func(name, url string, web bool) {
 		_ = h.tplRepo.UpsertHostService(&model.HostService{
 			HostID: host.HostID, HostIP: host.HostIP, ServiceName: name,
-			URL: url, Web: web, TemplateID: 0,
+			URL: url, Web: web, TemplateID: 0, InstanceID: instanceID,
 		})
+	}
+	hasJN := func() bool {
+		for _, jn := range r.JNs {
+			if jn == ip {
+				return true
+			}
+		}
+		return false
+	}
+	inComps := func(c string) bool {
+		for _, x := range comps {
+			if strings.TrimSpace(x) == c {
+				return true
+			}
+		}
+		return false
 	}
 	for _, c := range comps {
 		switch strings.TrimSpace(c) {
 		case "hdfs":
-			if host.Role == "master" {
-				up("HDFS NameNode", "http://"+host.HostIP+":9870", true)
-			} else {
-				up("HDFS DataNode", "http://"+host.HostIP+":9864", false)
+			switch {
+			case !r.Ha:
+				if isMasterAt(ip, compMaster("hdfs")) {
+					up("HDFS NameNode", "http://"+ip+":9870", true)
+				} else {
+					up("HDFS DataNode", "http://"+ip+":9864", false)
+				}
+			case ip == r.Nn1:
+				up("HDFS NameNode", "http://"+ip+":9870", true)
+			case ip == r.Nn2:
+				up("HDFS NameNode (Standby)", "http://"+ip+":9870", true)
+			case hasJN():
+				up("HDFS JournalNode", "http://"+ip+":8484", true)
+			default:
+				up("HDFS DataNode", "http://"+ip+":9864", false)
 			}
 		case "spark":
 			webui := params["webui_port"]
 			if webui == "" {
 				webui = "8080"
 			}
-			if host.Role == "master" {
-				up("Spark Master", "http://"+host.HostIP+":"+webui, true)
+			if r.Ha && ip == r.SparkM2 {
+				up("Spark Master (Standby)", "http://"+ip+":"+webui, true)
+			} else if isMasterAt(ip, compMaster("spark")) {
+				up("Spark Master", "http://"+ip+":"+webui, true)
 			} else {
-				up("Spark Worker", "http://"+host.HostIP+":8081", true)
+				up("Spark Worker", "http://"+ip+":8081", true)
 			}
 		case "flink":
-			if host.Role == "master" {
-				up("Flink JobManager", "http://"+host.HostIP+":8081", true)
+			if r.Ha && ip == r.FlinkJm2 {
+				up("Flink JobManager (Standby)", "http://"+ip+":8081", true)
+			} else if isMasterAt(ip, compMaster("flink")) {
+				up("Flink JobManager", "http://"+ip+":8081", true)
 			} else {
-				up("Flink TaskManager", "http://"+host.HostIP+":8081", false)
+				up("Flink TaskManager", "http://"+ip+":8081", false)
 			}
 		case "hive":
-			if host.Role == "master" {
-				up("HiveServer2", "jdbc:hive2://"+host.HostIP+":10000", false)
-				up("Hive Metastore", "thrift://"+host.HostIP+":9083", false)
-				up("Hive WebUI", "http://"+host.HostIP+":10002", true)
+			if !inComps("metastore_db") || !r.Ha {
+				if isMasterAt(ip, compMaster("hive")) {
+					up("HiveServer2", "jdbc:hive2://"+ip+":10000", false)
+					up("Hive Metastore", "thrift://"+ip+":9083", false)
+					up("Hive WebUI", "http://"+ip+":10002", true)
+				}
+				continue
+			}
+			if len(r.Hs2s) > 1 && ip == r.Hs2s[1] {
+				up("HiveServer2 (Standby)", "jdbc:hive2://"+ip+":10000", false)
+			} else if ip == r.Hs2s[0] {
+				up("HiveServer2", "jdbc:hive2://"+ip+":10000", false)
+			}
+			if len(r.MSs) > 1 && ip == r.MSs[1] {
+				up("Hive Metastore (Standby)", "thrift://"+ip+":9083", false)
+			} else if ip == r.MSs[0] {
+				up("Hive Metastore", "thrift://"+ip+":9083", false)
+			}
+			if ip == r.HiveDB {
+				up("Hive MetaDB (MySQL)", "mysql://"+ip+":3306", false)
 			}
 		case "zookeeper":
-			up("ZooKeeper", "zookeeper://"+host.HostIP+":2181", false)
+			up("ZooKeeper", "zookeeper://"+ip+":2181", false)
 		case "yarn":
-			if host.Role == "master" {
-				up("YARN ResourceManager", "http://"+host.HostIP+":8088", true)
+			if r.Ha && ip == r.Rm2 {
+				up("YARN ResourceManager (Standby)", "http://"+ip+":8088", true)
+			} else if isMasterAt(ip, compMaster("yarn")) {
+				up("YARN ResourceManager", "http://"+ip+":8088", true)
 			} else {
-				up("YARN NodeManager", "http://"+host.HostIP+":8042", true)
+				up("YARN NodeManager", "http://"+ip+":8042", true)
 			}
 		case "hbase":
-			if host.Role == "master" {
-				up("HBase Master", "http://"+host.HostIP+":16010", true)
+			if r.Ha && ip == r.HMaster2 {
+				up("HBase HMaster (backup)", "http://"+ip+":16010", true)
+			} else if isMasterAt(ip, compMaster("hbase")) {
+				up("HBase Master", "http://"+ip+":16010", true)
 			} else {
-				up("HBase RegionServer", "http://"+host.HostIP+":16030", true)
+				up("HBase RegionServer", "http://"+ip+":16030", true)
 			}
 		case "trino":
 			port := params["trino_http_port"]
 			if port == "" {
 				port = "8080"
 			}
-			if host.Role == "master" {
-				up("Trino Coordinator", "http://"+host.HostIP+":"+port, true)
+			if isMasterAt(ip, compMaster("trino")) {
+				up("Trino Coordinator", "http://"+ip+":"+port, true)
 			} else {
-				up("Trino Worker", "http://"+host.HostIP+":"+port, true)
+				up("Trino Worker", "http://"+ip+":"+port, true)
 			}
 		}
 	}
 	_ = h.tplRepo.MarkHostInstalled(host.HostID, 0, "套件:bigdata/cluster("+params["components"]+")", 0)
+}
+
+// isMasterAt 判断主机 IP 是否等于指定主角色 IP（空则否）。
+func isMasterAt(ip, masterIP string) bool { return masterIP != "" && ip == masterIP }
+
+// bigdataMasterVars 大数据底座可规划主角色的组件 → 注入脚本的变量名。
+var bigdataMasterVars = map[string]string{
+	"hdfs":  "__master_hdfs",
+	"yarn":  "__master_yarn",
+	"spark": "__master_spark",
+	"flink": "__master_flink",
+	"hive":  "__master_hive",
+	"hbase": "__master_hbase",
+	"trino": "__master_trino",
+}
+
+// bigdataSecondaryVars 组件 → 从角色规划的 masters 参数 key（§4.2）。
+// 除 hdfs_jns 为逗号列表外，其余为单个主机 IP。
+var bigdataSecondaryVars = map[string]string{
+	"hdfs":  "hdfs_nn2",
+	"yarn":  "yarn_rm2",
+	"spark": "spark_m2",
+	"flink": "flink_jm2",
+	"hbase": "hbase_hm2",
+	"hive":  "hive_ms2",
+}
+
+// bigdataRoleKeys 角色规划允许的全部 masters key（主角色 + 从角色 + Hive 额外项）。
+var bigdataRoleKeys = func() []string {
+	keys := make([]string, 0, len(bigdataMasterVars)+len(bigdataSecondaryVars)+4)
+	for k := range bigdataMasterVars {
+		keys = append(keys, k)
+	}
+	for _, k := range bigdataSecondaryVars {
+		keys = append(keys, k)
+	}
+	keys = append(keys, "hdfs_jns", "hive_hs2b", "hive_db", "zookeeper_ips")
+	return keys
+}()
+
+// stackBigdataMasters 解析 masters 参数（JSON：组件→主角色主机 IP），未指定的组件回落到主节点。
+func stackBigdataMasters(hosts []model.StackRunHost) map[string]string {
+	primary := ""
+	for _, h := range hosts {
+		if h.Role == "master" {
+			primary = h.HostIP
+			break
+		}
+	}
+	if primary == "" && len(hosts) > 0 {
+		primary = hosts[0].HostIP
+	}
+	out := map[string]string{}
+	if len(hosts) == 0 {
+		return out
+	}
+	p := map[string]string{}
+	_ = json.Unmarshal([]byte(hosts[0].ParamsJSON), &p)
+	var override map[string]string
+	_ = json.Unmarshal([]byte(p["masters"]), &override)
+	for comp := range bigdataMasterVars {
+		ip := primary
+		if o := strings.TrimSpace(override[comp]); o != "" {
+			ip = o
+		}
+		out[comp] = ip
+	}
+	return out
+}
+
+// bigdataMasterExtra 生成注入变量（__master_<comp> → 主角色 IP），对所有主机相同。
+func bigdataMasterExtra(hosts []model.StackRunHost) map[string]string {
+	ms := stackBigdataMasters(hosts)
+	out := make(map[string]string, len(ms))
+	for comp, key := range bigdataMasterVars {
+		out[key] = ms[comp]
+	}
+	return out
+}
+
+// bigdataRole 一次 HA 角色分配的确定性结果（§4.1/§4.2）。
+type bigdataRole struct {
+	Ha        bool
+	ZKIps     string   // ZK ensemble 前 3 台逗号列表
+	HdfsEntry string   // HDFS 入口 URI
+	Nn1, Nn2  string   // NameNode Active / Standby
+	JNs       []string // JournalNode 主机
+	Rm1, Rm2  string   // ResourceManager Active / Standby
+	SparkM1, SparkM2   string // Spark Master 主 / 备
+	FlinkJM1, FlinkJm2 string // Flink JobManager 主 / 备
+	HMaster1, HMaster2 string // HBase HMaster 主 / backup
+	MSs, Hs2s []string // Hive Metastore / HiveServer2 主机
+	HiveDB    string
+}
+
+// stackBigdataRole 按 §4.2 确定性算法解析大数据底座全部角色落点。
+// 读取 hosts[0].ParamsJSON 中的 ha/masters 参数；hosts 需按 Seq 有序。
+// primary = 角色矩阵指定 ?? 主节点；secondary = 角色矩阵指定 ?? seq 最小且非 primary 的主机；
+// jn/zk = 角色矩阵指定 ?? 前 3 台；hive_db_host = 角色矩阵指定 ?? primary(hive) 主机。
+func stackBigdataRole(hosts []model.StackRunHost) bigdataRole {
+	res := bigdataRole{}
+	if len(hosts) == 0 {
+		return res
+	}
+	sorted := make([]model.StackRunHost, len(hosts))
+	copy(sorted, hosts)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Seq < sorted[j].Seq })
+	ips := make([]string, 0, len(sorted))
+	for _, h := range sorted {
+		ips = append(ips, h.HostIP)
+	}
+	p := map[string]string{}
+	_ = json.Unmarshal([]byte(sorted[0].ParamsJSON), &p)
+	res.Ha = strings.EqualFold(strings.TrimSpace(p["ha"]), "true")
+	override := map[string]string{}
+	_ = json.Unmarshal([]byte(p["masters"]), &override)
+
+	primary := ""
+	for _, h := range sorted {
+		if h.Role == "master" {
+			primary = h.HostIP
+			break
+		}
+	}
+	if primary == "" {
+		primary = ips[0]
+	}
+	masterOf := func(comp string) string {
+		if ip := strings.TrimSpace(override[comp]); ip != "" {
+			return ip
+		}
+		return primary
+	}
+	// seq 最小的非 primary 主机（component 从角色自动落点）
+	autoSecondary := func(comp string) string {
+		for _, ip := range ips {
+			if ip != masterOf(comp) {
+				return ip
+			}
+		}
+		return ""
+	}
+	secondaryOf := func(comp, key string) string {
+		if ip := strings.TrimSpace(override[key]); ip != "" {
+			return ip
+		}
+		if res.Ha {
+			return autoSecondary(comp)
+		}
+		return ""
+	}
+	firstN := func(n int) []string {
+		if len(ips) > n {
+			return ips[:n]
+		}
+		return ips
+	}
+
+	zk := firstN(3)
+	if s := strings.TrimSpace(override["zookeeper_ips"]); s != "" {
+		zk = filterEmpty(strings.Split(s, ","))
+	}
+	res.ZKIps = strings.Join(zk, ",")
+
+	nn1 := masterOf("hdfs")
+	nn2 := secondaryOf("hdfs", "hdfs_nn2")
+	jns := firstN(3)
+	if s := strings.TrimSpace(override["hdfs_jns"]); s != "" {
+		jns = filterEmpty(strings.Split(s, ","))
+	}
+	res.Nn1, res.Nn2 = nn1, nn2
+	res.JNs = jns
+
+	ns := strings.TrimSpace(p["hdfs_nameservice"])
+	if ns == "" {
+		ns = "ns1"
+	}
+	if res.Ha {
+		res.HdfsEntry = "hdfs://" + ns
+	} else {
+		rpc := strings.TrimSpace(p["nn_rpc_port"])
+		if rpc == "" {
+			rpc = "9000"
+		}
+		res.HdfsEntry = "hdfs://" + nn1 + ":" + rpc
+	}
+
+	res.Rm1 = masterOf("yarn")
+	res.Rm2 = secondaryOf("yarn", "yarn_rm2")
+	res.SparkM1 = masterOf("spark")
+	res.SparkM2 = secondaryOf("spark", "spark_m2")
+	res.FlinkJM1 = masterOf("flink")
+	res.FlinkJm2 = secondaryOf("flink", "flink_jm2")
+	res.HMaster1 = masterOf("hbase")
+	res.HMaster2 = secondaryOf("hbase", "hbase_hm2")
+
+	hiveP := masterOf("hive")
+	res.HiveDB = strings.TrimSpace(override["hive_db"])
+	if res.HiveDB == "" {
+		res.HiveDB = hiveP
+	}
+	// Metastore 双实例：ms1=primary，ms2=矩阵指定 ?? 自动第二台
+	ms2 := secondaryOf("hive", "hive_ms2")
+	res.MSs = []string{hiveP}
+	if ms2 != "" && ms2 != hiveP {
+		res.MSs = []string{hiveP, ms2}
+	}
+	// HiveServer2 双实例：独立落点键 hive_hs2b
+	res.Hs2s = res.MSs
+	if s := strings.TrimSpace(override["hive_hs2b"]); s != "" && s != hiveP {
+		res.Hs2s = []string{hiveP, s}
+	}
+	return res
+}
+
+func filterEmpty(list []string) []string {
+	out := make([]string, 0, len(list))
+	for _, s := range list {
+		if strings.TrimSpace(s) != "" {
+			out = append(out, strings.TrimSpace(s))
+		}
+	}
+	return out
+}
+
+// bigdataHAVarTable 将 HA 角色分配结果转为注入变量表（§4.1，非 HA 组件位一律注入空串）。
+func bigdataHAVarTable(r bigdataRole) map[string]string {
+	jnStr := strings.Join(r.JNs, ",")
+	msUris := make([]string, 0, len(r.MSs))
+	for _, m := range r.MSs {
+		msUris = append(msUris, "thrift://"+m+":9083")
+	}
+	return map[string]string{
+		"__zk_ips":       r.ZKIps,
+		"__hdfs_entry":   r.HdfsEntry,
+		"__nn1_ip":       r.Nn1,
+		"__nn2_ip":       r.Nn2,
+		"__jn_ips":       jnStr,
+		"__rm1_ip":       r.Rm1,
+		"__rm2_ip":       r.Rm2,
+		"__spark_m2_ip":  r.SparkM2,
+		"__flink_jm2_ip": r.FlinkJm2,
+		"__hmaster2_ip":  r.HMaster2,
+		"__hs2_ips":      strings.Join(r.Hs2s, ","),
+		"__ms_ips":       strings.Join(r.MSs, ","),
+		"__hive_ms_uris": strings.Join(msUris, ","),
+		"__hive_db_ip":   r.HiveDB,
+	}
+}
+
+// xmlProp 生成单个 Hadoop/云原生 XML property 块（值做 XML 转义）。
+func xmlProp(name, value string) string {
+	esc := func(s string) string {
+		r := strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", `"`, "&quot;", `'`, "&apos;")
+		return r.Replace(s)
+	}
+	return "  <property>\n    <name>" + esc(name) + "</name>\n    <value>" + esc(value) + "</value>\n  </property>\n"
+}
+
+// bigdataHAXMLBlocks 生成配置模板中以 {{__ha_*}} 注入的 XML 条件块（§8.2）。
+// 非 HA / 未选组件一律返回空串或与现状一致的单实例值，保证非 HA 渲染零差异。
+func bigdataHAXMLBlocks(r bigdataRole, params map[string]string) map[string]string {
+	out := map[string]string{
+		"__ha_core_props": "", "__ha_hdfs_props": "", "__ha_yarn_props": "",
+		"__ha_hive_jdo": "", "__ha_hive_ms": "", "__ha_hive_zk": "",
+	}
+	ns := strings.TrimSpace(params["hdfs_nameservice"])
+	if ns == "" {
+		ns = "ns1"
+	}
+	nnRpc := strings.TrimSpace(params["nn_rpc_port"])
+	if nnRpc == "" {
+		nnRpc = "9000"
+	}
+	compOn := func(c string) bool {
+		for _, x := range parseComponentsCSV(params["components"]) {
+			if strings.EqualFold(strings.TrimSpace(x), c) {
+				return true
+			}
+		}
+		return false
+	}
+
+	if r.Ha {
+		var b strings.Builder
+		b.WriteString(xmlProp("ha.zookeeper.quorum", r.ZKIps))
+		b.WriteString(xmlProp("dfs.nameservices", ns))
+		b.WriteString(xmlProp("dfs.ha.namenodes."+ns, "nn1,nn2"))
+		b.WriteString(xmlProp("dfs.client.failover.proxy.provider."+ns, "org.apache.hadoop.hdfs.server.namenode.ha.ConfiguredFailoverProxyProvider"))
+		out["__ha_core_props"] = b.String()
+
+		b.Reset()
+		b.WriteString(xmlProp("dfs.namenode.shared.edits.dir", "qjournal://"+strings.Join(r.JNs, ":"+nnRpc+";")+":"+nnRpc+"/"+ns))
+		b.WriteString(xmlProp("dfs.journalnode.edits.dir", "/hadoop/dfs/journal"))
+		b.WriteString(xmlProp("dfs.namenode.rpc-address."+ns+".nn1", r.Nn1+":"+nnRpc))
+		b.WriteString(xmlProp("dfs.namenode.rpc-address."+ns+".nn2", r.Nn2+":"+nnRpc))
+		b.WriteString(xmlProp("dfs.namenode.http-address."+ns+".nn1", r.Nn1+":9870"))
+		b.WriteString(xmlProp("dfs.namenode.http-address."+ns+".nn2", r.Nn2+":9870"))
+		b.WriteString(xmlProp("dfs.ha.automatic-failover.enabled", "true"))
+		b.WriteString(xmlProp("dfs.ha.fencing.methods", "shell(/bin/true)"))
+		out["__ha_hdfs_props"] = b.String()
+
+		if compOn("yarn") {
+			b.Reset()
+			b.WriteString(xmlProp("yarn.resourcemanager.ha.enabled", "true"))
+			b.WriteString(xmlProp("yarn.resourcemanager.ha.rm-ids", "rm1,rm2"))
+			b.WriteString(xmlProp("yarn.resourcemanager.hostname.rm1", r.Rm1))
+			b.WriteString(xmlProp("yarn.resourcemanager.hostname.rm2", r.Rm2))
+			b.WriteString(xmlProp("yarn.resourcemanager.cluster-id", "bigdata-yarn"))
+			b.WriteString(xmlProp("yarn.resourcemanager.zk-address", r.ZKIps))
+			b.WriteString(xmlProp("yarn.resourcemanager.recovery.enabled", "true"))
+			b.WriteString(xmlProp("yarn.resourcemanager.store.class", "org.apache.hadoop.yarn.server.resourcemanager.recovery.ZKRMStateStore"))
+			b.WriteString(xmlProp("yarn.resourcemanager.ha.automatic-failover.enabled", "true"))
+			b.WriteString(xmlProp("yarn.client.failover-proxy-provider", "org.apache.hadoop.yarn.client.ConfiguredRMFailoverProxyProvider"))
+			out["__ha_yarn_props"] = b.String()
+		}
+
+		if compOn("hive") && len(r.MSs) > 0 {
+			msList := make([]string, 0, len(r.MSs))
+			for _, m := range r.MSs {
+				msList = append(msList, "thrift://"+m+":9083")
+			}
+			out["__ha_hive_ms"] = strings.Join(msList, ",")
+			pw := strings.TrimSpace(params["hive_db_password"])
+			if pw == "" {
+				pw = "HiveDb@123"
+			}
+			b.Reset()
+			b.WriteString(xmlProp("javax.jdo.option.ConnectionURL", "jdbc:mysql://"+r.HiveDB+":3306/metastore?useSSL=false&allowPublicKeyRetrieval=true&characterEncoding=UTF-8"))
+			b.WriteString(xmlProp("javax.jdo.option.ConnectionDriverName", "com.mysql.cj.jdbc.Driver"))
+			b.WriteString(xmlProp("javax.jdo.option.ConnectionUserName", "root"))
+			b.WriteString(xmlProp("javax.jdo.option.ConnectionPassword", pw))
+			out["__ha_hive_jdo"] = b.String()
+			b.Reset()
+			b.WriteString(xmlProp("hive.server2.support.dynamic.service.discovery", "true"))
+			b.WriteString(xmlProp("hive.zookeeper.quorum", r.ZKIps))
+			b.WriteString(xmlProp("hive.zookeeper.namespace", "hiveserver2"))
+			out["__ha_hive_zk"] = b.String()
+		}
+	}
+	if !r.Ha || !compOn("hive") {
+		// 非 HA / 未选 Hive：保留 Derby 单实例元数据连接（与现状一致）
+		out["__ha_hive_jdo"] = xmlProp("javax.jdo.option.ConnectionURL", "jdbc:derby:;databaseName=/opt/hive/data/derby;create=true")
+		out["__ha_hive_zk"] = ""
+		if compOn("hive") && len(r.MSs) > 0 {
+			out["__ha_hive_ms"] = "thrift://" + r.MSs[0] + ":9083"
+		} else {
+			out["__ha_hive_ms"] = ""
+		}
+	}
+	return out
+}
+
+// mergeBigdataMasterExtra 将大数据底座主/从角色变量并入 per-host 注入表。
+func mergeBigdataMasterExtra(bp *store.BuiltinStack, hosts []model.StackRunHost, extraAll map[int64]map[string]string) {
+	if bp == nil || bp.Key != "bigdata" || len(extraAll) == 0 {
+		return
+	}
+	m := bigdataMasterExtra(hosts)
+	role := stackBigdataRole(hosts)
+	ha := bigdataHAVarTable(role)
+	params := map[string]string{}
+	if len(hosts) > 0 {
+		_ = json.Unmarshal([]byte(hosts[0].ParamsJSON), &params)
+	}
+	for k, v := range bigdataHAXMLBlocks(role, params) {
+		ha[k] = v
+	}
+	for id, extra := range extraAll {
+		if extra == nil {
+			extra = map[string]string{}
+			extraAll[id] = extra
+		}
+		for k, v := range m {
+			extra[k] = v
+		}
+		for k, v := range ha {
+			extra[k] = v
+		}
+	}
 }
 
 func applyStackVars(script string, seq int, host model.StackRunHost, extra map[string]string) string {
@@ -1032,6 +1499,10 @@ func stackClusterExtraMerged(op string, existing, newHosts []model.StackRunHost)
 		extra[id] = e
 	}
 	return extra
+}
+
+func stackInstallOp(op string) bool {
+	return op == "create" || op == "reinstall"
 }
 
 func stackVarsJSON(bp model.StackBlueprint, mode string) json.RawMessage {

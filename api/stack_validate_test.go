@@ -1,6 +1,8 @@
 package api
 
 import (
+	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -183,24 +185,98 @@ func TestValidateScaleIn(t *testing.T) {
 	}
 }
 
+func TestValidateScaleInBigdataHA(t *testing.T) {
+	bp := store.FindBuiltinStack("bigdata")
+	params, _ := json.Marshal(map[string]string{
+		"ha": "true", "components": "hdfs,zookeeper,yarn,hive,metastore_db",
+		"masters": `{"hdfs":"10.0.0.1","hive":"10.0.0.1"}`,
+	})
+	active := []model.StackInstanceHost{
+		{HostID: 1, HostIP: "10.0.0.1", Role: "master", Seq: 1, Status: "active", ParamsJSON: string(params)},
+		{HostID: 2, HostIP: "10.0.0.2", Role: "worker", Seq: 2, Status: "active", ParamsJSON: string(params)},
+		{HostID: 3, HostIP: "10.0.0.3", Role: "worker", Seq: 3, Status: "active", ParamsJSON: string(params)},
+	}
+	inst := &model.StackInstance{StackKey: "bigdata", Mode: "cluster", ParamsJSON: string(params)}
+	// 10.0.0.1 承载 NN1/RM1/SparkM1/JM1/HM1/MS1/MetaDB/ZK 等角色 → 不可缩容
+	if err := validateScaleIn(bp, inst, active, []int64{1}); err == nil {
+		t.Fatal("expected refuse HA protected primary host")
+	}
+	// 10.0.0.2 承载 NN2(自动第二台) 角色 → 不可缩容
+	if err := validateScaleIn(bp, inst, active, []int64{2}); err == nil {
+		t.Fatal("expected refuse HA secondary host (NN2/BROKER)")
+	}
+	// 非 HA 实例（ha=false）不触发角色保护
+	nonHAParams, _ := json.Marshal(map[string]string{"ha": "false"})
+	inst2 := &model.StackInstance{StackKey: "bigdata", Mode: "cluster", ParamsJSON: string(nonHAParams)}
+	act2 := []model.StackInstanceHost{
+		{HostID: 1, HostIP: "10.0.0.1", Role: "master", Seq: 1, Status: "active", ParamsJSON: string(nonHAParams)},
+		{HostID: 2, HostIP: "10.0.0.2", Role: "worker", Seq: 2, Status: "active", ParamsJSON: string(nonHAParams)},
+	}
+	if err := validateScaleIn(bp, inst2, act2, []int64{2}); err != nil {
+		t.Fatalf("非 HA 缩容 worker 应成功: %v", err)
+	}
+}
+
 func TestValidateBigdataRemove(t *testing.T) {
 	installed := []string{"hdfs", "spark", "hive", "trino"}
-	if err := validateBigdataRemove(nil, installed); err == nil {
+	if err := validateBigdataRemove(nil, installed, false); err == nil {
 		t.Fatal("expected empty removing")
 	}
-	if err := validateBigdataRemove([]string{"hdfs"}, installed); err == nil {
+	if err := validateBigdataRemove([]string{"hdfs"}, installed, false); err == nil {
 		t.Fatal("expected refuse hdfs")
 	}
-	if err := validateBigdataRemove([]string{"yarn"}, installed); err == nil {
+	if err := validateBigdataRemove([]string{"yarn"}, installed, false); err == nil {
 		t.Fatal("expected not installed")
 	}
-	if err := validateBigdataRemove([]string{"hive"}, installed); err == nil {
+	if err := validateBigdataRemove([]string{"hive"}, installed, false); err == nil {
 		t.Fatal("expected trino depends hive")
 	}
-	if err := validateBigdataRemove([]string{"trino"}, installed); err != nil {
+	if err := validateBigdataRemove([]string{"trino"}, installed, false); err != nil {
 		t.Fatal(err)
 	}
-	if err := validateBigdataRemove([]string{"hive", "trino"}, installed); err != nil {
+	if err := validateBigdataRemove([]string{"hive", "trino"}, installed, false); err != nil {
 		t.Fatal(err)
+	}
+	// HA 模式：trino 独立卸载成功；但 zookeeper 是 yarn/spark/flink/hbase/hive 基座，有残留依赖时拒绝
+	if err := validateBigdataRemove([]string{"trino"}, installed, true); err != nil {
+		t.Fatal("HA 卸载 trino 应成功: " + err.Error())
+	}
+	haInstalled := []string{"hdfs", "zookeeper", "yarn", "spark", "flink", "hive", "metastore_db"}
+	if err := validateBigdataRemove([]string{"zookeeper"}, haInstalled, true); err == nil {
+		t.Fatal("HA 模式残留 yarn/spark/flink/hive 时卸载 zookeeper 应被拒绝")
+	}
+	if err := validateBigdataRemove([]string{"metastore_db"}, haInstalled, true); err == nil {
+		t.Fatal("HA 模式残留 hive 时卸载 metastore_db 应被拒绝")
+	}
+	// 卸载全部 ZK 依赖组件后才允许卸载 zookeeper
+	if err := validateBigdataRemove([]string{"zookeeper", "yarn", "spark", "flink", "hive", "metastore_db"}, haInstalled, true); err != nil {
+		t.Fatalf("卸载全部 ZK 依赖组件后卸载 zookeeper 应成功: %v", err)
+	}
+}
+
+func TestReplayStackMemberPlan(t *testing.T) {
+	h := func(id int64, status string) model.StackRunHost {
+		return model.StackRunHost{HostID: id, HostIP: fmt.Sprintf("10.0.0.%d", id), Status: status}
+	}
+	got := replayStackMemberPlan([]stackMemberPlanEvent{
+		{Op: "create", Hosts: []model.StackRunHost{h(1, "failed"), h(2, "failed")}},
+	})
+	if len(got) != 2 || got[0].HostID != 1 || got[1].HostID != 2 {
+		t.Fatalf("create plan: %+v", got)
+	}
+	got = replayStackMemberPlan([]stackMemberPlanEvent{
+		{Op: "create", Hosts: []model.StackRunHost{h(1, "success"), h(2, "success")}},
+		{Op: "scale_out", Hosts: []model.StackRunHost{h(3, "failed")}},
+		{Op: "uninstall", Status: "success", Hosts: []model.StackRunHost{h(1, "success"), h(2, "success")}},
+	})
+	if len(got) != 3 || got[2].HostID != 3 {
+		t.Fatalf("scale_out then uninstall should keep members: %+v", got)
+	}
+	got = replayStackMemberPlan([]stackMemberPlanEvent{
+		{Op: "create", Hosts: []model.StackRunHost{h(1, "success"), h(2, "success"), h(3, "success")}},
+		{Op: "scale_in", Hosts: []model.StackRunHost{h(3, "success")}},
+	})
+	if len(got) != 2 || got[0].HostID != 1 || got[1].HostID != 2 {
+		t.Fatalf("scale_in plan: %+v", got)
 	}
 }

@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <?xml-stylesheet type="text/xsl" href="configuration.xsl"?>
-<!-- hbase-site 由 infra-ops 注入；{{__master_ip}}/{{__ip}}/{{__node_ips}}/{{nn_rpc_port}} 运行时渲染 -->
+<!-- hbase-site 由 infra-ops 注入；{{__hdfs_entry}}/{{__zk_ips}} 运行时渲染（HA=nameservice，非 HA=nn:port） -->
 <configuration>
   <property>
     <name>hbase.cluster.distributed</name>
@@ -8,11 +8,11 @@
   </property>
   <property>
     <name>hbase.rootdir</name>
-    <value>hdfs://{{__master_ip}}:{{nn_rpc_port}}/hbase</value>
+    <value>{{__hdfs_entry}}/hbase</value>
   </property>
   <property>
     <name>hbase.zookeeper.quorum</name>
-    <value>{{__node_ips}}</value>
+    <value>{{__zk_ips}}</value>
   </property>
   <property>
     <name>hbase.zookeeper.property.clientPort</name>

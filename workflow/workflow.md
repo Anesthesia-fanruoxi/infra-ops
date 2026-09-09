@@ -59,7 +59,7 @@
 
 - [ ] 联调验收：新建 → 运行 → 结束全流程 —— 验收：状态流转正确、已结束不可重跑不可编辑、SSE 进度正常
 
-### 任务运行抽屉：三层结构 + 双 SSE（进行中）→ [tasks/04-run-drawer/](./tasks/04-run-drawer/)
+### 任务运行抽屉：三层结构 + 双 SSE（已完成）→ [tasks/04-run-drawer/](./tasks/04-run-drawer/)
 
 > 方案：点运行后自动展开 50% 宽只读抽屉——L1 步骤层（进展+完成聚合色，可点击切换）→ L2 主机层（三态徽章）→ L3 日志层（时间+IP+内容混排）。双 SSE 独立端点：步骤流（生命周期）+ 详情流（按步骤主机态与日志，快照打底+增量）；日志新增 orchestration\_run\_logs 落库（V14，级联清理）。详见 frontend.md / backend.md / boundary.md
 
@@ -74,4 +74,22 @@
 - [x] 前端：双 SSE 接入 + 自动追踪/手动切换 + 移除旧矩阵弹窗 + 样式 —— 验收：控制台零报错，无死代码残留（node --check 通过、模板配平、无陈旧引用；浏览器交互待用户启动页面验收）
 
 - [ ] 联调验收：运行→自动开抽屉→三层实时联动→结束翻转列表；回溯逐步骤查看 —— 验收：无断流无丢行，跳过主机实时置灰
+
+### 大数据底座全组件高可用（进行中）→ [tasks/05-bigdata-ha/](./tasks/05-bigdata-ha/)
+
+> 方案：套件级 `ha` bool 开关（选套件卡片上开，开=全部支持组件双实例）；非 HA 路径零回归；HA 模式角色规划重构为全角色矩阵（每角色可指定主机）。设计依据 `docs/bigdata-ha-design.md`。详见 frontend.md / backend.md / boundary.md
+
+- [x] B1 模型与蓝图：StackVar.Type + StackBlueprint.HaSupport + `ha` 与辅助变量 + metastore_db 组件 —— 验收：go build/vet 通过，蓝图含新字段
+- [x] B2 引擎占位符与分配算法：`__zk_ips`/`__hdfs_entry`/各组件双实例占位符 + 从角色确定性分配 + masters 白名单扩展 —— 验收：go build/vet + 渲染双形态校验
+- [x] B3 校验规则与保护：validateBigdataMasters 六条（ZK必勾/≥3台/同组件互斥/metastore_db/双实例互斥）+ 缩容保护（承载 HA 角色主机禁缩）+ 创建/bootstrap 落点透传 —— 验收：非法组合逐条 400，store+api 单测全过
+- [x] B4 HDFS HA 落地：core/hdfs-site 条件块 + node.sh 四分支（JN/NN1/NN2/DN）+ bootstrap haadmin 校验 —— 验收：bash -n + 渲染双形态校验通过
+- [x] B5 ZK 系组件 HA：YARN 双 RM、Spark/Flink 双实例（ZK recovery）、HBase backup-master —— 验收：bash -n + 渲染校验通过（ha.sh 统一实现）
+- [x] B6 Hive HA：metastore_db（MySQL 8）+ 2×MS + 2×HS2（ZK 服务发现）+ Trino 双 uri —— 验收：bash -n + 引擎 __ha_hive_jdo/__hive_ms_uris 注入校验通过
+- [x] B7 探活/服务登记/卸载清理：bigdataExpectedContainers 扩为 HA 感知（镜像 ha.sh 分支）+ per-role 容器清单 + migrate_old per 容器 —— 验收：新增 HA 容器推断单测覆盖 主/备/JN+DB 三落点全过
+- [x] B8 渲染校验扩展与回归：check_bigdata_tpl.py 三场景（全开/单组件/角色分离）已补齐 —— 验收：渲染校验全绿，go build/vet/test + bash -n 全过，非 HA 组合无回归
+- [x] F1 套件卡片 HA 开关：el-switch + HA 角标 + ZK 自动勾选 + 提示条 + 下一步禁用 —— 验收：node --check + 联动符合 §3.1
+- [x] F2 bool 变量与辅助变量渲染：el-switch（true/false 字符串）+ 条件显隐 —— 验收：node --check + params 值正确
+- [x] F3 角色矩阵重构：HA 分组角色卡片 + 每行主机下拉 + 冲突标红 + masters 组装扩展 + 样式 —— 验收：node --check + 非 HA 零差异
+- [x] F4 实例展示：卡片 HA 徽标 + 抽屉角色标签 —— 验收：node --check + 渲染正确
+- [ ] F5 非 HA 全回归 + 联调验收：关开关全流程 + HA 真机端到端部署 + 故障演练矩阵 —— 验收：控制台零报错，逐组件 30s 接管
 

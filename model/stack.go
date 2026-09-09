@@ -4,7 +4,8 @@ package model
 type StackVar struct {
 	Name     string   `json:"name"`
 	Label    string   `json:"label"`
-	Default  string   `json:"default"`
+	Default  string   `json:"default"`          // bool 型为 "true"/"false"
+	Type     string   `json:"type,omitempty"`   // "bool"=前端渲染开关，空=文本输入
 	Required bool     `json:"required"`
 	Modes    []string `json:"modes,omitempty"` // 空=所有模式
 }
@@ -28,6 +29,7 @@ type StackBlueprint struct {
 	Description    string      `json:"description"`
 	RequiresDocker bool        `json:"requires_docker"` // true=Docker 容器；false=主机进程安装，不跑 Docker 预检
 	Category       string      `json:"category"`        // service=单服务集群 platform=组合套件
+	HaSupport      bool        `json:"ha_support"`      // 支持套件级高可用开关（前端据此渲染 el-switch）
 	Modes          []StackMode `json:"modes"`
 	SharedVars     []StackVar  `json:"shared_vars"`
 	HostVars       []StackVar  `json:"host_vars"`
@@ -37,7 +39,7 @@ type StackBlueprint struct {
 type StackRun struct {
 	ID         int64   `json:"id"`
 	InstanceID int64   `json:"instance_id"`
-	Op         string  `json:"op"` // create/scale_out/scale_in/add_component/uninstall/remove_component
+	Op         string  `json:"op"` // create/reinstall/scale_out/scale_in/add_component/uninstall/remove_component
 	StackKey   string  `json:"stack_key"`
 	StackName  string  `json:"stack_name"`
 	Mode       string  `json:"mode"`

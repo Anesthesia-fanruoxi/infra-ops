@@ -26,7 +26,7 @@
     <name>dfs.datanode.http.address</name>
     <value>0.0.0.0:9864</value>
   </property>
-  <!-- 平台化部署默认关闭 HDFS 权限校验，避免运维操作被拒；生产如需收紧请改回 true -->
+{{__ha_hdfs_props}}  <!-- 平台化部署默认关闭 HDFS 权限校验，避免运维操作被拒；生产如需收紧请改回 true -->
   <property>
     <name>dfs.permissions.enabled</name>
     <value>false</value>

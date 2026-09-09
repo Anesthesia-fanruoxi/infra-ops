@@ -27,28 +27,38 @@ window.StacksPage = {
 
   <div class="stack-inst-grid" v-loading="instancesLoading">
     <div v-for="it in instances" :key="it.id" class="stack-inst-card" :class="'stack-inst-card--'+it.status" @click="openInstance(it)">
-      <div class="stack-inst-head">
-        <div>
-          <div class="stack-inst-name">{{it.name}}</div>
-          <div class="stack-inst-meta">{{it.stack_name}} · {{modeLabel(it.mode, it.stack_key)}} · {{it.host_count || 0}} 台</div>
+      <div class="stack-inst-top">
+        <div class="stack-inst-avatar" :class="stackAvatar(it).c">{{stackAvatar(it).t}}</div>
+        <div class="stack-inst-title">
+          <div class="stack-inst-name">{{it.name}}<span v-if="instIsHa(it)" class="stack-ha-badge" style="margin-left:6px;position:relative;top:-1px">HA</span></div>
+          <div class="stack-inst-meta">{{it.stack_name}} · {{modeLabel(it.mode, it.stack_key)}}</div>
         </div>
-        <el-tag :type="instStatusType(it.status)" size="small">{{instStatusLabel(it.status)}}</el-tag>
+        <div class="stack-inst-side">
+          <span class="stack-runtime" :class="isContainerStack(it) ? 'is-container' : 'is-host'">{{runtimeLabel(it)}}</span>
+          <span class="stack-inst-status" :class="'is-'+it.status"><i class="dot"></i>{{instStatusLabel(it.status)}}</span>
+        </div>
       </div>
-      <div class="stack-inst-tags">
-        <span class="stack-runtime" :class="isContainerStack(it) ? 'is-container' : 'is-host'">{{runtimeLabel(it)}}</span>
-        <el-tag v-for="c in instCompTags(it)" :key="c" size="small" effect="plain">{{compLabel(c)}}</el-tag>
+      <div class="stack-inst-tags" v-if="instDisplayComps(it).length">
+        <el-tag v-for="c in instDisplayComps(it)" :key="c" size="small" effect="plain" round>{{compLabel(it.stack_key, c)}}</el-tag>
       </div>
-      <div class="stack-inst-ops" @click.stop>
-        <el-button size="small" :disabled="busyInst(it) || it.status==='uninstalled'" @click="openScaleOut(it)">扩容</el-button>
-        <el-button size="small" :disabled="busyInst(it) || it.status==='uninstalled' || (it.host_count||0)<2" @click="openScaleIn(it)">缩容</el-button>
-        <el-button v-if="it.category==='platform'" size="small" :disabled="busyInst(it) || it.status==='uninstalled' || !unusedCompsOf(it).length" @click="openAddComp(it)">加装</el-button>
-        <el-button v-if="it.category==='platform'" size="small" :disabled="busyInst(it) || it.status==='uninstalled' || !removableCompsOf(it).length" @click="openRemoveComp(it)">卸载组件</el-button>
-        <el-button size="small" type="danger" :disabled="busyInst(it) || it.status==='uninstalled'" @click="uninstallInstance(it)">卸载</el-button>
-        <el-button size="small" text @click="renameInstance(it)">改名</el-button>
-        <el-button size="small" text type="danger" :disabled="it.status==='deploying'" @click="deleteInstance(it)">删除</el-button>
+      <div class="stack-inst-foot">
+        <span class="stack-inst-hosts"><el-icon :size="14"><Monitor /></el-icon>{{it.host_count || 0}} 台主机</span>
+        <div class="stack-inst-ops" @click.stop>
+          <el-button v-if="canReinstall(it)" size="small" type="primary" @click="reinstallInstance(it)">重新安装</el-button>
+          <el-button v-else size="small" type="danger" plain :disabled="busyInst(it) || it.status==='uninstalled'" @click="uninstallInstance(it)">卸载</el-button>
+          <el-button size="small" text @click="renameInstance(it)">重命名</el-button>
+          <el-tooltip :disabled="it.status==='uninstalled'" content="请先卸载后再删除" placement="top">
+            <span>
+              <el-button size="small" text type="danger" :disabled="it.status!=='uninstalled'" @click="deleteInstance(it)">删除</el-button>
+            </span>
+          </el-tooltip>
+        </div>
       </div>
     </div>
-    <div v-if="!instancesLoading && !instances.length" class="stack-inst-empty">还没有集群实例，点击右上角新建</div>
+    <div v-if="!instancesLoading && !instances.length" class="stack-inst-empty">
+      <el-icon :size="30" style="opacity:.45;margin-bottom:8px"><Box /></el-icon>
+      <div>还没有集群实例，点击右上角新建</div>
+    </div>
   </div>
 
   <el-dialog v-model="wizardVisible" :title="wizardTitle" width="85%" top="6vh" class="stack-wizard-dialog" :close-on-click-modal="false" @closed="resetWizard">
@@ -60,14 +70,7 @@ window.StacksPage = {
 
     <div v-show="step===1">
       <div v-if="wizardOp==='add_component' || wizardOp==='remove_component'">
-        <div class="deploy-host-vars-title">{{wizardOp==='remove_component' ? '卸载组件' : '加装组件'}} <span class="deploy-var-hint">{{wizardOp==='remove_component' ? 'HDFS 需整集群卸载' : '已安装的不再列出'}}</span></div>
-        <div class="stack-mode-grid">
-          <label v-for="c in unusedWizardComps" :key="c.key" class="stack-mode" :class="{'stack-mode--sel': bdSel.includes(c.key)}">
-            <el-checkbox :model-value="bdSel.includes(c.key)" @change="v => toggleBigdataComp(c.key, v)">{{c.label}}</el-checkbox>
-            <p>{{c.desc}}</p>
-          </label>
-        </div>
-        <p v-if="!unusedWizardComps.length" class="stack-hint">{{wizardOp==='remove_component' ? '没有可单独卸载的组件' : '没有可加装的组件'}}</p>
+        <component v-if="opFormComp" :is="opFormComp" :ctx="selfCtx" />
       </div>
       <div v-else>
       <div v-for="g in stackGroups" :key="g.key" class="stack-cat">
@@ -78,8 +81,10 @@ window.StacksPage = {
         <div class="stack-card-grid">
           <button v-for="s in g.stacks" :key="s.key" type="button" class="stack-card" :class="{'stack-card--sel': selectedKey===s.key}" @click="selectStack(s)">
             <div class="stack-card-head">
+              <div class="stack-card-ava" :class="stackAvatar(s).c">{{stackAvatar(s).t}}</div>
               <div class="stack-card-name">{{s.name}}</div>
               <span class="stack-runtime" :class="s.requires_docker ? 'is-container' : 'is-host'">{{runtimeLabel(s)}}</span>
+              <el-switch v-if="s.ha_support && wizardOp==='create'" size="small" :model-value="sharedParams.ha==='true'" :disabled="selectedKey!==s.key" :inline-prompt="true" active-text="HA" inactive-text="" @click.stop.prevent @change="e => onHaToggle(e)"></el-switch>
             </div>
             <div class="stack-card-modes">
               <el-tag v-for="m in s.modes" :key="m.key" size="small" :type="mode===m.key ? 'primary' : 'info'" effect="plain">{{m.label}}</el-tag>
@@ -90,15 +95,7 @@ window.StacksPage = {
       </div>
       <div v-if="!stacks.length && !stacksLoading" class="deploy-placeholder">暂无可用套件</div>
       <div v-if="selectedStack" class="stack-mode-box">
-        <template v-if="selectedKey==='bigdata'">
-          <div class="deploy-host-vars-title">部署组件 <span class="deploy-var-hint">HDFS 必选打底，按需勾选计算 / 数仓组件</span></div>
-          <div class="stack-mode-grid">
-            <label v-for="c in bigdataComps" :key="c.key" class="stack-mode" :class="{'stack-mode--sel': bdSel.includes(c.key)}">
-              <el-checkbox :model-value="bdSel.includes(c.key)" :disabled="c.required" @change="v => toggleBigdataComp(c.key, v)">{{c.label}}{{c.required ? ' · 必选' : ''}}</el-checkbox>
-              <p>{{c.desc}}</p>
-            </label>
-          </div>
-        </template>
+        <component v-if="step1FormComp" :is="step1FormComp" :ctx="selfCtx" />
         <template v-else>
           <div class="deploy-host-vars-title">部署模式</div>
           <div class="stack-mode-grid">
@@ -110,37 +107,77 @@ window.StacksPage = {
           </div>
         </template>
         <p class="stack-hint" v-if="selectedStack">{{selectedStack.requires_docker ? '该套件以 Docker 容器运行，部署前会检查并按需安装 Docker。' : '该套件直接安装在主机上，不使用容器，也不会检查 Docker。'}}</p>
-        <p class="stack-hint" v-if="selectedKey==='redis'">单机 Redis 请使用「基础建设」中的部署 Redis 模板。</p>
+        <p class="stack-hint stack-ha-hint" v-if="selectedStack?.ha_support && sharedParams.ha==='true'">本次安装所有支持 HA 的组件将双实例部署，依赖 ZooKeeper 已自动勾选，最低需 3 台主机。</p>
+        <p class="stack-hint" v-for="h in step1Hints" :key="h">{{h}}</p>
       </div>
       </div>
     </div>
 
     <div v-show="step===2">
-      <div v-if="selectedKey==='redis' && mode==='cluster'" class="stack-replicas">
-        <span class="deploy-host-vars-title">集群拓扑</span>
-        <el-radio-group v-model="replicas" size="small">
-          <el-radio-button label="0">三主（至少 3 台）</el-radio-button>
-          <el-radio-button label="1">三主三从（至少 6 台偶数）</el-radio-button>
-        </el-radio-group>
-      </div>
-      <div class="deploy-host-toolbar">
-        <el-input v-model="hostFilter" placeholder="搜索主机名 / IP / 标签" clearable size="small" style="width:220px" />
-        <el-select v-model="hostSort.field" size="small" style="width:100px" :teleported="false"><el-option label="按主机名" value="name" /><el-option label="按 IP" value="ip" /></el-select>
-        <el-button size="small" @click="toggleHostSortOrder">{{hostSort.order==='asc' ? '↑ 升序' : '↓ 降序'}}</el-button>
-        <el-button size="small" @click="toggleSelectAll">{{ selectedHosts.length === filteredHosts.length ? '取消全选' : '全选' }}</el-button>
-        <span class="deploy-sel-count">已选 {{selectedHosts.length}} 台 · {{hostHint}}</span>
-      </div>
-      <div class="deploy-host-list deploy-host-list--dialog" v-loading="hostsLoading">
-        <label v-for="h in filteredHosts" :key="h.id" class="deploy-host-item" :class="{'deploy-host-item--sel': selectedHostIds.has(h.id)}">
-          <el-checkbox :model-value="selectedHostIds.has(h.id)" @change="toggleHost(h.id)" />
-          <span class="deploy-host-name">{{h.name}}</span>
-          <span class="mono deploy-host-ip">{{h.ip}}</span>
-          <span class="tag-badge other" style="font-size:10px">{{h.tag || 'other'}}</span>
-          <span class="status-badge" :class="h.status"><span class="dot"></span>{{h.status==='online'?'在线':h.status==='offline'?'离线':'未验证'}}</span>
-          <el-radio v-if="needMaster && selectedHostIds.has(h.id)" :model-value="masterHostId" :label="h.id" @change="masterHostId=h.id" style="margin-left:auto">主节点</el-radio>
-        </label>
-        <div v-if="!filteredHosts.length && !hostsLoading" class="deploy-placeholder">无匹配主机</div>
-      </div>
+      <!-- 大数据等角色规划套件：表格勾选成员 → 按组件指定主角色 -->
+      <template v-if="useRolePlan">
+        <div class="deploy-host-toolbar">
+          <el-input v-model="hostFilter" placeholder="搜索主机名 / IP / 标签" clearable size="small" style="width:220px" />
+          <el-select v-model="hostSort.field" size="small" style="width:100px" :teleported="false"><el-option label="按主机名" value="name" /><el-option label="按 IP" value="ip" /></el-select>
+          <el-button size="small" @click="toggleHostSortOrder">{{hostSort.order==='asc' ? '↑ 升序' : '↓ 降序'}}</el-button>
+          <el-button size="small" @click="toggleSelectAll">{{ selectedHosts.length === filteredHosts.length && filteredHosts.length ? '取消全选' : '全选' }}</el-button>
+          <span class="deploy-sel-count">已选 {{selectedHosts.length}} / {{filteredHosts.length}} 台 · {{hostHint}}</span>
+        </div>
+        <el-table
+          ref="roleHostTable"
+          :data="filteredHosts"
+          size="small"
+          border
+          v-loading="hostsLoading"
+          class="stack-role-host-table"
+          row-key="id"
+          @selection-change="onRoleHostSelection"
+          empty-text="无匹配主机"
+        >
+          <el-table-column type="selection" width="48" :reserve-selection="true" />
+          <el-table-column prop="name" label="主机名" min-width="140" />
+          <el-table-column label="IP" min-width="130">
+            <template #default="{row}"><span class="mono">{{row.ip}}</span></template>
+          </el-table-column>
+          <el-table-column label="标签" width="100">
+            <template #default="{row}"><span class="tag-badge other" style="font-size:10px">{{row.tag || 'other'}}</span></template>
+          </el-table-column>
+          <el-table-column label="状态" width="90">
+            <template #default="{row}">
+              <span class="status-badge" :class="row.status"><span class="dot"></span>{{row.status==='online'?'在线':row.status==='offline'?'离线':'未验证'}}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="已指定角色" min-width="180">
+            <template #default="{row}">
+              <span class="faint">{{hostRolePlanSummary(row) || '—'}}</span>
+            </template>
+          </el-table-column>
+        </el-table>
+        <component v-if="step===2 && step2FormComp" :is="step2FormComp" :ctx="selfCtx" />
+      </template>
+
+      <!-- Redis 等仍用主从/引导节点单选 -->
+      <template v-else>
+        <component v-if="step===2 && step2FormComp" :is="step2FormComp" :ctx="selfCtx" />
+        <div class="deploy-host-toolbar">
+          <el-input v-model="hostFilter" placeholder="搜索主机名 / IP / 标签" clearable size="small" style="width:220px" />
+          <el-select v-model="hostSort.field" size="small" style="width:100px" :teleported="false"><el-option label="按主机名" value="name" /><el-option label="按 IP" value="ip" /></el-select>
+          <el-button size="small" @click="toggleHostSortOrder">{{hostSort.order==='asc' ? '↑ 升序' : '↓ 降序'}}</el-button>
+          <el-button size="small" @click="toggleSelectAll">{{ selectedHosts.length === filteredHosts.length ? '取消全选' : '全选' }}</el-button>
+          <span class="deploy-sel-count">已选 {{selectedHosts.length}} 台 · {{hostHint}}</span>
+        </div>
+        <div class="deploy-host-list deploy-host-list--dialog" v-loading="hostsLoading">
+          <label v-for="h in filteredHosts" :key="h.id" class="deploy-host-item" :class="{'deploy-host-item--sel': selectedHostIds.has(h.id)}">
+            <el-checkbox :model-value="selectedHostIds.has(h.id)" @change="toggleHost(h.id)" />
+            <span class="deploy-host-name">{{h.name}}</span>
+            <span class="mono deploy-host-ip">{{h.ip}}</span>
+            <span class="tag-badge other" style="font-size:10px">{{h.tag || 'other'}}</span>
+            <span class="status-badge" :class="h.status"><span class="dot"></span>{{h.status==='online'?'在线':h.status==='offline'?'离线':'未验证'}}</span>
+            <el-radio v-if="needMaster && selectedHostIds.has(h.id)" :model-value="masterHostId" :label="h.id" @change="masterHostId=h.id" style="margin-left:auto">主节点</el-radio>
+          </label>
+          <div v-if="!filteredHosts.length && !hostsLoading" class="deploy-placeholder">无匹配主机</div>
+        </div>
+      </template>
     </div>
 
     <div v-show="step===3">
@@ -159,7 +196,8 @@ window.StacksPage = {
       <div class="deploy-host-var-fields stack-shared-fields">
         <div class="deploy-host-var-field" v-for="v in visibleSharedVars" :key="v.name">
           <label>{{v.label}}<b v-if="v.required">*</b></label>
-          <el-input size="small" v-model="sharedParams[v.name]" :placeholder="v.default || ''" :show-password="v.name==='password'" />
+          <el-switch v-if="v.type==='bool'" :model-value="sharedParams[v.name]==='true'" @change="e => onBoolVar(v.name, e)"></el-switch>
+          <el-input v-else size="small" v-model="sharedParams[v.name]" :placeholder="v.default || ''" :show-password="v.name==='password'" />
         </div>
       </div>
       <div class="deploy-host-vars-head" style="margin:16px 0 10px">
@@ -171,7 +209,8 @@ window.StacksPage = {
           <div class="deploy-host-var-rowhead">
             <span class="deploy-host-name">{{h.name}}</span>
             <span class="mono deploy-host-ip">{{h.ip}}</span>
-            <el-tag v-if="needMaster" size="small" :type="h.id===masterHostId ? 'danger' : 'info'">{{hostRoleTag(h)}}</el-tag>
+            <el-tag v-if="useRolePlan" size="small" type="info">{{hostRolePlanSummary(h) || '工作节点'}}</el-tag>
+            <el-tag v-else-if="needMaster" size="small" :type="h.id===masterHostId ? 'danger' : 'info'">{{hostRoleTag(h)}}</el-tag>
           </div>
           <div class="deploy-host-var-fields">
             <div class="deploy-host-var-field" v-for="v in hostVars" :key="v.name">
@@ -226,16 +265,15 @@ window.StacksPage = {
       <el-tag :type="instStatusType(instDetail.status)" size="small">{{instStatusLabel(instDetail.status)}}</el-tag>
     </div>
     <div class="stack-inst-tags" style="margin:8px 0 14px">
-      <el-tag v-for="c in instCompTags(instDetail)" :key="c" size="small">{{compLabel(c)}}</el-tag>
+      <el-tag v-for="c in instDisplayComps(instDetail)" :key="c" size="small">{{compLabel(instDetail.stack_key, c)}}</el-tag>
     </div>
-    <div class="stack-inst-ops" style="margin-bottom:16px" v-if="instDetail">
+    <div class="stack-inst-ops stack-drawer-ops" style="margin-bottom:16px" v-if="instDetail">
+      <el-button v-if="canReinstall(instDetail)" size="small" type="primary" @click="reinstallInstance(instDetail)">重新安装</el-button>
+      <el-button size="small" type="primary" plain :loading="verifying" :disabled="instDetail.status==='uninstalled'" @click="openVerifyDialog(instDetail)">探活</el-button>
       <el-button size="small" :disabled="busyInst(instDetail) || instDetail.status==='uninstalled'" @click="openScaleOut(instDetail)">扩容</el-button>
       <el-button size="small" :disabled="busyInst(instDetail) || instDetail.status==='uninstalled' || activeInstHosts(instDetail).length<2" @click="openScaleIn(instDetail)">缩容</el-button>
-      <el-button v-if="instDetail.category==='platform'" size="small" :disabled="busyInst(instDetail) || instDetail.status==='uninstalled' || !unusedCompsOf(instDetail).length" @click="openAddComp(instDetail)">加装</el-button>
-      <el-button v-if="instDetail.category==='platform'" size="small" :disabled="busyInst(instDetail) || instDetail.status==='uninstalled' || !removableCompsOf(instDetail).length" @click="openRemoveComp(instDetail)">卸载组件</el-button>
-      <el-button size="small" type="danger" :disabled="busyInst(instDetail) || instDetail.status==='uninstalled'" @click="uninstallInstance(instDetail)">卸载</el-button>
-      <el-button size="small" text @click="renameInstance(instDetail)">改名</el-button>
-      <el-button size="small" text type="danger" :disabled="instDetail.status==='deploying'" @click="deleteInstance(instDetail)">删除</el-button>
+      <el-button v-if="isPlatformStack(instDetail)" size="small" :disabled="busyInst(instDetail) || instDetail.status==='uninstalled' || !unusedCompsOf(instDetail).length" @click="openAddComp(instDetail)">加装组件</el-button>
+      <el-button v-if="isPlatformStack(instDetail)" size="small" :disabled="busyInst(instDetail) || instDetail.status==='uninstalled' || !removableCompsOf(instDetail).length" @click="openRemoveComp(instDetail)">卸载组件</el-button>
     </div>
     <div class="drawer-sec-title">成员</div>
     <div class="deploy-drawer-hostlist">
@@ -243,6 +281,7 @@ window.StacksPage = {
         <span class="deploy-host-name">{{h.host_name}}</span>
         <span class="mono deploy-host-ip">{{h.host_ip}}</span>
         <el-tag size="small" type="info">{{roleLabel(h.role)}}</el-tag>
+        <template v-for="tag in haDrawnRoles(h.host_ip)" :key="tag"><el-tag size="small" effect="plain">{{tag}}</el-tag></template>
       </div>
       <div v-if="!(instDetail.hosts||[]).filter(x => x.status!=='removed').length" class="faint">暂无成员</div>
     </div>
@@ -255,7 +294,106 @@ window.StacksPage = {
     </el-table>
   </el-drawer>
 
-  <el-drawer v-model="drawerVisible" :title="'套件运行 #' + (recordMeta?.id || '')" size="48%" class="deploy-drawer" @closed="closeDrawer">
+  <el-dialog v-model="verifyVisible" :title="'集群探活 · ' + (verifyTarget?.name || '')" width="65%" top="6vh" class="stack-verify-dialog" :close-on-click-modal="false">
+    <div v-loading="verifying" class="stack-verify-body">
+      <!-- 摘要横幅 -->
+      <div class="sv-banner" :class="verifyResult?.ok ? 'is-ok' : 'is-fail'">
+        <div class="sv-banner-icon">
+          <svg v-if="verifyResult?.ok" viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+          <svg v-else viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        </div>
+        <div class="sv-banner-text">
+          <div class="sv-banner-summary">{{verifyResult?.summary || '正在探活…'}}</div>
+          <div class="sv-banner-meta">
+            <span v-if="verifyResult?.checked_at" class="mono">{{verifyResult.checked_at}}</span>
+            <span v-if="verifyResult?.hint" class="sv-banner-hint">{{verifyResult.hint}}</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 接入地址 -->
+      <div class="sv-section">
+        <div class="sv-section-title">接入地址</div>
+        <div class="sv-ep-grid">
+          <div class="sv-ep-host-card" v-for="hg in verifyEndpointsByHost" :key="hg.host_ip">
+            <div class="sv-ep-host-header">
+              <span class="sv-ep-host-role" :class="hg.role === 'master' ? 'is-master' : 'is-replica'">{{hg.role === 'master' ? '主' : '从'}}</span>
+              <span class="mono sv-ep-host-ip">{{hg.host_ip}}</span>
+            </div>
+            <div class="sv-ep-host-eps">
+              <div class="sv-ep-mini" v-for="ep in hg.endpoints" :key="ep.url">
+                <span class="sv-ep-badge" :class="epProtocolClass(ep.url)">{{epProtocolLabel(ep.url)}}</span>
+                <span class="mono sv-ep-mini-url">{{ep.url}}</span>
+                <span class="sv-ep-copy" @click="copyText(ep.url)" title="复制">
+                  <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                </span>
+              </div>
+            </div>
+          </div>
+          <div v-if="!verifyEndpointsByHost.length" class="sv-empty">暂无接入地址</div>
+        </div>
+      </div>
+
+      <!-- 访问密码 -->
+      <div class="sv-section" v-if="verifyPassword">
+        <div class="sv-section-title">访问密码</div>
+        <div class="sv-pass-row">
+          <span class="sv-pass-dots">●●●●●●●●●●●●</span>
+          <span class="sv-pass-label">已配置</span>
+          <div class="sv-pass-copy" @click="copyText(verifyPassword)" title="复制密码">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+          </div>
+        </div>
+      </div>
+
+      <!-- 节点状态 -->
+      <div class="sv-section">
+        <div class="sv-section-title">节点状态 <span class="sv-section-count">{{verifyHostRows.length}} 台</span></div>
+        <el-table :data="verifyHostRows" size="small" empty-text="暂无节点结果" class="sv-node-table" :show-overflow-tooltip="false">
+          <el-table-column prop="ip" label="IP" min-width="130" :show-overflow-tooltip="false">
+            <template #default="{row}"><span class="mono">{{row.ip}}</span></template>
+          </el-table-column>
+          <el-table-column prop="host_name" label="主机名" min-width="120" :show-overflow-tooltip="false" />
+          <el-table-column prop="status" label="状态" width="70" align="center" :show-overflow-tooltip="false">
+            <template #default="{row}">
+              <span class="sv-table-dot" :class="row.ok ? 'ok' : 'fail'"></span>
+            </template>
+          </el-table-column>
+          <el-table-column prop="role" label="角色" width="90" :show-overflow-tooltip="false">
+            <template #default="{row}">
+              <span class="sv-role-badge" :class="row.role === 'master' ? 'is-master' : 'is-replica'">{{row.role}}</span>
+            </template>
+          </el-table-column>
+          <el-table-column prop="replication" :label="verifyTarget?.stack_key === 'redis' ? '复制' : '实例'" min-width="180" :show-overflow-tooltip="false">
+            <template #default="{row}"><span class="mono">{{row.replication || '—'}}</span></template>
+          </el-table-column>
+          <el-table-column prop="version" label="版本" width="90" :show-overflow-tooltip="false" />
+          <el-table-column prop="uptime" label="运行时间" min-width="110" :show-overflow-tooltip="false" />
+        </el-table>
+      </div>
+
+      <!-- 提示信息 -->
+      <div class="sv-notes" v-if="verifyResult?.notes?.length">
+        <div class="sv-note-item" v-for="(n,i) in verifyResult.notes" :key="i">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;margin-top:2px"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+          <span>{{n}}</span>
+        </div>
+      </div>
+      <!-- 客户端接入提示 -->
+      <div class="sv-client-hint" v-if="verifyResult?.client_hint">
+        <div class="sv-client-hint-label">客户端接入</div>
+        <pre class="sv-client-hint-code">{{verifyResult.client_hint}}</pre>
+      </div>
+    </div>
+    <template #footer>
+      <el-button @click="verifyVisible=false">关闭</el-button>
+      <el-button type="primary" :loading="verifying" :disabled="!verifyTarget || verifyTarget.status==='uninstalled'" @click="runVerify">重新探活</el-button>
+    </template>
+  </el-dialog>
+
+  <el-drawer v-model="drawerVisible" :title="'套件运行 #' + (recordMeta?.id || '')" size="48%" class="deploy-drawer"
+    :close-on-click-modal="!logDrawerLocked" :close-on-press-escape="!logDrawerLocked" :show-close="!logDrawerLocked"
+    :before-close="onLogDrawerBeforeClose" @closed="closeDrawer">
     <div v-if="recordMeta" class="deploy-drawer-meta">
       <span class="deploy-drawer-meta-tpl">{{recordMeta.stack_name}} · {{modeLabel(recordMeta.mode)}}</span>
       <el-tag :type="taskTagType(recordMeta.status)" size="small">{{taskStatusLabel(recordMeta.status)}}</el-tag>
@@ -296,18 +434,7 @@ window.StacksPage = {
   data() {
     return {
       step: 1, stacks: [], stacksLoading: false, selectedKey: '', mode: '',
-      bdSel: ['hdfs'],
-      bigdataComps: [
-        { key: 'hdfs', label: 'HDFS 存储', required: true, desc: '1 NameNode + N DataNode，集群存储基座，必选' },
-        { key: 'zookeeper', label: 'ZooKeeper', required: false, desc: '协调服务，全体节点 ensemble（HBase 依赖）' },
-        { key: 'yarn', label: 'YARN', required: false, desc: 'ResourceManager + NodeManager 资源调度' },
-        { key: 'spark', label: 'Spark 计算', required: false, desc: 'standalone 1 Master + N Worker' },
-        { key: 'flink', label: 'Flink 计算', required: false, desc: 'session 1 JobManager + N TaskManager' },
-        { key: 'hive', label: 'Hive 数仓', required: false, desc: 'Metastore + HiveServer2（单实例，依赖 HDFS；Trino 依赖）' },
-        { key: 'hbase', label: 'HBase', required: false, deps: ['zookeeper'], desc: 'NoSQL 列存数据库，依赖 ZooKeeper' },
-        { key: 'trino', label: 'Trino', required: false, deps: ['hive'], desc: '交互式 SQL 查询引擎，依赖 Hive Metastore' }
-      ],
-      replicas: '0', masterHostId: 0,
+      bdSel: ['hdfs'], replicas: '0', masterHostId: 0, masters: {},
       hosts: [], hostsLoading: false, hostsLoaded: false, selectedHostIds: new Set(),
       hostFilter: '', hostSort: { field: 'name', order: 'asc' },
       sharedParams: {}, hostParams: {},
@@ -315,6 +442,7 @@ window.StacksPage = {
       targetInstance: null, memberHostIds: new Set(),
       instances: [], instancesLoading: false,
       instDrawerVisible: false, instDetail: null, instRuns: [],
+      verifyVisible: false, verifyTarget: null, verifyResult: null, verifying: false,
       preflightVisible: false, preflight: {},
       drawerVisible: false, recordMeta: null, recordHosts: [], recordLogs: [], logFilter: '',
       sseLog: null, setupSse: null, logAutoScroll: true
@@ -333,6 +461,12 @@ window.StacksPage = {
       })).filter(g => g.stacks.length)
     },
     selectedMode() { return (this.selectedStack?.modes || []).find(m => m.key === this.mode) || null },
+    selfCtx() { return this },
+    formEntry() { return (window.StackForms && window.StackForms[this.selectedKey]) || null },
+    step1FormComp() { return this.formEntry?.selectComp || null },
+    opFormComp() { return this.formEntry?.opComp || null },
+    step2FormComp() { return this.formEntry?.step2Comp || null },
+    step1Hints() { return this.formEntry?.hints || [] },
     wizardTitle() {
       const name = this.targetInstance?.name || ''
       return {
@@ -358,11 +492,16 @@ window.StacksPage = {
       if (this.wizardOp === 'remove_component') return this.removableCompsOf(this.targetInstance)
       return this.unusedCompsOf(this.targetInstance)
     },
-    needMaster() { return this.wizardOp !== 'scale_out' && this.wizardOp !== 'scale_in' && !!this.selectedMode?.assign_master },
+    needMaster() { return this.wizardOp === 'create' && !!this.selectedMode?.assign_master && !this.useRolePlan },
+    // 大数据等：表格勾选 + 按组件指定主角色（不再用单一「主节点」单选）
+    useRolePlan() {
+      return !!(this.formEntry?.masterComps?.length) &&
+        (this.wizardOp === 'create' || this.wizardOp === 'add_component')
+    },
     filteredHosts() {
       let list = this.hosts
       if (this.wizardOp === 'scale_out') list = list.filter(h => !this.memberHostIds.has(h.id))
-      if (this.wizardOp === 'scale_in') list = list.filter(h => this.memberHostIds.has(h.id))
+      if (this.wizardOp === 'scale_in' || this.wizardOp === 'add_component') list = list.filter(h => this.memberHostIds.has(h.id))
       if (this.hostFilter) {
         const kw = this.hostFilter.toLowerCase()
         list = list.filter(h => (h.name||'').toLowerCase().includes(kw) || (h.ip||'').toLowerCase().includes(kw) || (h.tag||'').toLowerCase().includes(kw))
@@ -374,25 +513,16 @@ window.StacksPage = {
       return list.filter(v => !v.modes || !v.modes.length || v.modes.includes(this.mode))
     },
     visibleSharedVars() {
-      const list = this.selectedStack?.shared_vars || []
-      const varComp = {
-        image: 'hdfs', nn_rpc_port: 'hdfs', replication: 'hdfs',
-        image_zookeeper: 'zookeeper',
-        nm_mem: 'yarn', nm_vcores: 'yarn',
-        image_spark: 'spark', master_port: 'spark', webui_port: 'spark', worker_cores: 'spark', worker_mem: 'spark',
-        image_flink: 'flink', jm_rpc_port: 'flink', tm_slots: 'flink',
-        image_hive: 'hive',
-        image_hbase: 'hbase',
-        image_trino: 'trino', trino_http_port: 'trino', trino_mem: 'trino'
-      }
-      return list.filter(v => !v.modes || !v.modes.length || v.modes.includes(this.mode))
-        .filter(v => v.name !== 'replicas' && v.name !== 'components')
-        .filter(v => this.selectedKey !== 'bigdata' || !varComp[v.name] || this.bdSel.includes(varComp[v.name]))
+      const list = (this.selectedStack?.shared_vars || [])
+        .filter(v => !v.modes || !v.modes.length || v.modes.includes(this.mode))
+      const fn = this.formEntry?.visibleSharedVars
+      return fn ? fn(this, list) : list
     },
     selectedHosts() { return this.hosts.filter(h => this.selectedHostIds.has(h.id)) },
     minHosts() {
       if (this.wizardOp === 'scale_out' || this.wizardOp === 'scale_in' || this.wizardOp === 'add_component') return 1
-      if (this.selectedKey === 'redis' && this.mode === 'cluster') return this.replicas === '1' ? 6 : 3
+      const v = this.formEntry?.minHosts?.(this)
+      if (typeof v === 'number') return v
       return this.selectedMode?.min_hosts || 2
     },
     showBootstrapPill() { return this.recordHosts.some(h => h.bootstrap_status && h.bootstrap_status !== 'skipped') },
@@ -400,6 +530,11 @@ window.StacksPage = {
     hostHint() {
       if (this.wizardOp === 'scale_out') return '选择要加入的新主机'
       if (this.wizardOp === 'scale_in') return '选择要移除的成员（不能全删，请用卸载）'
+      if (this.useRolePlan) {
+        return this.wizardOp === 'add_component'
+          ? '勾选安装目标成员，再在下方为各组件指定主角色'
+          : '至少 ' + this.minHosts + ' 台；勾选后在下方按组件指定 NameNode / Master 等主角色'
+      }
       return this.selectedMode?.host_hint || ''
     },
     canStep2() {
@@ -409,7 +544,7 @@ window.StacksPage = {
     canStep3() {
       if (this.selectedHosts.length < this.minHosts) return false
       if (this.wizardOp === 'scale_in' && this.selectedHosts.length >= this.memberHostIds.size) return false
-      if (this.wizardOp === 'create' && this.selectedKey === 'redis' && this.mode === 'cluster' && this.replicas === '1' && this.selectedHosts.length % 2 !== 0) return false
+      if (this.formEntry?.canStep3 && this.formEntry.canStep3(this) === false) return false
       if (this.needMaster && !this.selectedHosts.some(h => h.id === this.masterHostId)) return false
       return true
     },
@@ -421,7 +556,13 @@ window.StacksPage = {
       })
     },
     wizardHint() {
-      if (this.step === 2 && !this.canStep3) return '主机数量或主节点不满足当前模式'
+      if (this.step === 2 && !this.canStep3) {
+        if (this.useRolePlan && this.wizardOp === 'create' && this.bdSel.includes('hdfs') &&
+          (!this.masters.hdfs || !this.selectedHostIds.has(this.masters.hdfs))) {
+          return '请勾选主机并指定 HDFS NameNode'
+        }
+        return '主机数量或角色规划不满足当前模式'
+      }
       if (this.step === 3 && !this.canRun) {
         const miss = this.visibleSharedVars.find(v => v.required && !(this.sharedParams[v.name] || v.default || '').trim())
         return miss ? '请填写' + miss.label : '参数未填写完整'
@@ -429,6 +570,108 @@ window.StacksPage = {
       return ''
     },
     runningCount() { return this.instances.filter(t => t.status === 'deploying').length },
+    logDrawerLocked() {
+      return !!(this.drawerVisible && this.recordMeta && this.recordMeta.op === 'add_component' && this.recordMeta.status === 'running')
+    },
+    verifyParams() {
+      try { return JSON.parse(this.verifyTarget?.params_json || '{}') || {} } catch (e) { return {} }
+    },
+    verifyPassword() { return (this.verifyParams.password || '').trim() },
+    verifyEndpoints() {
+      const it = this.verifyTarget
+      const extractIP = (url) => { const m = url && url.match(/(\d+\.\d+\.\d+\.\d+)/); return m ? m[1] : url }
+      const inferRole = (name) => { if (/主\b|master/i.test(name)) return 'master'; if (/从\b|replica|slave/i.test(name)) return 'replica'; return '' }
+      if (!it) return (this.verifyResult?.endpoints || []).map(ep => ({ name: ep.name, url: ep.url, role: ep.role || inferRole(ep.name), host_ip: extractIP(ep.url) }))
+      if (this.verifyResult?.endpoints?.length) {
+        return this.verifyResult.endpoints.map(ep => ({ name: ep.name, url: ep.url, role: ep.role || inferRole(ep.name), host_ip: extractIP(ep.url) }))
+      }
+      const hosts = (it.hosts || []).filter(h => h.status !== 'removed')
+      const p = this.verifyParams
+      const port = p.port || '6379'
+      const out = []
+      hosts.forEach(h => {
+        let hp = {}
+        try { hp = JSON.parse(h.params_json || '{}') || {} } catch (e) { hp = {} }
+        const pt = hp.port || port
+        if (it.stack_key === 'redis') {
+          const isMaster = h.role === 'master'
+          const name = (it.mode === 'replication' || it.mode === 'sentinel')
+            ? (isMaster ? 'Redis 主' : 'Redis 从')
+            : 'Redis'
+          out.push({ name, url: 'redis://' + h.host_ip + ':' + pt, role: h.role, host_ip: h.host_ip, host_name: h.host_name })
+          if (it.mode === 'sentinel') {
+            out.push({ name: 'Sentinel', url: 'redis-sentinel://' + h.host_ip + ':' + (hp.sentinel_port || p.sentinel_port || '26379'), role: h.role, host_ip: h.host_ip, host_name: h.host_name })
+          }
+        } else if (it.stack_key === 'bigdata') {
+          // 优先用探活接口返回的 endpoints（按组件拆分）
+          const fromApi = (this.verifyResult?.endpoints || []).filter(ep => (ep.role === h.role || true) && (ep.url || '').includes(h.host_ip))
+          if (fromApi.length) {
+            fromApi.forEach(ep => out.push({ name: ep.name, url: ep.url, role: h.role, host_ip: h.host_ip, host_name: h.host_name }))
+          } else {
+            out.push({ name: (this.roleLabel(h.role) || '节点'), url: 'http://' + h.host_ip, role: h.role, host_ip: h.host_ip, host_name: h.host_name })
+          }
+        } else {
+          out.push({ name: (this.roleLabel(h.role) || '节点'), url: 'tcp://' + h.host_ip, role: h.role, host_ip: h.host_ip, host_name: h.host_name })
+        }
+      })
+      return out
+    },
+    verifyEndpointsByHost() {
+      const eps = this.verifyEndpoints
+      const map = new Map()
+      eps.forEach(ep => {
+        const key = ep.host_ip || ep.url
+        if (!map.has(key)) {
+          map.set(key, { host_ip: key, host_name: ep.host_name || key, role: ep.role || '', endpoints: [] })
+        }
+        map.get(key).endpoints.push(ep)
+      })
+      return Array.from(map.values())
+    },
+    verifyHostRows() {
+      return (this.verifyResult?.hosts || []).map(h => {
+        const check = (name) => (h.checks || []).find(c => c.name === name)
+        const roleRaw = (h.live_role || check('角色')?.detail || h.role || '').toString()
+        const isMaster = /^master\b/i.test(roleRaw) || roleRaw === 'master'
+        const isReplica = /^(slave|replica|worker)\b/i.test(roleRaw) || roleRaw === 'replica' || roleRaw === 'slave' || roleRaw === 'worker'
+        let role = roleRaw.split('·')[0].trim() || this.roleLabel(h.role) || '-'
+        if (isMaster) role = 'master'
+        else if (isReplica) role = roleRaw === 'worker' || h.role === 'worker' ? 'worker' : 'replica'
+        const replCheck = check('复制')
+        const instCheck = check('实例')
+        const roleDetail = check('角色')?.detail || ''
+        let replication = ''
+        if (instCheck?.detail) {
+          replication = instCheck.detail
+        } else if (isReplica || role === 'replica') {
+          const m = roleDetail.match(/跟随\s+(\S+)/)
+          if (m) replication = m[1]
+          else if (replCheck?.detail) {
+            const link = replCheck.detail.match(/master_link_status=(\S+)/)
+            replication = link ? link[1] : replCheck.detail
+          }
+        } else if (replCheck?.detail) {
+          replication = replCheck.detail
+        }
+        const verDetail = check('版本')?.detail || ''
+        let version = verDetail, uptime = ''
+        if (verDetail.includes('·')) {
+          const parts = verDetail.split('·').map(s => s.trim())
+          version = parts[0] || ''
+          uptime = parts.slice(1).join(' · ')
+        }
+        return {
+          host_id: h.host_id,
+          ip: h.host_ip,
+          host_name: h.host_name,
+          ok: !!h.ok,
+          role,
+          replication,
+          version: version || '-',
+          uptime: uptime || '-'
+        }
+      })
+    },
     preflightReady() { return !(this.preflight.unreachable && this.preflight.unreachable.length) },
     filteredLogs() {
       if (!this.logFilter) return this.recordLogs
@@ -437,6 +680,10 @@ window.StacksPage = {
     }
   },
   mounted() { this.loadInstances(); this.loadStacks(); this.connectSetup() },
+  watch: {
+    // 主节点变更 / 角色规划联动：清理失效指向
+    masterHostId() { this.syncMasters() }
+  },
   beforeUnmount() { this.closeDrawer(); this.closeSetup() },
   methods: {
     async loadStacks() {
@@ -464,19 +711,101 @@ window.StacksPage = {
         return Array.isArray(arr) ? arr : []
       } catch (e) { return [] }
     },
+    instDisplayComps(it) {
+      return this.instCompTags(it).filter(c => c && c !== it.mode)
+    },
+    // 集群实例是否以 HA 模式创建（bigdata）
+    instIsHa(it) {
+      if (!it || it.stack_key !== 'bigdata') return false
+      try { return JSON.parse(it.params_json || '{}').ha === 'true' } catch (e) { return false }
+    },
+    // 实例抽屉：按主机展示 HA 全角色标签（镜像后端确定性分配，仅用于展示）
+    haDrawnRoles(ip) {
+      const it = this.instDetail
+      if (!it || it.stack_key !== 'bigdata' || !this.instIsHa(it)) return []
+      let params, masters
+      try { params = JSON.parse(it.params_json || '{}'); masters = JSON.parse(params.masters || '{}') || {} } catch (e) { return [] }
+      const comps = (params.components || '').split(',').map(x => x.trim()).filter(Boolean)
+      const hosts = (it.hosts || []).filter(x => x.status !== 'removed').slice().sort((a, b) => (a.seq || 0) - (b.seq || 0))
+      const ips = hosts.map(h => h.host_ip)
+      const primary = (hosts.find(h => h.role === 'master') || {}).host_ip || ips[0] || ''
+      const primaryOf = comp => masters[comp] || primary
+      const secondaryOf = (comp, key) => masters[key] || (ips.find(i => i !== primaryOf(comp)) || '')
+      const inComps = c => comps.includes(c)
+      const out = []
+      if (inComps('hdfs')) {
+        if (ip === primaryOf('hdfs')) out.push('NN1')
+        else if (ip === secondaryOf('hdfs', 'hdfs_nn2')) out.push('NN2·Standby')
+        else if ((masters.hdfs_jns ? String(masters.hdfs_jns).split(',') : ips.slice(0, 3)).includes(ip)) out.push('JN')
+      }
+      if (inComps('yarn') && ip === primaryOf('yarn')) out.push('RM1')
+      if (inComps('yarn') && ip === secondaryOf('yarn', 'yarn_rm2')) out.push('RM2·Standby')
+      if (inComps('spark') && ip === primaryOf('spark')) out.push('Master-1')
+      if (inComps('spark') && ip === secondaryOf('spark', 'spark_m2')) out.push('Master-2')
+      if (inComps('flink') && ip === primaryOf('flink')) out.push('JM1')
+      if (inComps('flink') && ip === secondaryOf('flink', 'flink_jm2')) out.push('JM2·Standby')
+      if (inComps('hbase') && ip === primaryOf('hbase')) out.push('HMaster-1')
+      if (inComps('hbase') && ip === secondaryOf('hbase', 'hbase_hm2')) out.push('HMaster-2')
+      if (inComps('hive')) {
+        const ms = [primaryOf('hive')]; if (String(masters.hive_ms2 || '')) ms.push(masters.hive_ms2)
+        const hs = [primaryOf('hive')]; if (String(masters.hive_hs2b || '')) hs.push(masters.hive_hs2b)
+        if (ms.includes(ip)) out.push(ms[1] === ip ? 'MS2·Standby' : 'Metastore')
+        if (hs.includes(ip)) out.push(hs[1] === ip ? 'HS2·Standby' : 'HiveServer2')
+        if (ip === (masters.hive_db || primaryOf('hive'))) out.push('MetaDB')
+      }
+      if (inComps('zookeeper')) {
+        const zk = masters.zookeeper_ips ? String(masters.zookeeper_ips).split(',') : ips.slice(0, 3)
+        const idx = zk.indexOf(ip)
+        if (idx >= 0) out.push('ZK-' + (idx + 1))
+      }
+      return out
+    },
+    installedCompDefs(it) {
+      if (!it) return []
+      const defs = this.compsOf(it.stack_key)
+      return this.instDisplayComps(it).map(k => defs.find(d => d.key === k) || { key: k, label: k, desc: '' })
+    },
+    async removeOneComp(it, def) {
+      try {
+        await ElMessageBox.confirm('将在全部成员上停止并卸载 ' + def.label + '，集群记录保留。', '卸载组件 · ' + def.label, {
+          type: 'warning', confirmButtonText: '确认卸载', cancelButtonText: '取消'
+        })
+      } catch (e) { return }
+      try {
+        const hostIds = (it.hosts || []).filter(h => h.status !== 'removed').map(h => h.host_id)
+        const r = await api.post('/stacks/instances/' + it.id + '/remove-component', {
+          stack_key: it.stack_key, mode: it.mode, name: it.name,
+          host_ids: hostIds, master_host_id: 0,
+          params: { components: def.key }, host_params: {}
+        })
+        if (r.code !== 0) { ElMessage.error(r.message || '卸载组件失败'); return }
+        ElMessage.success('已开始卸载组件')
+        await this.afterStackOp({ ...r.data, op: 'remove_component' })
+      } catch (e) { ElMessage.error(e.message || '卸载组件失败') }
+    },
+    compsOf(key) { return (window.StackForms && window.StackForms[key]?.comps) || [] },
     unusedCompsOf(it) {
-      if (!it || it.stack_key !== 'bigdata') return []
+      const comps = this.compsOf(it?.stack_key)
+      if (!comps.length) return []
       const have = new Set(this.instCompTags(it))
-      return this.bigdataComps.filter(c => !c.required && !have.has(c.key))
+      return comps.filter(c => !c.required && !have.has(c.key))
     },
     removableCompsOf(it) {
-      if (!it || it.stack_key !== 'bigdata') return []
-      return this.instCompTags(it).filter(k => k !== 'hdfs').map(k => {
-        const def = this.bigdataComps.find(c => c.key === k)
-        return def || { key: k, label: this.compLabel(k), desc: '已安装，可单独卸载' }
+      const comps = this.compsOf(it?.stack_key)
+      if (!comps.length) return []
+      const locked = comps.filter(c => c.required).map(c => c.key)
+      return this.instCompTags(it).filter(k => !locked.includes(k)).map(k => {
+        const def = comps.find(c => c.key === k)
+        return def || { key: k, label: k, desc: '已安装，可单独卸载' }
       })
     },
     busyInst(it) { return !it || it.status === 'deploying' },
+    canReinstall(it) { return !!(it && !this.busyInst(it) && it.status !== 'ready') },
+    isPlatformStack(it) {
+      if (!it) return false
+      if (it.category === 'platform') return true
+      return this.compsOf(it.stack_key).length > 0
+    },
     activeInstHosts(it) { return (it?.hosts || []).filter(h => h.status !== 'removed') },
     isContainerStack(it) {
       if (!it) return true
@@ -485,7 +814,24 @@ window.StacksPage = {
       return !s || !!s.requires_docker
     },
     runtimeLabel(it) { return this.isContainerStack(it) ? '容器' : '主机安装' },
-    compLabel(k) { return (this.bigdataComps.find(c => c.key === k) || {}).label || k },
+    stackAvatar(it) {
+      const map = {
+        redis: { t: 'R', c: 'sv-redis' },
+        kafka: { t: 'K', c: 'sv-kafka' },
+        elasticsearch: { t: 'ES', c: 'sv-es' },
+        rabbitmq: { t: 'MQ', c: 'sv-rabbitmq' },
+        rocketmq: { t: 'RM', c: 'sv-rocketmq' },
+        nacos: { t: 'NA', c: 'sv-nacos' },
+        powerjob: { t: 'PJ', c: 'sv-powerjob' },
+        bigdata: { t: 'BD', c: 'sv-bigdata' }
+      }
+      const m = map[it && (it.stack_key || it.key)]
+      if (m) return m
+      const n = ((it && (it.stack_name || it.name)) || '?').trim()
+      const ascii = n.match(/[A-Za-z]/)
+      return { t: ascii ? ascii[0].toUpperCase() : n.slice(0, 1), c: this.isContainerStack(it) ? 'is-container' : 'is-host' }
+    },
+    compLabel(stackKey, k) { return (this.compsOf(stackKey).find(c => c.key === k) || {}).label || k },
     instStatusType(s) { return { ready: 'success', deploying: 'warning', partial: 'danger', failed: 'danger', uninstalled: 'info' }[s] || 'info' },
     instStatusLabel(s) { return { ready: '就绪', deploying: '变更中', partial: '部分成功', failed: '失败', uninstalled: '已卸载' }[s] || s },
     applyInstanceContext(it) {
@@ -494,8 +840,8 @@ window.StacksPage = {
       this.mode = it.mode
       this.memberHostIds = new Set((it.hosts || []).filter(h => h.status !== 'removed').map(h => h.host_id))
       try { this.sharedParams = JSON.parse(it.params_json || '{}') || {} } catch (e) { this.sharedParams = {} }
-      const tags = this.instCompTags(it)
-      this.bdSel = tags.length ? tags.slice() : ['hdfs']
+      const fe = window.StackForms && window.StackForms[it.stack_key]
+      if (fe?.initSelection) fe.initSelection(this, it)
     },
     async prepareInstance(it, op) {
       this.resetWizard()
@@ -551,6 +897,54 @@ window.StacksPage = {
         if (r.code === 0) this.instRuns = r.data || []
       } catch (e) { /* */ }
     },
+    async openVerifyDialog(it) {
+      this.verifyVisible = true
+      this.verifyResult = null
+      this.verifyTarget = it
+      try {
+        const d = await api.get('/stacks/instances/' + it.id)
+        if (d.code === 0) this.verifyTarget = d.data
+      } catch (e) { /* */ }
+      await this.runVerify()
+    },
+    async runVerify() {
+      const it = this.verifyTarget
+      if (!it || it.status === 'uninstalled') return
+      this.verifying = true
+      try {
+        const r = await api.post('/stacks/instances/' + it.id + '/verify', {}, { timeout: 120000 })
+        if (r.code !== 0) { ElMessage.error(r.message || '探活失败'); return }
+        this.verifyResult = r.data
+        if (!r.data?.ok) ElMessage.warning(r.data?.summary || '探活未通过')
+      } catch (e) {
+        ElMessage.error(e.message || '探活失败')
+      } finally { this.verifying = false }
+    },
+    epProtocolLabel(url) {
+      if (!url) return 'TCP'
+      if (url.startsWith('redis-sentinel://')) return 'SENTINEL'
+      if (url.startsWith('redis://')) return 'REDIS'
+      if (url.startsWith('http://') || url.startsWith('https://')) return 'HTTP'
+      if (url.startsWith('zk://')) return 'ZK'
+      if (url.startsWith('mongodb://')) return 'MONGO'
+      if (url.startsWith('kafka://')) return 'KAFKA'
+      if (url.startsWith('rocketmq://')) return 'MQ'
+      return 'TCP'
+    },
+    epProtocolClass(url) {
+      const p = this.epProtocolLabel(url).toLowerCase()
+      return 'proto-' + p
+    },
+    copyText(text) {
+      if (!text) return
+      if (navigator.clipboard) {
+        navigator.clipboard.writeText(text).then(() => ElMessage.success('已复制')).catch(() => {})
+      } else {
+        const ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta); ta.select()
+        try { document.execCommand('copy'); ElMessage.success('已复制') } catch (e) { /* */ }
+        document.body.removeChild(ta)
+      }
+    },
     async renameInstance(it) {
       try {
         const { value } = await ElMessageBox.prompt('集群名称', '重命名', { inputValue: it.name, confirmButtonText: '保存', cancelButtonText: '取消' })
@@ -563,6 +957,19 @@ window.StacksPage = {
         if (this.instDrawerVisible && this.instDetail && this.instDetail.id === it.id) this.openInstance(this.instDetail)
       } catch (e) { /* cancel */ }
     },
+    async reinstallInstance(it) {
+      try {
+        await ElMessageBox.confirm('将按原主机和参数重新部署。已有容器会按脚本幂等重建，实例记录保留。', '重新安装 ' + it.name, {
+          type: 'warning', confirmButtonText: '开始重装', cancelButtonText: '取消'
+        })
+      } catch (e) { return }
+      try {
+        const r = await api.post('/stacks/instances/' + it.id + '/reinstall')
+        if (r.code !== 0) { ElMessage.error(r.message || '重装失败'); return }
+        ElMessage.success('已开始重新安装')
+        await this.afterStackOp({ ...r.data, op: 'reinstall' })
+      } catch (e) { ElMessage.error(e.message || '重装失败') }
+    },
     async uninstallInstance(it) {
       try {
         await ElMessageBox.confirm('将停止全部节点上的套件服务，集群记录会保留为「已卸载」，之后仍可查看流程或删除记录。', '卸载 ' + it.name, {
@@ -573,13 +980,12 @@ window.StacksPage = {
         const r = await api.post('/stacks/instances/' + it.id + '/uninstall')
         if (r.code !== 0) { ElMessage.error(r.message || '卸载失败'); return }
         ElMessage.success('已开始卸载')
-        await this.afterStackOp()
+        await this.afterStackOp({ ...r.data, op: 'uninstall' })
       } catch (e) { ElMessage.error(e.message || '卸载失败') }
     },
     async deleteInstance(it) {
-      const msg = it.status === 'uninstalled'
-        ? '删除集群记录，不可恢复。节点上的服务此前已卸载。'
-        : '仅删除集群记录，不会停止节点上的服务。如需停服请先卸载。'
+      if (it.status !== 'uninstalled') { ElMessage.warning('请先卸载后再删除'); return }
+      const msg = '将删除本地集群配置与全部流程记录，不可恢复。服务器上的服务已在卸载时停止。'
       try {
         await ElMessageBox.confirm(msg, '删除 ' + it.name, { type: 'warning', confirmButtonText: '删除记录', cancelButtonText: '取消' })
       } catch (e) { return }
@@ -592,39 +998,104 @@ window.StacksPage = {
       } catch (e) { ElMessage.error(e.message || '删除失败') }
     },
     resetWizard() {
-      this.step = 1; this.selectedKey = ''; this.mode = ''; this.replicas = '0'; this.masterHostId = 0
-      this.bdSel = ['hdfs']
+      this.step = 1; this.selectedKey = ''; this.mode = ''; this.replicas = '0'; this.masterHostId = 0; this.masters = {}
+      Object.values(window.StackForms || {}).forEach(fe => { if (fe.resetSelection) fe.resetSelection(this) })
       this.selectedHostIds = new Set(); this.sharedParams = {}; this.hostParams = {}
       this.preflightVisible = false; this.preflight = {}; this.deploying = false
       this.wizardOp = 'create'; this.clusterName = ''; this.targetInstance = null; this.memberHostIds = new Set()
     },
     selectStack(s) {
       this.selectedKey = s.key
-      if (s.key === 'bigdata') this.bdSel = ['hdfs']
+      this.masters = {}
+      const fe = window.StackForms && window.StackForms[s.key]
+      if (fe?.onSelect) fe.onSelect(this)
       if (s.modes && s.modes.length) this.onModeChange(s.modes[0].key)
     },
-    toggleBigdataComp(key, val) {
-      const c = this.bigdataComps.find(x => x.key === key)
-      if (c?.required && this.wizardOp === 'create') return
-      const set = new Set(this.bdSel)
-      if (val) {
-        set.add(key)
-        // 依赖自动联动：勾 HBase 带上 ZooKeeper，勾 Trino 带上 Hive
-        ;(c?.deps || []).forEach(d => set.add(d))
-      } else {
-        // 被依赖的组件不能取消（先取消依赖它的组件）
-        const needed = this.bigdataComps.some(x => this.bdSel.includes(x.key) && (x.deps || []).includes(key))
-        if (needed) {
-          ElMessage.warning(`组件 ${c.label} 正被其他已选组件依赖，请先取消对应组件`)
-          return
-        }
-        set.delete(key)
+    formToggle(key, val) {
+      const fe = this.formEntry
+      if (fe?.toggle) fe.toggle(this, key, val)
+      this.syncMasters()
+    },
+    // 角色规划：清理未勾选组件 / 已移除主机的指向
+    syncMasters() {
+      const fe = this.formEntry
+      if (!fe?.masterComps && !fe?.haRoles) return
+      const valid = new Set(this.selectedHostIds)
+      const keep = new Set()
+      ;(fe.masterComps || []).forEach(mc => { if (this.bdSel.includes(mc.key)) keep.add(mc.key) })
+      ;(fe.haRoles || []).forEach(g => { if (this.bdSel.includes(g.comp)) g.roles.forEach(r => keep.add(r.key)) })
+      Object.keys(this.masters).forEach(k => {
+        const v = this.masters[k]
+        if (!keep.has(k)) { delete this.masters[k]; return }
+        if (Array.isArray(v)) this.masters[k] = v.filter(id => valid.has(id))
+        else if (!valid.has(v)) delete this.masters[k]
+      })
+    },
+    isHaMode() { return this.sharedParams?.ha === 'true' },
+    // 提交用：组件→主角色/从角色主机 IP 的 JSON（未指定的回落 NameNode / 主节点）
+    mastersForSubmit() {
+      const fe = this.formEntry
+      if (!fe?.masterComps && !fe?.haRoles) return ''
+      const byId = {}
+      this.hosts.forEach(h => { byId[h.id] = h.ip })
+      const nnId = this.masters.hdfs || this.resolveMasterHostId()
+      const primary = (nnId && byId[nnId]) || (this.hosts.find(h => h.id === this.masterHostId) || {}).ip || ''
+      const out = {}
+      if (!this.isHaMode() || !fe.haRoles) {
+        ;(fe.masterComps || []).forEach(mc => {
+          if (!this.bdSel.includes(mc.key)) return
+          const ip = (this.masters[mc.key] && byId[this.masters[mc.key]]) || primary
+          if (ip) out[mc.key] = ip
+        })
+        return Object.keys(out).length ? JSON.stringify(out) : ''
       }
-      if (this.wizardOp === 'remove_component' || this.wizardOp === 'add_component') {
-        this.bdSel = [...set]
-        return
+      // HA：全角色矩阵（主角色行与从角色 key 一同提交，后端确定性算法接管自动落点）
+      ;(fe.haRoles || []).forEach(grp => {
+        if (!this.bdSel.includes(grp.comp)) return
+        grp.roles.forEach(r => {
+          const v = this.masters[r.key]
+          if (r.multi) {
+            const ips = (Array.isArray(v) ? v : []).map(id => byId[id]).filter(Boolean)
+            if (ips.length) out[r.key] = ips.join(',')
+          } else {
+            let ip = v && byId[v]
+            if (r.key === grp.comp && !ip) ip = primary
+            if (ip) out[r.key] = ip
+          }
+        })
+      })
+      return Object.keys(out).length ? JSON.stringify(out) : ''
+    },
+    resolveMasterHostId() {
+      if (this.useRolePlan) {
+        const nn = this.masters.hdfs
+        if (nn && this.selectedHostIds.has(nn)) return nn
+        if (this.masterHostId && this.selectedHostIds.has(this.masterHostId)) return this.masterHostId
+        return this.selectedHosts[0]?.id || 0
       }
-      this.bdSel = this.bigdataComps.map(x => x.key).filter(k => set.has(k))
+      if (this.needMaster) return this.masterHostId
+      return this.masterHostId || 0
+    },
+    hostRolePlanSummary(h) {
+      const fe = this.formEntry
+      if ((!fe?.masterComps && !fe?.haRoles) || !h) return ''
+      const labels = []
+      ;(fe.masterComps || []).forEach(mc => {
+        if (!this.bdSel.includes(mc.key)) return
+        if (this.masters[mc.key] === h.id) labels.push(mc.label)
+      })
+      ;(fe.haRoles || []).forEach(grp => {
+        if (!this.bdSel.includes(grp.comp)) return
+        grp.roles.forEach(r => {
+          const v = this.masters[r.key]
+          if (r.multi) {
+            if (Array.isArray(v) && v.includes(h.id)) labels.push(r.label.replace(/ ×\d+$/, ''))
+          } else if (v === h.id && !labels.includes(r.label)) {
+            labels.push(r.label)
+          }
+        })
+      })
+      return labels.join(' · ')
     },
     onModeChange(key) {
       this.mode = key
@@ -640,12 +1111,54 @@ window.StacksPage = {
         if (v.name === 'home_dir') v._modeDefault = home
       })
     },
+    onBoolVar(name, val) {
+      this.$set(this.sharedParams, name, val ? 'true' : 'false')
+    },
+    onHaToggle(val) {
+      this.sharedParams.ha = val ? 'true' : 'false'
+      const fe = this.formEntry
+      if (fe?.onHaToggle) fe.onHaToggle(this, val)
+    },
     goStep(n) {
       this.step = n
-      if (n >= 2) this.loadHosts()
-      if (n === 2 && this.needMaster && !this.masterHostId && this.selectedHosts.length) {
-        this.masterHostId = this.selectedHosts[0].id
+      if (n >= 2) {
+        Promise.resolve(this.loadHosts()).then(() => {
+          if (this.needMaster && !this.masterHostId && this.selectedHosts.length) {
+            this.masterHostId = this.selectedHosts[0].id
+          }
+          if (this.useRolePlan) this.ensureDefaultRoles()
+          this.$nextTick(() => this.syncRoleHostTableSelection())
+        })
       }
+    },
+    onRoleHostSelection(rows) {
+      if (this._syncingRoleTable) return
+      this.selectedHostIds = new Set((rows || []).map(h => h.id))
+      this.syncMasters()
+      this.ensureDefaultRoles()
+    },
+    syncRoleHostTableSelection() {
+      if (!this.useRolePlan) return
+      const table = this.$refs.roleHostTable
+      if (!table) return
+      const rows = this.filteredHosts || []
+      this._syncingRoleTable = true
+      table.clearSelection()
+      rows.forEach(h => {
+        if (this.selectedHostIds.has(h.id)) table.toggleRowSelection(h, true)
+      })
+      this.$nextTick(() => { this._syncingRoleTable = false })
+    },
+    ensureDefaultRoles() {
+      if (!this.useRolePlan || !this.selectedHosts.length) return
+      const first = this.selectedHosts[0].id
+      // 新建：NameNode 默认落在首台已选主机
+      if (this.wizardOp === 'create' && this.bdSel.includes('hdfs')) {
+        if (!this.masters.hdfs || !this.selectedHostIds.has(this.masters.hdfs)) {
+          this.masters = { ...this.masters, hdfs: first }
+        }
+      }
+      this.masterHostId = this.resolveMasterHostId()
     },
     toggleHost(id) {
       const next = new Set(this.selectedHostIds)
@@ -654,6 +1167,9 @@ window.StacksPage = {
       if (this.needMaster) {
         if (!next.has(this.masterHostId)) this.masterHostId = next.size ? [...next][0] : 0
       }
+      this.syncMasters()
+      if (this.useRolePlan) this.ensureDefaultRoles()
+      this.$nextTick(() => this.syncRoleHostTableSelection())
     },
     toggleSelectAll() {
       if (this.selectedHosts.length === this.filteredHosts.length) this.selectedHostIds = new Set()
@@ -661,6 +1177,9 @@ window.StacksPage = {
       if (this.needMaster && this.selectedHosts.length && !this.selectedHostIds.has(this.masterHostId)) {
         this.masterHostId = this.selectedHosts[0]?.id || 0
       }
+      this.syncMasters()
+      if (this.useRolePlan) this.ensureDefaultRoles()
+      this.$nextTick(() => this.syncRoleHostTableSelection())
     },
     toggleHostSortOrder() { this.hostSort = { ...this.hostSort, order: this.hostSort.order === 'asc' ? 'desc' : 'asc' } },
     sortHostList(list, sort) {
@@ -710,8 +1229,9 @@ window.StacksPage = {
         if (r.code !== 0) { ElMessage.error(r.message || '创建失败'); return }
         ElMessage.success('已开始执行')
         this.preflightVisible = false
+        const startedOp = this.wizardOp
         this.wizardVisible = false
-        await this.afterStackOp()
+        await this.afterStackOp({ ...r.data, op: startedOp })
       } catch (e) { ElMessage.error(e.message || '创建失败') }
       finally { this.deploying = false }
     },
@@ -725,8 +1245,9 @@ window.StacksPage = {
         if (!r) return
         if (r.code !== 0) { ElMessage.error(r.message || '缩容失败'); return }
         ElMessage.success('已开始缩容')
+        const startedOp = this.wizardOp
         this.wizardVisible = false
-        await this.afterStackOp()
+        await this.afterStackOp({ ...r.data, op: startedOp })
       } catch (e) { ElMessage.error(e.message || '缩容失败') }
       finally { this.deploying = false }
     },
@@ -740,22 +1261,22 @@ window.StacksPage = {
         if (!r) return
         if (r.code !== 0) { ElMessage.error(r.message || '卸载组件失败'); return }
         ElMessage.success('已开始卸载组件')
+        const startedOp = this.wizardOp
         this.wizardVisible = false
-        await this.afterStackOp()
+        await this.afterStackOp({ ...r.data, op: startedOp })
       } catch (e) { ElMessage.error(e.message || '卸载组件失败') }
       finally { this.deploying = false }
     },
     async submitWizard() {
       const host_params = {}
       this.selectedHosts.forEach(h => { if (this.hostParams[h.id]) host_params[String(h.id)] = this.hostParams[h.id] })
-      const params = { ...this.sharedParams }
-      if (this.selectedKey === 'redis' && this.mode === 'cluster') params.replicas = String(this.replicas)
-      if (this.selectedKey === 'bigdata') params.components = this.bdSel.join(',')
+      const extra = (this.formEntry?.extraParams && this.formEntry.extraParams(this)) || {}
+      const params = { ...this.sharedParams, ...extra }
       const body = {
         stack_key: this.selectedKey, mode: this.mode,
         name: this.clusterName.trim(),
         host_ids: this.selectedHosts.map(h => h.id),
-        master_host_id: this.needMaster ? this.masterHostId : 0,
+        master_host_id: this.resolveMasterHostId(),
         params, host_params
       }
       if (this.wizardOp === 'create') return api.post('/stacks/run', body)
@@ -764,11 +1285,23 @@ window.StacksPage = {
       const path = { scale_out: 'scale-out', scale_in: 'scale-in', add_component: 'add-component', remove_component: 'remove-component' }[this.wizardOp]
       return api.post('/stacks/instances/' + id + '/' + path, body)
     },
-    async afterStackOp() {
+    async afterStackOp(data) {
       await this.loadInstances()
       if (this.instDrawerVisible && this.instDetail?.id) {
         await this.openInstance(this.instDetail)
       }
+      const runId = data && (data.run_id || data.id)
+      if (runId) {
+        this.instDrawerVisible = false
+        await this.openDrawer({ id: runId, status: 'running', op: data.op || this.wizardOp || 'create' })
+      }
+    },
+    onLogDrawerBeforeClose(done) {
+      if (this.logDrawerLocked) {
+        ElMessage.warning('加装进行中，请等待完成后再关闭')
+        return
+      }
+      done()
     },
     connectSetup() {
       this.closeSetup()
@@ -852,22 +1385,20 @@ window.StacksPage = {
       if (el) el.scrollTop = el.scrollHeight
     },
     hostRoleTag(h) {
-      if (h.id === this.masterHostId) {
-        if (this.selectedKey === 'elasticsearch' || this.selectedKey === 'rabbitmq') return '引导'
-        return '主'
-      }
+      const isMaster = h.id === this.masterHostId
+      const t = this.formEntry?.roleTag?.(this, isMaster)
+      if (t) return t
+      if (isMaster) return '主'
       if (this.mode === 'replication' || this.mode === 'sentinel') return '从'
-      if (this.selectedKey === 'rocketmq' && this.mode === 'broker') return '从'
-      if (this.selectedKey === 'elasticsearch' || this.selectedKey === 'rabbitmq') return '加入'
       return '工作节点'
     },
-    opLabel(op) { return { create: '创建', scale_out: '扩容', scale_in: '缩容', add_component: '加装', uninstall: '卸载', remove_component: '卸组件' }[op] || op || '创建' },
+    opLabel(op) { return { create: '创建', reinstall: '重装', scale_out: '扩容', scale_in: '缩容', add_component: '加装', uninstall: '卸载', remove_component: '卸组件' }[op] || op || '创建' },
     modeLabel(m, stackKey) {
       const key = stackKey || this.recordMeta?.stack_key || this.selectedKey
       const s = this.stacks.find(x => x.key === key)
       const md = s && s.modes ? s.modes.find(x => x.key === m) : null
       if (md && md.label) return md.label
-      return { replication: '主从', sentinel: '哨兵', cluster: '集群' }[m] || m
+      return { replication: '主从', sentinel: '哨兵', cluster: '集群', standalone: '单机', single: '单机', ha: '高可用', kraft: 'KRaft 集群', zk: 'ZK 集群' }[m] || m
     },
     roleLabel(r) { return { master: '主', replica: '从', node: '节点', worker: '工作节点' }[r] || r },
     phaseName(p) { return { prereq: 'Docker', node: '节点', bootstrap: '初始化' }[p] || p || '' },

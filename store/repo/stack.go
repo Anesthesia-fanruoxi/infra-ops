@@ -455,3 +455,94 @@ func (r *StackRepo) ListRunsByInstance(instanceID int64) ([]model.StackRun, erro
 	}
 	return items, rows.Err()
 }
+
+// HostClusterMember 主机参与的集群信息。
+type HostClusterMember struct {
+	InstanceID    int64               `json:"instance_id"`
+	InstanceName  string              `json:"instance_name"`
+	StackKey      string              `json:"stack_key"`
+	StackName     string              `json:"stack_name"`
+	Mode          string              `json:"mode"`
+	Role          string              `json:"role"`      // 本机在集群中的角色
+	Status        string              `json:"status"`   // 集群状态
+	Peers         []ClusterPeer       `json:"peers"`    // 集群其他成员
+	Services      []model.HostService `json:"services"` // 本机在该集群下的服务入口
+}
+
+// ClusterPeer 集群成员。
+type ClusterPeer struct {
+	HostIP string `json:"host_ip"`
+	Role   string `json:"role"`
+}
+
+// GetHostClusters 查询某台主机参与的所有套件集群，含成员列表和服务入口。
+func (r *StackRepo) GetHostClusters(hostID int64) ([]HostClusterMember, error) {
+	rows, err := store.DB.Query(
+		`SELECT si.id, si.name, si.stack_key, si.stack_name, si.mode, si.status,
+		        sih.role
+		 FROM stack_instance_hosts sih
+		 JOIN stack_instances si ON sih.instance_id = si.id
+		 WHERE sih.host_id=? AND sih.status='active'
+		 ORDER BY si.id DESC`, hostID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var items []HostClusterMember
+	for rows.Next() {
+		var m HostClusterMember
+		if err := rows.Scan(&m.InstanceID, &m.InstanceName, &m.StackKey, &m.StackName, &m.Mode, &m.Status, &m.Role); err != nil {
+			return nil, err
+		}
+		items = append(items, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(items) == 0 {
+		return []HostClusterMember{}, nil
+	}
+
+	for i := range items {
+		peers, err := store.DB.Query(
+			`SELECT host_ip, role FROM stack_instance_hosts
+			 WHERE instance_id=? AND status='active' AND host_id!=?
+			 ORDER BY seq, id`, items[i].InstanceID, hostID,
+		)
+		if err != nil {
+			return nil, err
+		}
+		for peers.Next() {
+			var p ClusterPeer
+			if err := peers.Scan(&p.HostIP, &p.Role); err != nil {
+				peers.Close()
+				return nil, err
+			}
+			items[i].Peers = append(items[i].Peers, p)
+		}
+		peers.Close()
+
+		svcRows, err := store.DB.Query(
+			`SELECT id, host_id, host_ip, service_name, url, web, template_id, updated_at
+			 FROM host_services WHERE host_id=? AND instance_id=?
+			 ORDER BY web DESC, id`, hostID, items[i].InstanceID,
+		)
+		if err != nil {
+			return nil, err
+		}
+		for svcRows.Next() {
+			var s model.HostService
+			var web int
+			if err := svcRows.Scan(&s.ID, &s.HostID, &s.HostIP, &s.ServiceName, &s.URL, &web, &s.TemplateID, &s.UpdatedAt); err != nil {
+				svcRows.Close()
+				return nil, err
+			}
+			s.Web = web == 1
+			items[i].Services = append(items[i].Services, s)
+		}
+		svcRows.Close()
+	}
+	return items, nil
+}

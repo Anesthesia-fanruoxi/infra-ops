@@ -10,6 +10,14 @@ COMPONENTS="{{components}}"   # 逗号分隔子集: hdfs,spark,flink,hive（hdfs
 ROLE="{{__role}}"
 SELF_IP="{{__ip}}"
 MASTER_IP="{{__master_ip}}"
+# 各组件主角色所在主机（角色规划；引擎注入 __master_<comp>，未规划时回落主节点）
+NN_IP="{{__master_hdfs}}"
+RM_IP="{{__master_yarn}}"
+SPARK_MASTER_IP="{{__master_spark}}"
+JM_IP="{{__master_flink}}"
+HIVE_IP="{{__master_hive}}"
+HMASTER_IP="{{__master_hbase}}"
+TRINO_COORD_IP="{{__master_trino}}"
 NN_RPC_PORT="{{nn_rpc_port}}"
 REPLICATION="{{replication}}"
 SPARK_MASTER_PORT="{{master_port}}"
@@ -42,7 +50,16 @@ NM_MEM=${NM_MEM:-8192}
 NM_VCORES=${NM_VCORES:-4}
 TRINO_HTTP_PORT=${TRINO_HTTP_PORT:-8080}
 TRINO_MEM=${TRINO_MEM:-4G}
+NN_IP=${NN_IP:-${MASTER_IP}}
+RM_IP=${RM_IP:-${MASTER_IP}}
+SPARK_MASTER_IP=${SPARK_MASTER_IP:-${MASTER_IP}}
+JM_IP=${JM_IP:-${MASTER_IP}}
+HIVE_IP=${HIVE_IP:-${MASTER_IP}}
+HMASTER_IP=${HMASTER_IP:-${MASTER_IP}}
+TRINO_COORD_IP=${TRINO_COORD_IP:-${MASTER_IP}}
 umask 022
+
+is_master() { [ "${SELF_IP}" = "$1" ]; }
 
 # 同名旧容器迁移：非 compose 管理的先移除（幂等）
 migrate_old() {
@@ -70,6 +87,9 @@ wait_port() { # wait_port <端口> <次数> <容器名> <角色中文名>
 }
 
 echo "=== 大数据底座节点部署: 组件[${COMPONENTS}] 角色[${ROLE}] 本机 ${SELF_IP} ==="
+
+# HA 模式扩展（注入 ha.sh：HA 变量 + 各组件双实例部署函数；非 HA 时不调用）
+@@HA_SH@@
 
 # ============ ZooKeeper（可选，全部节点组建 ensemble） ============
 if has zookeeper; then
@@ -120,7 +140,9 @@ XMLEOF
 @@HDFS_SITE@@
 XMLEOF
 
-  if [ "${ROLE}" = "master" ]; then
+  if [ "${HA}" = "true" ]; then
+    deploy_hdfs_ha
+  elif is_master "${NN_IP}"; then
     C_HDFS=hadoop-namenode; PORT_HDFS=9870; CN_HDFS=NameNode
     mkdir -p "${HADOOP_HOME}/data/namenode"
     cat > "${HADOOP_HOME}/compose.yml" <<'YAMLEOF'
@@ -157,12 +179,18 @@ services:
       - {{home_dir}}/hadoop/data/datanode:/hadoop/dfs/data
 YAMLEOF
   fi
-  migrate_old "${C_HDFS}"
-  echo "[HDFS] 拉取镜像 ${IMAGE_H}"
-  docker compose -f "${HADOOP_HOME}/compose.yml" pull
-  docker compose -f "${HADOOP_HOME}/compose.yml" up -d
-  wait_port "${PORT_HDFS}" 30 "${C_HDFS}" "HDFS ${CN_HDFS}"
-  echo "[HDFS] ${CN_HDFS} 已就绪"
+  if [ "${HA}" != "true" ]; then
+    # apache/hadoop 镜像容器内以 hadoop(UID 1000) 运行，宿主机数据目录需归其所有，否则 DataNode/NameNode chmod 失败退出
+    chown -R 1000:1000 "${HADOOP_HOME}/data" 2>/dev/null || true
+    chmod -R a+rwx "${HADOOP_HOME}/data" 2>/dev/null || true
+    migrate_old "${C_HDFS}"
+    echo "[HDFS] 拉取镜像 ${IMAGE_H}"
+    docker compose -f "${HADOOP_HOME}/compose.yml" pull
+    # --remove-orphans：主节点角色变化时清理旧的 datanode/namenode 孤儿容器
+    docker compose -f "${HADOOP_HOME}/compose.yml" up -d --remove-orphans
+    wait_port "${PORT_HDFS}" 30 "${C_HDFS}" "HDFS ${CN_HDFS}"
+    echo "[HDFS] ${CN_HDFS} 已就绪"
+  fi
 fi
 
 # ============ Spark（可选） ============
@@ -170,7 +198,9 @@ if has spark; then
   SPARK_HOME="${HOME_DIR}/spark"
   IMAGE_S="{{image_spark}}"
   mkdir -p "${SPARK_HOME}/data"
-  if [ "${ROLE}" = "master" ]; then
+  if [ "${HA}" = "true" ]; then
+    deploy_spark_ha
+  elif is_master "${SPARK_MASTER_IP}"; then
     C_SPARK=spark-master; PORT_SPARK="${SPARK_WEBUI_PORT}"; CN_SPARK=Master
     cat > "${SPARK_HOME}/compose.yml" <<'YAMLEOF'
 name: bigdata-spark
@@ -196,7 +226,7 @@ services:
     restart: always
     network_mode: host
     user: root
-    command: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.worker.Worker", "spark://{{__master_ip}}:{{master_port}}", "--host", "{{__ip}}", "--webui-port", "8081"]
+    command: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.worker.Worker", "spark://{{__master_spark}}:{{master_port}}", "--host", "{{__ip}}", "--webui-port", "8081"]
     environment:
       SPARK_WORKER_CORES: "{{worker_cores}}"
       SPARK_WORKER_MEMORY: "{{worker_mem}}"
@@ -204,21 +234,23 @@ services:
       - {{home_dir}}/spark/data:/opt/spark/work-dir
 YAMLEOF
   fi
-  migrate_old "${C_SPARK}"
-  echo "[Spark] 拉取镜像 ${IMAGE_S}"
-  docker compose -f "${SPARK_HOME}/compose.yml" pull
-  docker compose -f "${SPARK_HOME}/compose.yml" up -d
-  wait_port "${PORT_SPARK}" 20 "${C_SPARK}" "Spark ${CN_SPARK}"
-  if [ "${ROLE}" != "master" ]; then
-    for _ in $(seq 1 10); do
-      if docker logs "${C_SPARK}" 2>&1 | grep -q "Successfully registered with master"; then
-        echo "[Spark] Worker 已注册到 spark://${MASTER_IP}:${SPARK_MASTER_PORT}"
-        break
-      fi
-      sleep 3
-    done
+  if [ "${HA}" != "true" ]; then
+    migrate_old "${C_SPARK}"
+    echo "[Spark] 拉取镜像 ${IMAGE_S}"
+    docker compose -f "${SPARK_HOME}/compose.yml" pull
+    docker compose -f "${SPARK_HOME}/compose.yml" up -d
+    wait_port "${PORT_SPARK}" 20 "${C_SPARK}" "Spark ${CN_SPARK}"
+    if [ "${ROLE}" != "master" ]; then
+      for _ in $(seq 1 10); do
+        if docker logs "${C_SPARK}" 2>&1 | grep -q "Successfully registered with master"; then
+          echo "[Spark] Worker 已注册到 spark://${SPARK_MASTER_IP}:${SPARK_MASTER_PORT}"
+          break
+        fi
+        sleep 3
+      done
+    fi
+    echo "[Spark] ${CN_SPARK} 已就绪"
   fi
-  echo "[Spark] ${CN_SPARK} 已就绪"
 fi
 
 # ============ Flink（可选） ============
@@ -226,7 +258,9 @@ if has flink; then
   FLINK_HOME="${HOME_DIR}/flink"
   IMAGE_F="{{image_flink}}"
   mkdir -p "${FLINK_HOME}"
-  if [ "${ROLE}" = "master" ]; then
+  if [ "${HA}" = "true" ]; then
+    deploy_flink_ha
+  elif is_master "${JM_IP}"; then
     C_FLINK=flink-jobmanager; CN_FLINK=JobManager
     cat > "${FLINK_HOME}/compose.yml" <<'YAMLEOF'
 name: bigdata-flink
@@ -259,30 +293,32 @@ services:
     command: taskmanager
     environment:
       FLINK_PROPERTIES: |
-        jobmanager.rpc.address: {{__master_ip}}
+        jobmanager.rpc.address: {{__master_flink}}
         jobmanager.rpc.port: {{jm_rpc_port}}
         taskmanager.host: {{__ip}}
         taskmanager.bind-host: 0.0.0.0
         taskmanager.numberOfTaskSlots: {{tm_slots}}
 YAMLEOF
   fi
-  migrate_old "${C_FLINK}"
-  echo "[Flink] 拉取镜像 ${IMAGE_F}"
-  docker compose -f "${FLINK_HOME}/compose.yml" pull
-  docker compose -f "${FLINK_HOME}/compose.yml" up -d
-  if [ "${ROLE}" = "master" ]; then
-    wait_port 8081 20 "${C_FLINK}" "Flink JobManager"
-  else
-    sleep 5
-    for _ in $(seq 1 20); do
-      if docker logs "${C_FLINK}" 2>&1 | grep -qi "successful registration\|registered at jobmanager"; then
-        echo "[Flink] TaskManager 已注册到 JobManager ${MASTER_IP}:${JM_RPC_PORT}"
-        break
-      fi
-      sleep 3
-    done
+  if [ "${HA}" != "true" ]; then
+    migrate_old "${C_FLINK}"
+    echo "[Flink] 拉取镜像 ${IMAGE_F}"
+    docker compose -f "${FLINK_HOME}/compose.yml" pull
+    docker compose -f "${FLINK_HOME}/compose.yml" up -d
+    if [ "${ROLE}" = "master" ]; then
+      wait_port 8081 20 "${C_FLINK}" "Flink JobManager"
+    else
+      sleep 5
+      for _ in $(seq 1 20); do
+        if docker logs "${C_FLINK}" 2>&1 | grep -qi "successful registration\|registered at jobmanager"; then
+          echo "[Flink] TaskManager 已注册到 JobManager ${JM_IP}:${JM_RPC_PORT}"
+          break
+        fi
+        sleep 3
+      done
+    fi
+    echo "[Flink] ${CN_FLINK} 已就绪"
   fi
-  echo "[Flink] ${CN_FLINK} 已就绪"
 fi
 
 # ============ YARN（可选，主节点 RM / 工作节点 NM） ============
@@ -293,7 +329,9 @@ if has yarn; then
   cat > "${YARN_HOME}/conf/yarn-site.xml" <<'XMLEOF'
 @@YARN_SITE@@
 XMLEOF
-  if [ "${ROLE}" = "master" ]; then
+  if [ "${HA}" = "true" ]; then
+    deploy_yarn_ha
+  elif is_master "${RM_IP}"; then
     C_YARN=hadoop-resourcemanager; PORT_YARN=8088; CN_YARN=ResourceManager
     cat > "${YARN_HOME}/compose.yml" <<'YAMLEOF'
 name: bigdata-yarn
@@ -324,17 +362,28 @@ services:
       - {{home_dir}}/yarn/conf/yarn-site.xml:/opt/hadoop/etc/hadoop/yarn-site.xml
 YAMLEOF
   fi
-  migrate_old "${C_YARN}"
-  echo "[YARN] 拉取镜像 ${IMAGE_Y}"
-  docker compose -f "${YARN_HOME}/compose.yml" pull
-  docker compose -f "${YARN_HOME}/compose.yml" up -d
-  wait_port "${PORT_YARN}" 20 "${C_YARN}" "YARN ${CN_YARN}"
-  echo "[YARN] ${CN_YARN} 已就绪"
+  if [ "${HA}" != "true" ]; then
+    migrate_old "${C_YARN}"
+    echo "[YARN] 拉取镜像 ${IMAGE_Y}"
+    docker compose -f "${YARN_HOME}/compose.yml" pull
+    docker compose -f "${YARN_HOME}/compose.yml" up -d
+    wait_port "${PORT_YARN}" 20 "${C_YARN}" "YARN ${CN_YARN}"
+    echo "[YARN] ${CN_YARN} 已就绪"
+  fi
 fi
 
 # ============ Hive（可选，仅主节点） ============
 if has hive; then
-  if [ "${ROLE}" = "master" ]; then
+  if [ "${HA}" = "true" ]; then
+    # HA：任意宿主都可能承载 MS1/MS2/HS1/HS2/metastore_db，deploy_hive_ha 内部按角色判定
+    HIVE_HOME="${HOME_DIR}/hive"
+    IMAGE_HV="{{image_hive}}"
+    mkdir -p "${HIVE_HOME}/conf" "${HIVE_HOME}/data"
+    cat > "${HIVE_HOME}/conf/hive-site.xml" <<'XMLEOF'
+@@HIVE_SITE@@
+XMLEOF
+    deploy_hive_ha
+  elif is_master "${HIVE_IP}"; then
     HIVE_HOME="${HOME_DIR}/hive"
     IMAGE_HV="{{image_hive}}"
     mkdir -p "${HIVE_HOME}/conf" "${HIVE_HOME}/data/derby" "${HIVE_HOME}/data/warehouse"
@@ -378,7 +427,7 @@ YAMLEOF
     wait_port 10000 80 "hive-hiveserver2" "HiveServer2"
     echo "[Hive] Metastore/HiveServer2 已就绪"
   else
-    echo "[Hive] Metastore/HiveServer2 为单实例服务（内置 Derby），仅在主节点部署；本机提交作业用 beeline 连接 ${MASTER_IP}:10000"
+    echo "[Hive] Metastore/HiveServer2 为单实例服务（内置 Derby），仅部署在 ${HIVE_IP}；本机提交作业用 beeline 连接 ${HIVE_IP}:10000"
   fi
 fi
 
@@ -390,7 +439,9 @@ if has hbase; then
   cat > "${HBASE_HOME}/conf/hbase-site.xml" <<'XMLEOF'
 @@HBASE_SITE@@
 XMLEOF
-  if [ "${ROLE}" = "master" ]; then
+  if [ "${HA}" = "true" ]; then
+    deploy_hbase_ha
+  elif is_master "${HMASTER_IP}"; then
     C_HB=hbase-master; PORT_HB=16010; CN_HB=HMaster
     cat > "${HBASE_HOME}/compose.yml" <<'YAMLEOF'
 name: bigdata-hbase
@@ -421,12 +472,14 @@ services:
       - {{home_dir}}/hbase/data:/opt/hbase/data
 YAMLEOF
   fi
-  migrate_old "${C_HB}"
-  echo "[HBase] 拉取镜像 ${IMAGE_HB}"
-  docker compose -f "${HBASE_HOME}/compose.yml" pull
-  docker compose -f "${HBASE_HOME}/compose.yml" up -d
-  wait_port "${PORT_HB}" 40 "${C_HB}" "HBase ${CN_HB}"
-  echo "[HBase] ${CN_HB} 已就绪"
+  if [ "${HA}" != "true" ]; then
+    migrate_old "${C_HB}"
+    echo "[HBase] 拉取镜像 ${IMAGE_HB}"
+    docker compose -f "${HBASE_HOME}/compose.yml" pull
+    docker compose -f "${HBASE_HOME}/compose.yml" up -d
+    wait_port "${PORT_HB}" 40 "${C_HB}" "HBase ${CN_HB}"
+    echo "[HBase] ${CN_HB} 已就绪"
+  fi
 fi
 
 # ============ Trino（可选，主节点 coordinator / 工作节点 worker） ============
@@ -451,7 +504,7 @@ PROPSEOF
 -XX:-UseBiasedLocking
 -XX:ReservedCodeCacheSize=512M
 JVMEOF
-  if [ "${ROLE}" = "master" ]; then
+  if is_master "${TRINO_COORD_IP}"; then
     cat > "${TRINO_HOME}/etc/config.properties" <<CFGEOF
 coordinator=true
 node-scheduler.include-coordinator=true
@@ -464,13 +517,14 @@ CFGEOF
     cat > "${TRINO_HOME}/etc/config.properties" <<CFGEOF
 coordinator=false
 http-server.http.port=${TRINO_HTTP_PORT}
-discovery.uri=http://${MASTER_IP}:${TRINO_HTTP_PORT}
+discovery.uri=http://${TRINO_COORD_IP}:${TRINO_HTTP_PORT}
 CFGEOF
     C_TRINO=trino-worker; CN_TRINO=Worker
   fi
   cat > "${TRINO_HOME}/etc/catalog/hive.properties" <<CATEOF
 connector.name=hive
-hive.metastore.uri=thrift://${MASTER_IP}:9083
+# {{__hive_ms_uris}}：HA=双 Metastore uri（逗号分隔自动 failover），非 HA=单 uri（thrift://HIVE_IP:9083）
+hive.metastore.uri={{__hive_ms_uris}}
 CATEOF
   cat > "${TRINO_HOME}/compose.yml" <<'YAMLEOF'
 name: bigdata-trino
@@ -490,11 +544,11 @@ YAMLEOF
   docker compose -f "${TRINO_HOME}/compose.yml" pull
   docker compose -f "${TRINO_HOME}/compose.yml" up -d
   wait_port "${TRINO_HTTP_PORT}" 40 "trino-node" "Trino ${CN_TRINO}"
-  echo "[Trino] ${CN_TRINO} 已就绪（hive catalog -> ${MASTER_IP}:9083）"
+  echo "[Trino] ${CN_TRINO} 已就绪（hive catalog -> {{__hive_ms_uris}}）"
 fi
 
 # ============ 汇总 ============
-echo "=== 节点部署完成: ${SELF_IP}（角色 ${ROLE}）==="
+echo "=== 节点部署完成: ${SELF_IP}（主节点 ${MASTER_IP}）==="
 if [ -d "${HOME_DIR}/zookeeper" ]; then echo "  zk     : ${HOME_DIR}/zookeeper/compose.yml"; fi
 if [ -d "${HOME_DIR}/hadoop" ]; then echo "  hadoop : ${HOME_DIR}/hadoop/compose.yml"; fi
 if [ -d "${HOME_DIR}/yarn" ]; then echo "  yarn   : ${HOME_DIR}/yarn/compose.yml"; fi
@@ -503,14 +557,25 @@ if [ -d "${HOME_DIR}/flink" ]; then echo "  flink  : ${HOME_DIR}/flink/compose.y
 if [ -d "${HOME_DIR}/hive" ]; then echo "  hive   : ${HOME_DIR}/hive/compose.yml"; fi
 if [ -d "${HOME_DIR}/hbase" ]; then echo "  hbase  : ${HOME_DIR}/hbase/compose.yml"; fi
 if [ -d "${HOME_DIR}/trino" ]; then echo "  trino  : ${HOME_DIR}/trino/compose.yml"; fi
-if [ "${ROLE}" = "master" ]; then
-  if has zookeeper; then echo "  ZooKeeper   : ${SELF_IP}:2181（ensemble 全体节点）"; fi
-  if has hdfs; then echo "  HDFS WebUI  : http://${SELF_IP}:9870（fs.defaultFS=hdfs://${MASTER_IP}:${NN_RPC_PORT}）"; fi
-  if has yarn; then echo "  YARN RM UI  : http://${SELF_IP}:8088（提交作业用 yarn jar）"; fi
-  if has spark; then echo "  Spark UI    : http://${SELF_IP}:${SPARK_WEBUI_PORT}（接入 spark://${SELF_IP}:${SPARK_MASTER_PORT}）"; fi
-  if has flink; then echo "  Flink UI    : http://${SELF_IP}:8081"; fi
-  if has hive; then echo "  Hive        : jdbc:hive2://${SELF_IP}:10000（beeline -u ... -n hive）"; fi
-  if has hbase; then echo "  HBase UI    : http://${SELF_IP}:16010（shell: docker exec -it hbase-master hbase shell）"; fi
-  if has trino; then echo "  Trino UI    : http://${SELF_IP}:${TRINO_HTTP_PORT}（CLI: trino --server ${SELF_IP}:${TRINO_HTTP_PORT}）"; fi
+if has hdfs; then
+  if is_master "${NN_IP}"; then echo "  [主] HDFS NameNode   : WebUI http://${SELF_IP}:9870（fs.defaultFS=hdfs://${NN_IP}:${NN_RPC_PORT}）"; else echo "  [从] HDFS DataNode   : 上报至 ${NN_IP}"; fi
+fi
+if has yarn; then
+  if is_master "${RM_IP}"; then echo "  [主] YARN RM         : WebUI http://${SELF_IP}:8088"; else echo "  [从] YARN NodeManager: RM=${RM_IP}"; fi
+fi
+if has spark; then
+  if is_master "${SPARK_MASTER_IP}"; then echo "  [主] Spark Master    : spark://${SELF_IP}:${SPARK_MASTER_PORT}（UI http://${SELF_IP}:${SPARK_WEBUI_PORT}）"; else echo "  [从] Spark Worker    : 注册到 spark://${SPARK_MASTER_IP}:${SPARK_MASTER_PORT}"; fi
+fi
+if has flink; then
+  if is_master "${JM_IP}"; then echo "  [主] Flink JobManager: http://${SELF_IP}:8081"; else echo "  [从] Flink TaskManager: JM=${JM_IP}"; fi
+fi
+if has hive; then
+  if is_master "${HIVE_IP}"; then echo "  [主] Hive            : jdbc:hive2://${SELF_IP}:10000（beeline -u ... -n hive）"; else echo "  [跳] Hive 单实例      : jdbc:hive2://${HIVE_IP}:10000"; fi
+fi
+if has hbase; then
+  if is_master "${HMASTER_IP}"; then echo "  [主] HBase HMaster   : http://${SELF_IP}:16010（docker exec -it hbase-master hbase shell）"; else echo "  [从] HBase RegionServer: Master=${HMASTER_IP}"; fi
+fi
+if has trino; then
+  if is_master "${TRINO_COORD_IP}"; then echo "  [主] Trino Coordinator: http://${SELF_IP}:${TRINO_HTTP_PORT}"; else echo "  [从] Trino Worker    : Coord=${TRINO_COORD_IP}:${TRINO_HTTP_PORT}"; fi
 fi
 exit 0

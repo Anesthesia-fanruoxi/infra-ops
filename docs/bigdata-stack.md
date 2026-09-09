@@ -43,7 +43,18 @@
 
 - 全部 **host 网络**；compose 幂等（同名非 compose 旧容器先迁移）；`/dev/tcp` 宿主侧健康检查；
 - 脚本内部署顺序：ZooKeeper → HDFS → YARN → Spark → Flink → Hive → HBase → Trino；
-- bootstrap 在主节点执行：等 DataNode 注册 → 集群报告 → 建 `/apps /data`（勾 Hive 建 `/apps/hive/warehouse`，勾 HBase 建 `/hbase`）。
+- bootstrap 在 **HDFS NameNode 所在主机**执行（角色规划可能把它与主节点分离）：等 DataNode 注册 → 集群报告 → 建 `/apps /data`（勾 Hive 建 `/apps/hive/warehouse`，勾 HBase 建 `/hbase`）。
+
+### 角色规划（完整版）
+
+第 2 步除指定主节点外，可为每个组件的主角色单独指定主机（默认全部与主节点同机）：
+
+- 可规划组件：hdfs(NameNode)、yarn(RM)、spark(Master)、flink(JobManager)、hive(Metastore/HS2)、hbase(HMaster)、trino(Coordinator)；zookeeper 为 ensemble 不可规划
+- 参数 `masters`：JSON `{"hdfs":"10.0.0.2", ...}`（组件→主机 IP），随 params 落入实例持久化
+- 引擎按已选组件注入 `{{__master_<comp>}}`（未规划回落主节点）；脚本 `is_master <IP>` 判定本机角色
+- bootstrap 落点跟随 NameNode 主机；服务登记按各组件实际主机（NameNode 在 A、RM 在 B 各自登记）
+- 校验（创建时）：组件白名单 + IP 必须在本次所选主机内
+- 加装组件流程：新组件主角色默认主节点，暂不支持在加装向导中规划
 
 ## 四、目录与端口约定
 
@@ -64,8 +75,8 @@
 
 1. **ZooKeeper**：官方镜像 `ZOO_MY_ID`（取自 `{{__seq}}` 与 `{{__node_ips}}` 匹配）+ `ZOO_SERVERS`（`server.N=ip:2888:3888`）组建 ensemble；`ZOO_ADMINSERVER_ENABLED=false` 避开 8080。
 2. **YARN**：同 hadoop 镜像，`command: ["yarn","resourcemanager"/"nodemanager"]`；`yarn-site.xml` 资产注入（RM hostname、NM 可用内存/核数可调 `nm_mem/nm_vcores`）；挂 core-site 保证作业能找到 HDFS。
-3. **HBase**：`apache/hbase` 官方镜像入口为角色参数 `["master"]/["regionserver"]`；`hbase-site.xml` 注入 `hbase.rootdir=hdfs://{{__master_ip}}:{{nn_rpc_port}}/hbase`、`hbase.zookeeper.quorum={{__node_ips}}`、`hbase.*.hostname={{__ip}}`（host 网络下强制广播真实 IP）。
-4. **Trino**：每节点生成 `etc/` 全套（node.id=trino-{IP}、jvm `-Xmx{{trino_mem}}`、coordinator/worker 两套 config.properties）；`catalog/hive.properties` 指向 `thrift://{{__master_ip}}:9083`，直接查 Hive/HDFS 数据；data 目录 chown 1000:1000。
+3. **HBase**：`apache/hbase` 官方镜像入口为角色参数 `["master"]/["regionserver"]`；`hbase-site.xml` 注入 `hbase.rootdir=hdfs://{{__master_hdfs}}:{{nn_rpc_port}}/hbase`、`hbase.zookeeper.quorum={{__node_ips}}`、`hbase.*.hostname={{__ip}}`（host 网络下强制广播真实 IP）。
+4. **Trino**：每节点生成 `etc/` 全套（node.id=trino-{IP}、jvm `-Xmx{{trino_mem}}`、coordinator/worker 两套 config.properties）；`catalog/hive.properties` 指向 `thrift://{{__master_hive}}:9083`，直接查 Hive/HDFS 数据；data 目录 chown 1000:1000。
 5. **服务注册**：引擎 `registerBigdataServices` 按 components + role 自动登记全部入口（NameNode UI / ZK / RM UI / Spark UI / Flink UI / HiveServer2+Metastore / HMaster / Trino）。
 
 ## 六、验证

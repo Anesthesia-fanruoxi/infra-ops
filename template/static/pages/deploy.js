@@ -20,24 +20,41 @@ window.DeployPage = {
   </section>
 
   <!-- 新建任务：三步引导弹框 -->
-  <el-dialog v-model="wizardVisible" title="新建部署任务" width="900px" :close-on-click-modal="false" @closed="resetWizard">
+  <el-dialog v-model="wizardVisible" title="新建部署任务" width="960px" top="5vh" class="deploy-wizard-dialog" :close-on-click-modal="false" @closed="resetWizard">
     <el-steps :active="step - 1" finish-status="success" align-center style="margin-bottom:20px">
       <el-step title="选择模板" />
       <el-step title="选择主机" />
       <el-step title="自定义变量" />
     </el-steps>
 
-    <!-- Step 1: 选模板 -->
-    <div v-show="step===1">
-      <el-select v-model="selectedTemplateId" placeholder="请选择部署模板" style="width:100%" @change="onTemplateChange" :loading="tplLoading" loading-text="模板加载中…" @visible-change="onTplDropdown" :teleported="false">
-        <el-option v-for="t in templates" :key="t.id" :label="t.name" :value="t.id">
-          <span>{{t.name}}</span><span style="float:right;color:var(--text-faint);font-size:12px">{{(t.variables||[]).length}} 个变量</span>
-        </el-option>
-      </el-select>
-      <div v-if="tplLoading && !templates.length" class="deploy-placeholder">模板列表加载中…</div>
-      <div v-if="selectedTemplate" class="deploy-tpl-desc">
-        <p v-if="selectedTemplate.description">{{selectedTemplate.description}}</p>
-        <span v-if="(selectedTemplate.variables||[]).length" class="deploy-var-count">包含 {{selectedTemplate.variables.length}} 个变量，可在第三步逐台填写</span>
+    <!-- Step 1: 选模板（分类 + 搜索 + 卡片） -->
+    <div v-show="step===1" class="deploy-tpl-step" v-loading="tplLoading">
+      <div class="deploy-tpl-toolbar">
+        <div class="deploy-tpl-cats">
+          <button type="button" class="tpl-filter-tab" :class="{active: tplCat==='全部'}" @click="tplCat='全部'">全部</button>
+          <button type="button" v-for="c in tplCategories" :key="c" class="tpl-filter-tab" :class="{active: tplCat===c}" @click="tplCat=c">{{c}}</button>
+        </div>
+        <el-input v-model="tplFilter" placeholder="搜索模板名 / 描述 / 分类" clearable size="small" style="width:240px" />
+      </div>
+      <div class="deploy-tpl-grid">
+        <button type="button" v-for="t in filteredTemplates" :key="t.id" class="deploy-tpl-card" :class="{'deploy-tpl-card--sel': selectedTemplateId===t.id}" @click="selectTemplate(t)">
+          <div class="deploy-tpl-card-head">
+            <strong class="deploy-tpl-card-name" :title="t.name">{{t.name}}</strong>
+            <span class="tpl-badge cat">{{t.category || '未分类'}}</span>
+          </div>
+          <div class="deploy-tpl-card-desc">{{t.description || '暂无描述'}}</div>
+          <div class="deploy-tpl-card-meta">
+            <span class="tpl-meta-chip">{{(t.variables||[]).length}} 变量</span>
+            <span v-if="(t.configs||[]).length" class="tpl-meta-chip">{{t.configs.length}} 配置</span>
+            <span v-if="t.is_builtin" class="tpl-badge builtin">内置</span>
+            <span v-else class="tpl-badge custom">自定义</span>
+          </div>
+        </button>
+      </div>
+      <div v-if="!tplLoading && !filteredTemplates.length" class="deploy-placeholder">无匹配模板，试试换个分类或关键词</div>
+      <div v-if="selectedTemplate" class="deploy-tpl-picked">
+        已选：<b>{{selectedTemplate.name}}</b>
+        <span class="faint" v-if="(selectedTemplate.variables||[]).length"> · {{selectedTemplate.variables.length}} 个变量可在第三步填写</span>
       </div>
     </div>
 
@@ -196,6 +213,7 @@ window.DeployPage = {
   data() {
     return {
       step: 1, templates: [], tplLoading: false, tplLoaded: false, selectedTemplateId: null, selectedTemplate: null,
+      tplCat: '全部', tplFilter: '',
       hosts: [], hostsLoading: false, hostsLoaded: false, selectedHostIds: new Set(), hostFilter: '', hostSort: { field: 'name', order: 'asc' },
       hostParams: {}, // 逐主机变量覆盖 host_id -> {name: value}；留空字段=继承模板默认
       taskConfigs: {}, // 任务级自定义配置 config_key -> 内容（留空=用脚本默认）
@@ -209,6 +227,31 @@ window.DeployPage = {
     }
   },
   computed: {
+    tplCategoryOrder() {
+      return ['系统', '工具', '数据库', '可视化', '消息队列', '配置注册中心', '监控', '其他', '未分类']
+    },
+    tplCategories() {
+      const s = new Set(this.templates.map(t => t.category || '未分类'))
+      const ordered = this.tplCategoryOrder.filter(c => s.has(c))
+      const extra = [...s].filter(c => !this.tplCategoryOrder.includes(c)).sort()
+      return ordered.concat(extra)
+    },
+    filteredTemplates() {
+      let list = this.templates
+      if (this.tplCat !== '全部') {
+        list = list.filter(t => (t.category || '未分类') === this.tplCat)
+      }
+      const kw = (this.tplFilter || '').trim().toLowerCase()
+      if (kw) {
+        const parts = kw.split(/\s+/).filter(Boolean)
+        list = list.filter(t => {
+          const hay = [t.name, t.description, t.category, ...(t.variables || []).map(v => v.name + ' ' + (v.label || ''))]
+            .join(' ').toLowerCase()
+          return parts.every(p => hay.includes(p))
+        })
+      }
+      return list
+    },
     filteredHosts() {
       let list = this.hosts
       if (this.hostFilter) {
@@ -240,24 +283,27 @@ window.DeployPage = {
   mounted() { this.loadTasks(); this.connectSetup() },
   beforeUnmount() { this.closeDrawer(); this.closeSetup() },
   watch: {
-    selectedTemplateId(id) {
-      this.step = id ? 2 : 1
-      this.selectedTemplate = this.templates.find(t => t.id === id) || null
-      this.hostParams = {} // 切换模板后逐台变量全部失效
-      this.taskConfigs = {}; this.hostConfigs = {} // 自定义配置同理
-      if (id) this.loadHosts() // 第二步需要主机列表
-    },
     // 进入第三步时若主机列表尚未加载则补拉（直接点步骤条的场景）
     step(v) { if (v === 3 && !this.hostsLoaded && !this.hostsLoading) this.loadHosts() }
   },
   methods: {
-    /* ===== 加载（懒加载：模板下拉首次打开 / 首次进入第三步时触发） ===== */
+    /* ===== 加载 ===== */
     async loadTemplates() {
       if (this.tplLoading || this.tplLoaded) return
       this.tplLoading = true
       try { const r = await api.get('/deploy/templates'); if (r.code === 0) { this.templates = r.data || []; this.tplLoaded = true } } catch (e) { /* */ } finally { this.tplLoading = false }
     },
-    onTplDropdown(visible) { if (visible) this.loadTemplates() },
+    selectTemplate(t) {
+      if (!t) return
+      const changed = this.selectedTemplateId !== t.id
+      this.selectedTemplateId = t.id
+      this.selectedTemplate = t
+      if (changed) {
+        this.hostParams = {}
+        this.taskConfigs = {}
+        this.hostConfigs = {}
+      }
+    },
     async loadHosts() {
       if (this.hostsLoading || this.hostsLoaded) return
       this.hostsLoading = true
@@ -270,7 +316,6 @@ window.DeployPage = {
       this.tasksLoading = true
       try { const r = await api.get('/deploy/tasks', { params: { page: 1, page_size: 20 } }); if (r.code === 0) this.tasks = r.data?.list || [] } catch (e) { /* */ } finally { this.tasksLoading = false }
     },
-    onTemplateChange() { /* handled by watcher */ },
     toggleHostSortOrder() { this.hostSort = { ...this.hostSort, order: this.hostSort.order === 'asc' ? 'desc' : 'asc' } },
     sortHostList(list, sort) {
       const desc = sort.order === 'desc'
@@ -352,6 +397,8 @@ window.DeployPage = {
       this.step = 1
       this.selectedTemplateId = null
       this.selectedTemplate = null
+      this.tplCat = '全部'
+      this.tplFilter = ''
       this.hostParams = {}
       this.taskConfigs = {}; this.hostConfigs = {}
       this.selectedHostIds = new Set()

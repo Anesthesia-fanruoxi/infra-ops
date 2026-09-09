@@ -84,12 +84,13 @@ func Setup(staticFS fs.FS, deps Deps) *gin.Engine {
 	// 主机管理
 	hostRepo := repo.NewHostRepo()
 	hostHandler := api.NewHostHandler(api.HostDeps{
-		HostRepo: hostRepo,
-		CredRepo: credRepo,
-		CryptoS:  deps.CryptoService,
-		SSHC:     deps.SSHClient,
-		Bus:      deps.Bus,
-		TplRepo:  repo.NewDeployRepo(),
+		HostRepo:  hostRepo,
+		CredRepo:  credRepo,
+		CryptoS:   deps.CryptoService,
+		SSHC:      deps.SSHClient,
+		Bus:       deps.Bus,
+		TplRepo:   repo.NewDeployRepo(),
+		StackRepo: repo.NewStackRepo(),
 	})
 	hosts := protected.Group("/hosts")
 	{
@@ -101,6 +102,7 @@ func Setup(staticFS fs.FS, deps Deps) *gin.Engine {
 		hosts.DELETE("/:id", hostHandler.Delete)
 		hosts.POST("/:id/test", hostHandler.Test)
 		hosts.GET("/:id/installs", hostHandler.Installs)
+		hosts.GET("/:id/clusters", hostHandler.Clusters)
 		hosts.GET("/:id/services", api.NewServiceHandler(hostHandler.TplRepo()).HostList)
 	}
 
@@ -170,6 +172,8 @@ func Setup(staticFS fs.FS, deps Deps) *gin.Engine {
 		stacks.POST("/instances/:id/add-component", stackHandler.AddComponent)
 		stacks.POST("/instances/:id/remove-component", stackHandler.RemoveComponent)
 		stacks.POST("/instances/:id/uninstall", stackHandler.Uninstall)
+		stacks.POST("/instances/:id/reinstall", stackHandler.Reinstall)
+		stacks.POST("/instances/:id/verify", stackHandler.VerifyInstance)
 		stacks.GET("/instances/:id/runs", stackHandler.InstanceRuns)
 	}
 

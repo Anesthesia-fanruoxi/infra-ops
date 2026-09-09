@@ -167,6 +167,13 @@ var builtinTemplates = []builtinTemplate{
 		path:        "builtin/kernel-tuning.sh",
 	},
 	{
+		name:        "K8s 节点初始化",
+		description: "Kubernetes 节点统一前置初始化，供后续用 sealos 等工具部署 K8s 集群前，把节点预置到可用状态。各动作按变量开关控制（默认全开，可据需排除已处理项）：关闭 swap（kubelet 硬性要求）、关闭 SELinux 与 firewalld、加载 overlay/br_netfilter 并启用 ip_forward 与桥接转发、eBPF（Cilium）内核调优（关 rp_filter、启 bpf_jit、挂载 bpffs）、chrony 时间同步、预装 containerd（systemd cgroup 驱动）。幂等可重复执行，不修改既有业务配置。",
+		category:    "系统",
+		variables:   `[{"name":"swap_off","label":"关闭 swap","default":"yes","required":true},{"name":"selinux_off","label":"关闭 SELinux","default":"yes","required":true},{"name":"firewall_off","label":"关闭 firewalld","default":"yes","required":true},{"name":"net_forward","label":"内核模块与网络转发","default":"yes","required":true},{"name":"ebpf_tune","label":"eBPF/Cilium 内核调优","default":"yes","required":true},{"name":"time_sync","label":"chrony 时间同步","default":"yes","required":true},{"name":"install_containerd","label":"预装 containerd","default":"yes","required":true}]`,
+		path:        "builtin/k8s-init.sh",
+	},
+	{
 		name:        "部署 RocketMQ",
 		description: "docker compose 部署 RocketMQ（namesrv + broker 双容器，生成 compose.yml 落盘）：broker.conf 自动指向主机 IP（brokerIP1）、middleware_net 共享网络、store 持久化、自动创建主题。内存受限主机建议仅单 broker。依赖 Docker。",
 		category:    "消息队列",
