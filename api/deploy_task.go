@@ -18,6 +18,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/ssh"
 
+	"infra-ops/api/shared"
 	icrypto "infra-ops/common/crypto"
 	"infra-ops/common/eventbus"
 	"infra-ops/common/resp"
@@ -478,7 +479,7 @@ func (h *deployHandler) execute(taskID int64) {
 				publish(rec, "failed", "", "脚本渲染失败: "+rerr.Error())
 				return
 			}
-			rendered = applyHostVars(rendered, seq, rec)
+			rendered = shared.ApplyHostVars(rendered, seq, rec)
 
 			// 前置依赖检查：不满足则该主机直接失败，不执行主脚本
 			if hint := checkRequires(h.hostRepo, h.credRepo, h.cryptoS, h.sshC, rec.HostID, templateRequires(tpl)); hint != "" {
@@ -853,25 +854,6 @@ func extractSelfReportedName(output string) string {
 		return ""
 	}
 	return name
-}
-
-// applyHostVars 替换内置主机变量：{{__seq}} 任务内序号（1 起）、
-// {{__ip}} 主机 IP、{{__ip_last}} IP 末段、{{__name}} 当前主机名。
-func applyHostVars(script string, seq int, rec repo.HostRecord) string {
-	return strings.NewReplacer(
-		"{{__seq}}", strconv.Itoa(seq),
-		"{{__ip}}", rec.HostIP,
-		"{{__ip_last}}", lastOctet(rec.HostIP),
-		"{{__name}}", rec.HostName,
-	).Replace(script)
-}
-
-// lastOctet 取点分 IPv4 的末段；非标准格式原样返回。
-func lastOctet(ip string) string {
-	if i := strings.LastIndexByte(ip, '.'); i >= 0 {
-		return ip[i+1:]
-	}
-	return ip
 }
 
 func dedupInt64(in []int64) []int64 {

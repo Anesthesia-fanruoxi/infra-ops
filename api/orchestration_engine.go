@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"infra-ops/api/shared"
 	"infra-ops/common/eventbus"
 	"infra-ops/common/sysutil"
 	"infra-ops/model"
@@ -147,7 +148,7 @@ func (h *orchHandler) executeRun(orchID, runID int64) {
 			}
 			hr := repo.HostRecord{DeployTaskHost: model.DeployTaskHost{
 				HostID: cell.HostID, HostName: cell.HostName, HostIP: cell.HostIP}}
-			rendered = applyHostVars(rendered, cell.Seq, hr)
+			rendered = shared.ApplyHostVars(rendered, cell.Seq, hr)
 
 			// 前置依赖检查：不满足则阻断该主机本步，不执行脚本（重试无意义，直接退出重试循环）
 			if hint := checkRequires(h.hostRepo, h.credRepo, h.cryptoS, h.sshC, cell.HostID, templateRequires(tpl)); hint != "" {

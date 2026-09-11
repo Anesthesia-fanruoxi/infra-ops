@@ -12,6 +12,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"infra-ops/api/shared"
 	"infra-ops/common/resp"
 	"infra-ops/common/sysutil"
 	"infra-ops/model"
@@ -157,6 +158,7 @@ func (h *stackHandler) CaCert(c *gin.Context) {
 		"cat '"+home+"/certs/ca.crt' 2>/dev/null || true", nil)
 	c.Data(http.StatusOK, "application/x-pem-file", []byte(raw))
 }
+
 // 这是探活与部署之间唯一的一致性来源：备主落点（含 flink_jm2/hbase_hm2/hive_ms2/hive_hs2b）
 // 由引擎按「第一台非主主机」自动分配，而持久化的 masters 里往往只有用户显式指定过的键。
 func bigdataRoleMasters(inst *model.StackInstance) (map[string]string, bool) {
@@ -938,7 +940,7 @@ func parseBigdataCtrChecks(ctrs []string, raw string, row *stackVerifyHost) bool
 	if live := parseLiveContainers(raw); len(live) > 0 {
 		extra := make([]string, 0, len(live))
 		for _, n := range live {
-			if !containsString(ctrs, n) {
+			if !shared.ContainsString(ctrs, n) {
 				extra = append(extra, n)
 			}
 		}

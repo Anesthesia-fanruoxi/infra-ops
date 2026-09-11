@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"infra-ops/api/shared"
 	"infra-ops/model"
 )
 
@@ -55,12 +56,12 @@ func TestBigdataExpectedContainers_HASecondaryHost(t *testing.T) {
 		"hbase-backup-master", "hive-metastore2", "hive-hiveserver2-2", "trino-node",
 	}
 	for _, w := range want {
-		if !containsString(got, w) {
+		if !shared.ContainsString(got, w) {
 			t.Errorf("41 应期望容器 %s，实际 %v", w, got)
 		}
 	}
 	for _, bad := range []string{"flink-taskmanager", "hbase-regionserver", "hadoop-nodemanager"} {
-		if containsString(got, bad) {
+		if shared.ContainsString(got, bad) {
 			t.Errorf("41 不应期望 worker 容器 %s，实际 %v", bad, got)
 		}
 	}
@@ -74,21 +75,21 @@ func TestBigdataExpectedContainers_HAWorkerHosts(t *testing.T) {
 		overrideBigdataMasters(inst, merged)
 		got := bigdataExpectedContainers(ip, "worker", merged)
 		for _, w := range []string{"hadoop-nodemanager", "spark-worker", "flink-taskmanager", "hbase-regionserver", "hadoop-datanode"} {
-			if !containsString(got, w) {
+			if !shared.ContainsString(got, w) {
 				t.Errorf("%s 应期望容器 %s，实际 %v", ip, w, got)
 			}
 		}
-		if containsString(got, "flink-jobmanager2") || containsString(got, "hbase-backup-master") {
+		if shared.ContainsString(got, "flink-jobmanager2") || shared.ContainsString(got, "hbase-backup-master") {
 			t.Errorf("%s 不应期望备主容器，实际 %v", ip, got)
 		}
 	}
 	// 42 属于 JNS 前三台，应额外有 journalnode；44 不在 JNS
 	merged := mergeParamMaps(instParams, parseJSONMap(inst.Hosts[0].ParamsJSON))
 	overrideBigdataMasters(inst, merged)
-	if !containsString(bigdataExpectedContainers("192.168.3.42", "worker", merged), "hadoop-journalnode") {
+	if !shared.ContainsString(bigdataExpectedContainers("192.168.3.42", "worker", merged), "hadoop-journalnode") {
 		t.Errorf("42 应在 JNS 内，期望 hadoop-journalnode")
 	}
-	if containsString(bigdataExpectedContainers("192.168.3.44", "worker", merged), "hadoop-journalnode") {
+	if shared.ContainsString(bigdataExpectedContainers("192.168.3.44", "worker", merged), "hadoop-journalnode") {
 		t.Errorf("44 不在 JNS 内，不应期望 hadoop-journalnode")
 	}
 }
@@ -131,12 +132,12 @@ func TestBigdataVerifyEndpoints_HASecondaryHost(t *testing.T) {
 	}
 	t.Logf("41 入口 = %v", names)
 	for _, want := range []string{"HDFS NameNode-2", "YARN RM-2", "Spark Master-2", "Flink JM-2", "HBase Backup Master", "Hive Metastore-2", "HiveServer2-2"} {
-		if !containsString(names, want) {
+		if !shared.ContainsString(names, want) {
 			t.Errorf("41 入口应包含 %s，实际 %v", want, names)
 		}
 	}
 	for _, bad := range []string{"YARN NM", "Spark Worker", "HBase RS"} {
-		if containsString(names, bad) {
+		if shared.ContainsString(names, bad) {
 			t.Errorf("41 入口不应包含 %s，实际 %v", bad, names)
 		}
 	}

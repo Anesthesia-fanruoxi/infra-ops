@@ -10,6 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"infra-ops/api/shared"
 	"infra-ops/common/eventbus"
 	"infra-ops/common/sysutil"
 	"infra-ops/model"
@@ -726,9 +727,9 @@ func (h *stackHandler) syncInstanceAfterRun(run *model.StackRun, status string, 
 			if run.StackKey == "bigdata" {
 				comps = parseComponentsCSV(params["components"])
 			} else if op == "add_component" {
-				comps = mergeStringList(comps, run.Mode)
-			} else if stackInstallOp(op) && !containsString(comps, run.Mode) {
-				comps = mergeStringList(comps, run.Mode)
+				comps = shared.MergeStringList(comps, run.Mode)
+			} else if stackInstallOp(op) && !shared.ContainsString(comps, run.Mode) {
+				comps = shared.MergeStringList(comps, run.Mode)
 			}
 			hostComps := comps
 			if existing, err := h.repo.InstanceHosts(run.InstanceID, false); err == nil {
@@ -930,7 +931,7 @@ func (h *stackHandler) registerStackService(bp *store.BuiltinStack, host *model.
 		}
 		bind := func(label string) string {
 			_ = h.tplRepo.UpsertHostService(&model.HostService{
-				HostID: host.HostID, HostIP: ip, ServiceName: "Elasticsearch-"+label,
+				HostID: host.HostID, HostIP: ip, ServiceName: "Elasticsearch-" + label,
 				URL: scheme + "://" + ip + ":" + pick("port", "9200"), Web: true,
 				TemplateID: 0, InstanceID: instanceID,
 			})
@@ -1235,17 +1236,17 @@ func bigdataMasterExtra(hosts []model.StackRunHost) map[string]string {
 
 // bigdataRole 一次 HA 角色分配的确定性结果（§4.1/§4.2）。
 type bigdataRole struct {
-	Ha        bool
-	ZKIps     string   // ZK ensemble 前 3 台逗号列表
-	HdfsEntry string   // HDFS 入口 URI
-	Nn1, Nn2  string   // NameNode Active / Standby
-	JNs       []string // JournalNode 主机
-	Rm1, Rm2  string   // ResourceManager Active / Standby
-	SparkM1, SparkM2   string // Spark Master 主 / 备
-	FlinkJM1, FlinkJm2 string // Flink JobManager 主 / 备
-	HMaster1, HMaster2 string // HBase HMaster 主 / backup
-	MSs, Hs2s []string // Hive Metastore / HiveServer2 主机
-	HiveDB    string
+	Ha                 bool
+	ZKIps              string   // ZK ensemble 前 3 台逗号列表
+	HdfsEntry          string   // HDFS 入口 URI
+	Nn1, Nn2           string   // NameNode Active / Standby
+	JNs                []string // JournalNode 主机
+	Rm1, Rm2           string   // ResourceManager Active / Standby
+	SparkM1, SparkM2   string   // Spark Master 主 / 备
+	FlinkJM1, FlinkJm2 string   // Flink JobManager 主 / 备
+	HMaster1, HMaster2 string   // HBase HMaster 主 / backup
+	MSs, Hs2s          []string // Hive Metastore / HiveServer2 主机
+	HiveDB             string
 }
 
 // stackBigdataRole 按 §4.2 确定性算法解析大数据底座全部角色落点。
@@ -1313,7 +1314,7 @@ func stackBigdataRole(hosts []model.StackRunHost) bigdataRole {
 
 	zk := firstN(3)
 	if s := strings.TrimSpace(override["zookeeper_ips"]); s != "" {
-		zk = filterEmpty(strings.Split(s, ","))
+		zk = shared.FilterEmpty(strings.Split(s, ","))
 	}
 	res.ZKIps = strings.Join(zk, ",")
 
@@ -1321,7 +1322,7 @@ func stackBigdataRole(hosts []model.StackRunHost) bigdataRole {
 	nn2 := secondaryOf("hdfs", "hdfs_nn2")
 	jns := firstN(3)
 	if s := strings.TrimSpace(override["hdfs_jns"]); s != "" {
-		jns = filterEmpty(strings.Split(s, ","))
+		jns = shared.FilterEmpty(strings.Split(s, ","))
 	}
 	res.Nn1, res.Nn2 = nn1, nn2
 	res.JNs = jns
@@ -1366,16 +1367,6 @@ func stackBigdataRole(hosts []model.StackRunHost) bigdataRole {
 		res.Hs2s = []string{hiveP, s}
 	}
 	return res
-}
-
-func filterEmpty(list []string) []string {
-	out := make([]string, 0, len(list))
-	for _, s := range list {
-		if strings.TrimSpace(s) != "" {
-			out = append(out, strings.TrimSpace(s))
-		}
-	}
-	return out
 }
 
 // bigdataHAVarTable 将 HA 角色分配结果转为注入变量表（§4.1，非 HA 组件位一律注入空串）。
@@ -1605,7 +1596,7 @@ func applyStackVars(script string, seq int, host model.StackRunHost, extra map[s
 	rec := repo.HostRecord{DeployTaskHost: model.DeployTaskHost{
 		HostID: host.HostID, HostName: host.HostName, HostIP: host.HostIP,
 	}}
-	out := applyHostVars(script, seq, rec)
+	out := shared.ApplyHostVars(script, seq, rec)
 	if len(extra) == 0 {
 		return out
 	}

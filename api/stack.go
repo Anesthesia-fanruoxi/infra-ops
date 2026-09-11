@@ -11,6 +11,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"infra-ops/api/shared"
 	icrypto "infra-ops/common/crypto"
 	"infra-ops/common/eventbus"
 	"infra-ops/common/resp"
@@ -561,7 +562,7 @@ func validateCWHRoles(hostRoles map[string]map[string]string) (string, error) {
 			if !validRoles[r] {
 				return "", fmt.Errorf("主机 %s 含未知角色: %s", hostID, r)
 			}
-			if containsString(roles, r) {
+			if shared.ContainsString(roles, r) {
 				return "", fmt.Errorf("主机 %s 角色 %s 重复选择", hostID, r)
 			}
 			roles = append(roles, r)
@@ -569,9 +570,9 @@ func validateCWHRoles(hostRoles map[string]map[string]string) (string, error) {
 		if len(roles) == 0 {
 			roles = []string{"coordinator"}
 		}
-		isMaster := containsString(roles, "master")
-		hasCoord := containsString(roles, "coordinator")
-		hasData := containsString(roles, "data_hot") || containsString(roles, "data_warm") || containsString(roles, "data_cold")
+		isMaster := shared.ContainsString(roles, "master")
+		hasCoord := shared.ContainsString(roles, "coordinator")
+		hasData := shared.ContainsString(roles, "data_hot") || shared.ContainsString(roles, "data_warm") || shared.ContainsString(roles, "data_cold")
 		switch {
 		case isMaster && (hasCoord || hasData || len(roles) > 1):
 			return "", fmt.Errorf("主机 %s: master 不能与数据层/协调角色共存（master 与数据层互斥）", hostID)

@@ -115,9 +115,9 @@
 
 > 方案：删除无用 `api/data` 残留目录；将扁平单包 `api/` 按菜单功能拆分为子包（auth/credential/host/overview/deploy/orchestration/stack/tool/{es,registry,sftp}/sse），跨模块共享辅助收敛到 `api/shared`；大文件（stack_engine 1706 / stack_verify 1170 / stack_instance 975 / deploy_task 817 / es / registry / sftp / stack）拆至单文件 ≤300 行；不新增/不修改端点，纯导出路径与可见性调整。设计依据 `docs/api目录重构.md`。纯后端任务，详见 backend.md / boundary.md
 
-- [ ] B1 基线：git 工作区干净，记录 go build/vet/test 基线 —— 验收：基线全通过可复现
-- [ ] B2 删除无用目录 api/data：git rm -r + rg "api/data" 零残留 —— 验收：目录消失、零引用、构建通过
-- [ ] B3 抽取共享层 api/shared：迁 applyHostVars/containsString/containsInt64/mergeStringList/filterEmpty —— 验收：go build/test 全绿，无逻辑改动
+- [x] B1 基线：git 工作区干净，记录 go build/vet/test 基线 —— 验收：基线全通过可复现
+- [x] B2 删除无用目录 api/data：git rm -r + rg "api/data" 零残留 —— 验收：目录消失、零引用、构建通过
+- [x] B3 抽取共享层 api/shared：迁 applyHostVars/containsString/containsInt64/mergeStringList/filterEmpty —— 验收：go build/test 全绿，无逻辑改动
 - [ ] B4 拆分子包（auth/credential/overview/sse/host）+ router 引用更新 —— 验收：每包独立 commit、构建测试全绿
 - [ ] B5 拆分子包（tool/es、registry、sftp）—— 验收：go build/vet 全绿
 - [ ] B6 拆分子包（deploy/orchestration，单向依赖）+ 测试随迁 —— 验收：编排运行链路不回归

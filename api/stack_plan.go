@@ -10,6 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"infra-ops/api/shared"
 	"infra-ops/common/resp"
 	"infra-ops/model"
 	"infra-ops/store"
@@ -71,7 +72,7 @@ func planBigdataRoles(hosts []model.StackRunHost, opts PlanOptions) (model.RoleP
 	if len(comps) == 0 {
 		comps = []string{"hdfs"} // 防御：底座至少有 HDFS
 	}
-	has := func(c string) bool { return containsString(comps, c) }
+	has := func(c string) bool { return shared.ContainsString(comps, c) }
 	ha := strings.EqualFold(strings.TrimSpace(params["ha"]), "true")
 
 	// HA 前置校验（§4.4-1~3）
@@ -157,7 +158,7 @@ func planBigdataRoles(hosts []model.StackRunHost, opts PlanOptions) (model.RoleP
 	// zookeeper
 	if has("zookeeper") {
 		zkManual := manual["zookeeper_ips"]
-		for _, z := range filterEmpty(strings.Split(r.ZKIps, ",")) {
+		for _, z := range shared.FilterEmpty(strings.Split(r.ZKIps, ",")) {
 			byIP[z] = append(byIP[z], model.RolePlanRole{
 				Comp: "zookeeper", Role: "zk", Label: "ZooKeeper",
 				Source: mapSrc(zkManual), Scope: "",

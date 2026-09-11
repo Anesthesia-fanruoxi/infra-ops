@@ -8,6 +8,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"infra-ops/api/shared"
 	"infra-ops/common/resp"
 	"infra-ops/model"
 	"infra-ops/store"
@@ -516,7 +517,7 @@ func bigdataProtectedHosts(active []model.StackInstanceHost) (map[string]string,
 		add(s, "HS2")
 	}
 	add(r.HiveDB, "MetaDB")
-	for _, z := range filterEmpty(strings.Split(r.ZKIps, ",")) {
+	for _, z := range shared.FilterEmpty(strings.Split(r.ZKIps, ",")) {
 		add(z, "ZK")
 	}
 	return label, true
@@ -755,24 +756,6 @@ func encodeJSONStringList(list []string) string {
 	return string(b)
 }
 
-func containsString(list []string, v string) bool {
-	for _, x := range list {
-		if x == v {
-			return true
-		}
-	}
-	return false
-}
-
-func containsInt64(list []int64, v int64) bool {
-	for _, x := range list {
-		if x == v {
-			return true
-		}
-	}
-	return false
-}
-
 // validateBigdataMasters 校验角色规划参数（JSON：组件→主角色主机 IP）：
 // 组件/角色 key 须在白名单内，IP 须在本次所选主机内；空值跳过（回落主节点）。
 // §4.3：ha=true 时追加 ZK 必勾、≥3 台、同组件主从互斥、Hive 强制 metastore_db。
@@ -832,13 +815,13 @@ func (h *stackHandler) validateBigdataMasters(params map[string]string, ids []in
 		return nil
 	}
 	comps := parseComponentsCSV(params["components"])
-	if !containsString(comps, "zookeeper") {
+	if !shared.ContainsString(comps, "zookeeper") {
 		return fmt.Errorf("HA 模式依赖 ZooKeeper，请勾选 ZooKeeper")
 	}
 	if len(hosts) < 3 {
 		return fmt.Errorf("HA 模式至少需要 3 台主机")
 	}
-	if containsString(comps, "hive") && !containsString(comps, "metastore_db") {
+	if shared.ContainsString(comps, "hive") && !shared.ContainsString(comps, "metastore_db") {
 		return fmt.Errorf("HA 模式开启 Hive 需一并选择 metastore_db 组件（外部元数据库）")
 	}
 	// 同组件主从角色互斥（覆盖自动分配与显式指定两种来源）
@@ -893,7 +876,7 @@ func parseComponentsCSV(s string) []string {
 func mergeComponentList(base, add []string) []string {
 	out := append([]string{}, base...)
 	for _, c := range add {
-		if !containsString(out, c) {
+		if !shared.ContainsString(out, c) {
 			out = append(out, c)
 		}
 	}
@@ -910,10 +893,10 @@ var bigdataComponentSet = map[string]bool{
 // 单看某一次增量（如加装）会漏掉集群里已存在的依赖方，从而误报缺依赖。
 func validateBigdataDeps(comps []string) error {
 	// 组件依赖：HBase 依赖 ZooKeeper；Trino 依赖 Hive Metastore
-	if containsString(comps, "hbase") && !containsString(comps, "zookeeper") {
+	if shared.ContainsString(comps, "hbase") && !shared.ContainsString(comps, "zookeeper") {
 		return fmt.Errorf("HBase 依赖 ZooKeeper，请同时勾选 ZooKeeper")
 	}
-	if containsString(comps, "trino") && !containsString(comps, "hive") {
+	if shared.ContainsString(comps, "trino") && !shared.ContainsString(comps, "hive") {
 		return fmt.Errorf("Trino 依赖 Hive Metastore，请同时勾选 Hive")
 	}
 	return nil
@@ -950,7 +933,7 @@ func validateBigdataAdd(added, installed []string) error {
 		if c == "hdfs" {
 			return fmt.Errorf("HDFS 已作为底座存在，无需加装")
 		}
-		if containsString(installed, c) {
+		if shared.ContainsString(installed, c) {
 			return fmt.Errorf("组件 %s 已安装", c)
 		}
 	}
@@ -967,27 +950,27 @@ func validateBigdataRemove(removing, installed []string, ha bool) error {
 		if c == "hdfs" {
 			return fmt.Errorf("不能单独卸载 HDFS，请使用卸载集群")
 		}
-		if !containsString(installed, c) {
+		if !shared.ContainsString(installed, c) {
 			return fmt.Errorf("组件 %s 未安装", c)
 		}
 	}
 	remain := subtractComponents(installed, removing)
-	if containsString(remain, "hbase") && !containsString(remain, "zookeeper") {
+	if shared.ContainsString(remain, "hbase") && !shared.ContainsString(remain, "zookeeper") {
 		return fmt.Errorf("HBase 依赖 ZooKeeper，请先卸载 HBase 或保留 ZooKeeper")
 	}
-	if containsString(remain, "trino") && !containsString(remain, "hive") {
+	if shared.ContainsString(remain, "trino") && !shared.ContainsString(remain, "hive") {
 		return fmt.Errorf("Trino 依赖 Hive，请先卸载 Trino 或保留 Hive")
 	}
 	// §4.3-6：HA 模式下 ZooKeeper / metastore_db 是各组件 HA 的基座，需先卸载依赖组件
 	if ha {
-		if containsString(removing, "zookeeper") {
+		if shared.ContainsString(removing, "zookeeper") {
 			zkDeps := intersectComponents(remain, []string{"yarn", "spark", "flink", "hbase", "hive"})
 			if len(zkDeps) > 0 {
 				return fmt.Errorf("HA 模式下 ZooKeeper 是 %s 选主基座，请先卸载这些组件或整体重装为非 HA", strings.Join(zkDeps, "/"))
 			}
 		}
-		if containsString(removing, "metastore_db") {
-			if containsString(remain, "hive") {
+		if shared.ContainsString(removing, "metastore_db") {
+			if shared.ContainsString(remain, "hive") {
 				return fmt.Errorf("HA 模式 Hive 依赖 metastore_db 元数据库，请先卸载 Hive")
 			}
 		}
@@ -998,7 +981,7 @@ func validateBigdataRemove(removing, installed []string, ha bool) error {
 func intersectComponents(a, b []string) []string {
 	out := []string{}
 	for _, x := range a {
-		if containsString(b, x) {
+		if shared.ContainsString(b, x) {
 			out = append(out, x)
 		}
 	}
@@ -1008,16 +991,9 @@ func intersectComponents(a, b []string) []string {
 func subtractComponents(from, remove []string) []string {
 	out := make([]string, 0, len(from))
 	for _, c := range from {
-		if !containsString(remove, c) {
+		if !shared.ContainsString(remove, c) {
 			out = append(out, c)
 		}
 	}
 	return out
-}
-
-func mergeStringList(base []string, add string) []string {
-	if containsString(base, add) {
-		return base
-	}
-	return append(append([]string{}, base...), add)
 }
