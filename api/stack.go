@@ -35,6 +35,12 @@ type stackHandler struct {
 func NewStackHandler(repo *repo.StackRepo, tplRepo *repo.DeployRepo, hostRepo *repo.HostRepo,
 	credRepo *repo.CredentialRepo, cryptoS *icrypto.Service, sshC *sshx.Client,
 	bus *eventbus.Bus, auditRepo *repo.AuditRepo, concurrency int) *stackHandler {
+	// 启动恢复：服务重启中断的流程标记为失败，避免实例被孤儿 run 锁死
+	if instIDs, err := repo.FailStaleRuns(); err == nil && len(instIDs) > 0 {
+		for _, id := range instIDs {
+			_ = repo.UpdateInstance(id, "", "failed", "", "")
+		}
+	}
 	return &stackHandler{repo: repo, tplRepo: tplRepo, hostRepo: hostRepo, credRepo: credRepo,
 		cryptoS: cryptoS, sshC: sshC, bus: bus, auditRepo: auditRepo, conc: concurrency}
 }
@@ -207,6 +213,12 @@ func (h *stackHandler) createAndRun(req stackRunReq, remoteIP string) (int64, er
 		if err := validateStackTopology(bp, mode, len(ids), replicas, req.MasterHostID, ids); err != nil {
 			return 0, err
 		}
+		// ES 冷热温：角色组合校验（master 与数据层互斥 / 缺 master / 角色重复等逐条 400）
+		if bp.Key == "elasticsearch" && req.Mode == "cold_warm_hot" {
+			if _, err := validateCWHRoles(req.HostParams); err != nil {
+				return 0, err
+			}
+		}
 		if bp.Key == "bigdata" {
 			if err := h.validateBigdataMasters(params, ids, req.MasterHostID); err != nil {
 				return 0, err
@@ -244,6 +256,9 @@ func (h *stackHandler) createAndRun(req stackRunReq, remoteIP string) (int64, er
 			return 0, err
 		}
 		params["components"] = strings.Join(mergeComponentList(installed, added), ",")
+		// 记录本次新增组件：流水线据此裁剪阶段（只跑新增组件对应的阶段），
+		// 否则加装会退化成整机重装，甚至执行 reset 把既有数据清掉。
+		params["add_components"] = strings.Join(added, ",")
 		// 合并角色规划：保留实例已有组件主角色，覆盖本次加装指定
 		baseParams := map[string]string{}
 		_ = json.Unmarshal([]byte(inst.ParamsJSON), &baseParams)
@@ -296,6 +311,11 @@ func (h *stackHandler) createAndRun(req stackRunReq, remoteIP string) (int64, er
 		return 0, fmt.Errorf("集群已卸载")
 	}
 
+	// bigdata：缩容保护优先读已物化角色计划（缺失时惰性生成并落库，docs/role-plan-design.md §3.3）
+	if bp.Key == "bigdata" && op == "scale_in" && inst != nil {
+		_, _ = h.loadRolePlan(inst)
+	}
+
 	hostParams := req.HostParams
 	if hostParams == nil {
 		hostParams = map[string]map[string]string{}
@@ -322,6 +342,52 @@ func (h *stackHandler) createAndRun(req stackRunReq, remoteIP string) (int64, er
 	if err != nil {
 		return 0, err
 	}
+	// 冷热温缩容保护：不允许移除最后一台 master 候选（集群将失去选举能力）
+	if op == "scale_in" && bp.Key == "elasticsearch" && req.Mode == "cold_warm_hot" && inst != nil {
+		if err := validateCWHRemoveMasters(inst, hosts); err != nil {
+			return 0, err
+		}
+	}
+
+	// 本次请求显式传入的实例级参数（如重装时切换内网镜像仓库 image_registry），
+	// 合并进每台主机的参数表，使运行期渲染立即生效；主机级差异参数不受影响。
+	if len(req.Params) > 0 {
+		for i := range hosts {
+			m := map[string]string{}
+			_ = json.Unmarshal([]byte(hosts[i].ParamsJSON), &m)
+			for k, v := range req.Params {
+				if strings.TrimSpace(k) == "" {
+					continue
+				}
+				m[k] = v
+			}
+			if b, merr := json.Marshal(m); merr == nil {
+				hosts[i].ParamsJSON = string(b)
+			}
+		}
+	}
+
+	// 部署前物化角色计划（docs/role-plan-design.md §3.1 时机矩阵，全部套件适用）。
+	// create/add_component 生成或重规划；scale_out/scale_in 增量刷新（落点冻结、全员角色伸缩）；
+	// reinstall 只读沿用。bigdata 计划的全量 masters 投影注入参数，使运行期任何子集主机上的
+	// 推导都与 Plan 逐字节一致（41 类不一致的根治机制）；通用套件预览落库供抽屉/缩容保护共读。
+	var pendingPlan *model.RolePlan
+	if op == "create" || op == "add_component" || op == "reinstall" || op == "scale_out" || op == "scale_in" {
+		plan, perr := h.planForStackOp(op, bp, mode, inst, params, hosts, ids, req.MasterHostID)
+		if perr != nil {
+			return 0, perr
+		}
+		if plan != nil {
+			applyPlanMasters(params, plan)
+			applyPlanToHosts(hosts, plan)
+			pendingPlan = plan
+			if op != "create" && req.InstanceID > 0 {
+				if b := encodeRolePlan(plan); b != "" {
+					_ = h.repo.SetInstanceRolePlan(req.InstanceID, b)
+				}
+			}
+		}
+	}
 
 	if op == "create" {
 		name := strings.TrimSpace(req.Name)
@@ -342,9 +408,18 @@ func (h *stackHandler) createAndRun(req stackRunReq, remoteIP string) (int64, er
 		if cerr != nil {
 			return 0, fmt.Errorf("创建集群实例失败: %w", cerr)
 		}
+		if pendingPlan != nil {
+			if b := encodeRolePlan(pendingPlan); b != "" {
+				_ = h.repo.SetInstanceRolePlan(id, b)
+			}
+		}
 		req.InstanceID = id
 	}
 
+	// 记录运行前置状态：失败时回滚，避免实例被永久留在 deploying（如加装失败本不影响既有集群）
+	if op != "create" && inst != nil && strings.TrimSpace(inst.Status) != "" {
+		params["prev_instance_status"] = inst.Status
+	}
 	taskParams, _ := json.Marshal(params)
 	runID, err := h.repo.CreateRun(&model.StackRun{
 		InstanceID: req.InstanceID, Op: op,
@@ -354,7 +429,14 @@ func (h *stackHandler) createAndRun(req stackRunReq, remoteIP string) (int64, er
 		return 0, fmt.Errorf("创建套件运行失败: %w", err)
 	}
 	if op != "create" {
-		_ = h.repo.UpdateInstance(req.InstanceID, "", "deploying", "", "")
+		// 显式覆盖过参数时一并持久化到实例，后续扩容/重装继续沿用（如内网镜像仓库前缀）
+		persist := ""
+		if len(req.Params) > 0 {
+			if merged, merr := json.Marshal(params); merr == nil {
+				persist = string(merged)
+			}
+		}
+		_ = h.repo.UpdateInstance(req.InstanceID, "", "deploying", persist, "")
 	}
 	h.auditRepo.Create(&model.AuditLog{
 		Action: "stack.run", TargetType: "stack_run", TargetID: runID,
@@ -452,6 +534,85 @@ func masterMustBeSelected(masterID int64, hostIDs []int64) error {
 		}
 	}
 	return fmt.Errorf("主节点必须在已选主机中")
+}
+
+// validateCWHRoles 校验 ES 冷热温模式角色组合。
+// hostRoles 为逐主机角色表（hostID 字符串 -> {roles: "a,b"}）；合法角色：
+// master / coordinator（纯协调）/ data_hot / data_warm / data_cold。
+// 硬性非法组合逐条返回 400：master 与数据层互斥、coordinator 不与数据层共存、
+// 缺 master 候选、未知角色、单台角色重复；master 数量为偶数时返回引导提示。
+func validateCWHRoles(hostRoles map[string]map[string]string) (string, error) {
+	validRoles := map[string]bool{
+		"master": true, "coordinator": true,
+		"data_hot": true, "data_warm": true, "data_cold": true,
+	}
+	masterCnt := 0
+	for hostID, hp := range hostRoles {
+		raw := strings.TrimSpace(hp["roles"])
+		if raw == "" {
+			raw = "coordinator"
+		}
+		var roles []string
+		for _, r := range strings.Split(raw, ",") {
+			r = strings.TrimSpace(r)
+			if r == "" {
+				continue
+			}
+			if !validRoles[r] {
+				return "", fmt.Errorf("主机 %s 含未知角色: %s", hostID, r)
+			}
+			if containsString(roles, r) {
+				return "", fmt.Errorf("主机 %s 角色 %s 重复选择", hostID, r)
+			}
+			roles = append(roles, r)
+		}
+		if len(roles) == 0 {
+			roles = []string{"coordinator"}
+		}
+		isMaster := containsString(roles, "master")
+		hasCoord := containsString(roles, "coordinator")
+		hasData := containsString(roles, "data_hot") || containsString(roles, "data_warm") || containsString(roles, "data_cold")
+		switch {
+		case isMaster && (hasCoord || hasData || len(roles) > 1):
+			return "", fmt.Errorf("主机 %s: master 不能与数据层/协调角色共存（master 与数据层互斥）", hostID)
+		case hasCoord && hasData:
+			return "", fmt.Errorf("主机 %s: 纯协调（coordinator）不能同时承担数据层角色", hostID)
+		case isMaster:
+			masterCnt++
+		}
+	}
+	if masterCnt == 0 {
+		return "", fmt.Errorf("冷热温模式至少需要 1 台 master 候选主机（生产建议 ≥3 台奇数）")
+	}
+	if masterCnt%2 == 0 {
+		return fmt.Sprintf("当前 %d 台 master 候选为偶数，生产建议奇数（≥3）以保障仲裁", masterCnt), nil
+	}
+	return "", nil
+}
+
+// validateCWHRemoveMasters 冷热温缩容保护：移除后剩余 master 候选为 0 时拒绝（集群失去选举能力）。
+func validateCWHRemoveMasters(inst *model.StackInstance, removed []model.StackRunHost) error {
+	removedIDs := map[int64]bool{}
+	for i := range removed {
+		removedIDs[removed[i].HostID] = true
+	}
+	remainMasters := 0
+	if inst != nil {
+		for _, h := range inst.Hosts {
+			if removedIDs[h.HostID] {
+				continue
+			}
+			p := map[string]string{}
+			_ = json.Unmarshal([]byte(h.ParamsJSON), &p)
+			if strings.Contains(p["roles"], "master") {
+				remainMasters++
+			}
+		}
+	}
+	if remainMasters == 0 {
+		return fmt.Errorf("不允许移除最后一台 master 候选主机：集群将失去选举与仲裁能力")
+	}
+	return nil
 }
 
 func validateRedisTopology(mode string, n, replicas int, masterID int64, hostIDs []int64) error {

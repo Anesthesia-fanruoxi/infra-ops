@@ -141,7 +141,7 @@ window.OverviewPage = {
       return 'other'
     },
     auditDetail(a) { return a.detail || a.target_type || '系统操作' },
-    formatTime(t) { if (!t) return '-'; const d = new Date(t); return String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')+' '+String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0') },
+    formatTime(t) { if (!t) return '-'; const d = new Date(t.replace(' ', 'T')); return String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')+' '+String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0') },
     parseInfo(row) { if (!row?.info_json || row.info_json === '{}') return null; try { return typeof row.info_json === 'string' ? JSON.parse(row.info_json) : row.info_json } catch (e) { return null } },
     memPct(row) { const i = this.parseInfo(row); return i?.mem_used_percent ? Math.round(i.mem_used_percent) : 0 },
     memClass(row) {

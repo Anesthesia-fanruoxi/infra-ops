@@ -18,6 +18,12 @@
     <name>yarn.nodemanager.aux-services</name>
     <value>mapreduce_shuffle</value>
   </property>
+  <!-- 容器内主机名为 IP 字面量，若不显式指定 NM 会以 localhost 注册，
+       导致 AM 拿到 localhost:20071 之类的回调地址而连接被拒。 -->
+  <property>
+    <name>yarn.nodemanager.hostname</name>
+    <value>{{__ip}}</value>
+  </property>
   <property>
     <name>yarn.nodemanager.env-whitelist</name>
     <value>JAVA_HOME,HADOOP_COMMON_HOME,HADOOP_HDFS_HOME,HADOOP_CONF_DIR,CLASSPATH_PREPEND_DISTCACHE,HADOOP_YARN_HOME,HADOOP_MAPRED_HOME,HADOOP_HOME,PATH,LANG,TZ</value>
@@ -41,5 +47,14 @@
   <property>
     <name>yarn.log-aggregation-enable</name>
     <value>true</value>
+  </property>
+  <!-- 所有 YARN 容器的基础 classpath。
+       注意：apache/hadoop 镜像并未导出 HADOOP_*_HOME，其 yarn-default.xml 里的默认值依赖这些环境变量，
+       展开后会变成近乎空的 classpath，导致 MR AppMaster 加载不到 hadoop-hdfs-client，
+       报 "Couldn't create proxy provider class ... ConfiguredFailoverProxyProvider"。
+       故这里显式给出镜像内的绝对路径（JVM 自身支持 dir/* 通配）。 -->
+  <property>
+    <name>yarn.application.classpath</name>
+    <value>/opt/hadoop/etc/hadoop,/opt/hadoop/share/hadoop/common/*,/opt/hadoop/share/hadoop/common/lib/*,/opt/hadoop/share/hadoop/hdfs/*,/opt/hadoop/share/hadoop/hdfs/lib/*,/opt/hadoop/share/hadoop/yarn/*,/opt/hadoop/share/hadoop/yarn/lib/*,/opt/hadoop/share/hadoop/mapreduce/*,/opt/hadoop/share/hadoop/mapreduce/lib/*</value>
   </property>
 {{__ha_yarn_props}}</configuration>

@@ -15,6 +15,8 @@ import (
 
 type stackInstancePatchReq struct {
 	Name string `json:"name"`
+	// 可选：实例级参数局部覆盖（如 image_registry 指向内网私有镜像仓库）
+	Params map[string]string `json:"params"`
 }
 
 // ListInstances GET /api/stacks/instances
@@ -60,10 +62,24 @@ func (h *stackHandler) PatchInstance(c *gin.Context) {
 	}
 	name := strings.TrimSpace(req.Name)
 	if name == "" {
-		resp.Fail(c, resp.CodeBadRequest, "名称不能为空")
-		return
+		// 允许只改参数（如切换内网镜像仓库 image_registry）而不改名称
+		name = inst.Name
 	}
-	if err := h.repo.UpdateInstance(id, name, "", "", ""); err != nil {
+	paramsJSON := ""
+	if len(req.Params) > 0 {
+		base := map[string]string{}
+		_ = json.Unmarshal([]byte(inst.ParamsJSON), &base)
+		for k, v := range req.Params {
+			if strings.TrimSpace(k) == "" {
+				continue
+			}
+			base[k] = v
+		}
+		if b, merr := json.Marshal(base); merr == nil {
+			paramsJSON = string(b)
+		}
+	}
+	if err := h.repo.UpdateInstance(id, name, "", paramsJSON, ""); err != nil {
 		resp.ErrHTTP(c, 500, resp.CodeInternal, "更新失败")
 		return
 	}
@@ -118,6 +134,7 @@ func (h *stackHandler) AddComponent(c *gin.Context) {
 }
 
 // Uninstall POST /api/stacks/instances/:id/uninstall
+// body 可选 {"purge": true}：卸载时同时清理残留容器与数据/配置目录（用于部署失败后的彻底清理重装）
 func (h *stackHandler) Uninstall(c *gin.Context) {
 	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
 	inst, err := h.repo.GetInstanceFull(id)
@@ -126,6 +143,12 @@ func (h *stackHandler) Uninstall(c *gin.Context) {
 		return
 	}
 	req := stackRunReq{InstanceID: id, Op: "uninstall"}
+	var body struct {
+		Purge bool `json:"purge"`
+	}
+	if err := c.ShouldBindJSON(&body); err == nil && body.Purge {
+		req.Params = map[string]string{"purge": "true"}
+	}
 	for _, host := range activeInstanceHosts(inst) {
 		req.HostIDs = append(req.HostIDs, host.HostID)
 	}
@@ -141,6 +164,14 @@ func (h *stackHandler) Uninstall(c *gin.Context) {
 func (h *stackHandler) Reinstall(c *gin.Context) {
 	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
 	req := stackRunReq{InstanceID: id, Op: "reinstall"}
+	// 可选：重装时覆盖实例级参数（如 image_registry 指向内网私有镜像仓库）；
+	// 空 body / 空 params 时保持原行为，向后兼容。
+	var body struct {
+		Params map[string]string `json:"params"`
+	}
+	if err := c.ShouldBindJSON(&body); err == nil && len(body.Params) > 0 {
+		req.Params = body.Params
+	}
 	runID, err := h.createAndRun(req, c.ClientIP())
 	if err != nil {
 		resp.Fail(c, resp.CodeBadRequest, err.Error())
@@ -420,14 +451,17 @@ func validateScaleIn(bp *store.BuiltinStack, inst *model.StackInstance, active [
 	if bp.Key == "redis" && inst.Mode == "cluster" && remain < 3 {
 		return fmt.Errorf("Redis 集群至少保留 3 个节点")
 	}
-	// §4.3-5：HA 模式下承载高可用角色的主机不可缩容（NN1/NN2/JN/RM1/RM2/双 Master/双 JM/双 HMaster/HS2×2/MS×2/metastore_db/ZK ensemble）
-	if bp.Key == "bigdata" {
-		if protected, isHA := bigdataProtectedHosts(active); isHA {
-			for id := range removeSet {
-				ip := activeMap[id].HostIP
-				if label, ok := protected[ip]; ok {
-					return fmt.Errorf("HA 模式下主机 %s（%s）承载高可用角色，不可缩容，请整体卸载或重装为非 HA", ip, label)
-				}
+	// 承载落点角色（scope==""）的主机不可缩容：全部套件适用，优先读已物化角色计划
+	// （拍板 ②：直接拦截，不提供「先重规划再缩」的出路）；bigdata 无 Plan 时回落现场推导。
+	protected, hasProtected := planProtectedHosts(decodeRolePlan(inst.RolePlanJSON))
+	if !hasProtected && bp.Key == "bigdata" {
+		protected, hasProtected = bigdataProtectedHosts(active)
+	}
+	if hasProtected {
+		for id := range removeSet {
+			ip := activeMap[id].HostIP
+			if label, ok := protected[ip]; ok {
+				return fmt.Errorf("主机 %s（%s）承载落点角色，不可缩容；落点角色主机不在扩缩容范围内", ip, label)
 			}
 		}
 	}
@@ -591,6 +625,29 @@ func (h *stackHandler) buildReinstallHosts(inst *model.StackInstance) ([]model.S
 					out[i].BootstrapStatus = "pending"
 				} else if out[i].BootstrapStatus == "pending" {
 					out[i].BootstrapStatus = "skipped"
+				}
+			}
+		}
+	}
+	// 合并实例当前参数到每台主机：历史 run 记录可能不含后来新增的参数（如 image_registry 私有镜像仓库前缀），
+	// 以实例当前配置为准覆盖，确保重装沿用最新设置；主机级差异参数保持不动。
+	if inst != nil && strings.TrimSpace(inst.ParamsJSON) != "" {
+		instParams := map[string]string{}
+		if json.Unmarshal([]byte(inst.ParamsJSON), &instParams) == nil {
+			for i := range out {
+				m := map[string]string{}
+				_ = json.Unmarshal([]byte(out[i].ParamsJSON), &m)
+				if m == nil {
+					m = map[string]string{}
+				}
+				for k, v := range instParams {
+					if strings.TrimSpace(k) == "" {
+						continue
+					}
+					m[k] = v
+				}
+				if b, merr := json.Marshal(m); merr == nil {
+					out[i].ParamsJSON = string(b)
 				}
 			}
 		}
@@ -843,24 +900,15 @@ func mergeComponentList(base, add []string) []string {
 	return out
 }
 
-func validateBigdataComponents(csv string, requireHDFS bool) error {
-	comps := parseComponentsCSV(csv)
-	if len(comps) == 0 {
-		return fmt.Errorf("请选择部署组件")
-	}
-	valid := map[string]bool{"hdfs": true, "zookeeper": true, "yarn": true, "spark": true, "flink": true, "hive": true, "hbase": true, "trino": true, "metastore_db": true}
-	hasHDFS := false
-	for _, c := range comps {
-		if !valid[c] {
-			return fmt.Errorf("不支持的组件: %s", c)
-		}
-		if c == "hdfs" {
-			hasHDFS = true
-		}
-	}
-	if requireHDFS && !hasHDFS {
-		return fmt.Errorf("HDFS 为必选组件（大数据底座的存储基座）")
-	}
+// bigdataComponentSet 大数据底座支持的组件白名单。
+var bigdataComponentSet = map[string]bool{
+	"hdfs": true, "zookeeper": true, "yarn": true, "spark": true, "flink": true,
+	"hive": true, "hbase": true, "trino": true, "metastore_db": true,
+}
+
+// validateBigdataDeps 校验组件依赖关系。comps 必须是「组件全集」——
+// 单看某一次增量（如加装）会漏掉集群里已存在的依赖方，从而误报缺依赖。
+func validateBigdataDeps(comps []string) error {
 	// 组件依赖：HBase 依赖 ZooKeeper；Trino 依赖 Hive Metastore
 	if containsString(comps, "hbase") && !containsString(comps, "zookeeper") {
 		return fmt.Errorf("HBase 依赖 ZooKeeper，请同时勾选 ZooKeeper")
@@ -871,14 +919,34 @@ func validateBigdataComponents(csv string, requireHDFS bool) error {
 	return nil
 }
 
+func validateBigdataComponents(csv string, requireHDFS bool) error {
+	comps := parseComponentsCSV(csv)
+	if len(comps) == 0 {
+		return fmt.Errorf("请选择部署组件")
+	}
+	hasHDFS := false
+	for _, c := range comps {
+		if !bigdataComponentSet[c] {
+			return fmt.Errorf("不支持的组件: %s", c)
+		}
+		if c == "hdfs" {
+			hasHDFS = true
+		}
+	}
+	if requireHDFS && !hasHDFS {
+		return fmt.Errorf("HDFS 为必选组件（大数据底座的存储基座）")
+	}
+	return validateBigdataDeps(comps)
+}
+
 func validateBigdataAdd(added, installed []string) error {
 	if len(added) == 0 {
 		return fmt.Errorf("请选择要加装的组件")
 	}
-	if err := validateBigdataComponents(strings.Join(added, ","), false); err != nil {
-		return err
-	}
 	for _, c := range added {
+		if !bigdataComponentSet[c] {
+			return fmt.Errorf("不支持的组件: %s", c)
+		}
 		if c == "hdfs" {
 			return fmt.Errorf("HDFS 已作为底座存在，无需加装")
 		}
@@ -886,7 +954,9 @@ func validateBigdataAdd(added, installed []string) error {
 			return fmt.Errorf("组件 %s 已安装", c)
 		}
 	}
-	return nil
+	// 依赖按「已安装 ∪ 本次加装」的并集判定：ZooKeeper/Hive 等基座通常已在集群中，
+	// 只有增量集合的话会把「加装 Trino」这类合法请求误判为缺依赖。
+	return validateBigdataDeps(mergeComponentList(installed, added))
 }
 
 func validateBigdataRemove(removing, installed []string, ha bool) error {

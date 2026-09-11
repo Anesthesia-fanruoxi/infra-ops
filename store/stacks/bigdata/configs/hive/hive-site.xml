@@ -36,4 +36,15 @@
     <name>hive.server2.enable.doAs</name>
     <value>false</value>
   </property>
+  <!-- 关闭内置 scheduled query 执行器：其初始化强依赖主机名解析（getLocalHost），容器化场景易卡启动 -->
+  <property>
+    <name>hive.scheduled.queries.execution.enabled</name>
+    <value>false</value>
+  </property>
+  <!-- Hive 4.0 默认仅 metastore 管理员可调用 notification API；HS2 以 hive 用户连接会被拒，
+       导致 NotificationEventPoll 初始化失败、HS2 循环重试永不监听 10000 -->
+  <property>
+    <name>metastore.metastore.event.db.notification.api.auth</name>
+    <value>false</value>
+  </property>
 </configuration>

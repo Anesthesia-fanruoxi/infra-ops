@@ -174,7 +174,64 @@ func Setup(staticFS fs.FS, deps Deps) *gin.Engine {
 		stacks.POST("/instances/:id/uninstall", stackHandler.Uninstall)
 		stacks.POST("/instances/:id/reinstall", stackHandler.Reinstall)
 		stacks.POST("/instances/:id/verify", stackHandler.VerifyInstance)
+		stacks.GET("/instances/:id/ca", stackHandler.CaCert)
 		stacks.GET("/instances/:id/runs", stackHandler.InstanceRuns)
+		// 角色计划（docs/role-plan-design.md §4.5）
+		stacks.POST("/plan/preview", stackHandler.PlanPreview)
+		stacks.GET("/instances/:id/plan", stackHandler.GetPlan)
+		stacks.POST("/instances/:id/replan", stackHandler.ReplanPlan)
+	}
+
+	// 工具-镜像仓库（Docker Registry）
+	regRepo := repo.NewRegistryRepo()
+	regHandler := api.NewRegistryHandler(regRepo, deps.CryptoService)
+	reg := protected.Group("/registry")
+	{
+		reg.GET("", regHandler.List)
+		reg.POST("", regHandler.Create)
+		reg.PUT("/:id", regHandler.Update)
+		reg.DELETE("/:id", regHandler.Delete)
+		reg.GET("/:id/ping", regHandler.Ping)
+		reg.GET("/:id/catalog", regHandler.Catalog)
+		reg.GET("/:id/tags", regHandler.Tags)
+		reg.GET("/:id/manifest", regHandler.Manifest)
+		reg.DELETE("/:id/repo", regHandler.DeleteRepo)
+	}
+
+	// 工具-Elasticsearch 连接与浏览
+	esRepo := repo.NewESRepo()
+	esHandler := api.NewESHandler(esRepo, deps.CryptoService)
+	es := protected.Group("/es")
+	{
+		es.GET("", esHandler.List)
+		es.POST("", esHandler.Create)
+		es.PUT("/:id", esHandler.Update)
+		es.DELETE("/:id", esHandler.Delete)
+		es.GET("/:id/ping", esHandler.Ping)
+		es.GET("/:id/overview", esHandler.Overview)
+		es.GET("/:id/nodes", esHandler.Nodes)
+		es.GET("/:id/indices", esHandler.Indices)
+		es.POST("/:id/index", esHandler.CreateIndex)
+		es.DELETE("/:id/index/:index", esHandler.DeleteIndex)
+		es.POST("/:id/search", esHandler.Search)
+	}
+
+	// 工具-SFTP 连接、浏览与文件传输
+	sftpRepo := repo.NewSFTPRepo()
+	sftpHandler := api.NewSFTPHandler(sftpRepo, deps.CryptoService)
+	sftp := protected.Group("/sftp")
+	{
+		sftp.GET("", sftpHandler.List)
+		sftp.POST("", sftpHandler.Create)
+		sftp.PUT("/:id", sftpHandler.Update)
+		sftp.DELETE("/:id", sftpHandler.Delete)
+		sftp.GET("/:id/ping", sftpHandler.Ping)
+		sftp.GET("/:id/browse", sftpHandler.Browse)
+		sftp.POST("/:id/mkdir", sftpHandler.Mkdir)
+		sftp.POST("/:id/upload", sftpHandler.Upload)
+		sftp.GET("/:id/download", sftpHandler.Download)
+		sftp.DELETE("/:id/delete", sftpHandler.Remove)
+		sftp.POST("/:id/rename", sftpHandler.Rename)
 	}
 
 	// 总览 & 审计日志（审计日志统一走 /api/sse/audits 单一查询流）

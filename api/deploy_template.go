@@ -38,6 +38,7 @@ type templateReq struct {
 	Variables   json.RawMessage `json:"variables"`
 	Services    json.RawMessage `json:"services"`
 	Requires    json.RawMessage `json:"requires"`
+	Tags        json.RawMessage `json:"tags"`
 }
 
 // tplVar 模板变量声明。
@@ -70,7 +71,7 @@ func (h *deployTemplateHandler) Create(c *gin.Context) {
 	t := &model.DeployTemplate{
 		Name: req.Name, Description: req.Description, Category: req.Category,
 		Script: req.Script, Variables: mustMarshal(vars),
-		Services: req.Services, Requires: req.Requires,
+		Services: req.Services, Requires: req.Requires, Tags: req.Tags,
 	}
 	id, err := h.tplRepo.CreateTemplate(t)
 	if err != nil {
@@ -103,6 +104,7 @@ func (h *deployTemplateHandler) Update(c *gin.Context) {
 	existing.Variables = mustMarshal(vars)
 	existing.Services = req.Services
 	existing.Requires = req.Requires
+	existing.Tags = req.Tags
 	if err := h.tplRepo.UpdateTemplate(existing); err != nil {
 		resp.ErrHTTP(c, 500, resp.CodeInternal, "更新失败")
 		return

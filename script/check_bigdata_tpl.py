@@ -45,10 +45,12 @@ hive_site = (ROOT / "configs" / "hive" / "hive-site.xml").read_text(encoding="ut
 core_site = (ROOT / "configs" / "hdfs" / "core-site.xml").read_text(encoding="utf-8")
 hdfs_site = (ROOT / "configs" / "hdfs" / "hdfs-site.xml").read_text(encoding="utf-8")
 yarn_site = (ROOT / "configs" / "yarn" / "yarn-site.xml").read_text(encoding="utf-8")
+mapred_site = (ROOT / "configs" / "hdfs" / "mapred-site.xml").read_text(encoding="utf-8")
 hbase_site = (ROOT / "configs" / "hbase" / "hbase-site.xml").read_text(encoding="utf-8")
 node = (ROOT / "scripts" / "node.sh").read_text(encoding="utf-8")
 node = (node.replace("@@CORE_SITE@@", core_site).replace("@@HDFS_SITE@@", hdfs_site)
         .replace("@@HIVE_SITE@@", hive_site).replace("@@YARN_SITE@@", yarn_site)
+        .replace("@@MAPRED_SITE@@", mapred_site)
         .replace("@@HBASE_SITE@@", hbase_site))
 
 # 1) 组件组合 × master/worker：全 heredoc 必须可解析
@@ -78,6 +80,17 @@ for comps in COMBO:
                 print(f"  [FAIL] components={comps} role={role} heredoc {tag} 缺 services")
                 ok = False
         print(f"  [OK] components={comps} role={role}: heredoc 全部可解析")
+
+# 1a) ZooKeeper ZOO_SERVERS 必须带 ;2181（官方镜像 clientPort），否则 quorum 有、2181 永不监听
+_zk_render = render(node, dict(PARAMS, components="hdfs,zookeeper", __role="worker"))
+if "2888:3888;2181" not in _zk_render:
+    print("  [FAIL] ZOO_SERVERS 缺少 ;2181 clientPort 后缀")
+    ok = False
+elif "ZOOKEEPER_CLIENT_PORT" in _zk_render:
+    print("  [FAIL] 仍使用无效变量 ZOOKEEPER_CLIENT_PORT（应为 ZOO_SERVERS 内 ;2181）")
+    ok = False
+else:
+    print("  [OK] ZooKeeper ZOO_SERVERS 含 ;2181 clientPort")
 
 # 1b) 角色规划分离：主节点(10.0.0.1)本机是 master 角色，但 NN/RM/Trino 规划在别的节点 →
 #     本机应落 DataNode/NM/Worker 分支，heredoc 仍全部可解析
@@ -117,10 +130,11 @@ for name, raw in (("core-site", core_site), ("hdfs-site", hdfs_site),
     n = len(root.findall("property"))
     print(f"  [OK] {name}.xml: {n} 项")
 
-# 5) 全组件脚本守卫：node.sh 必须覆盖全部组件分支
+# 5) 全组件脚本守卫：node.sh 的 RUN 分发器必须覆盖全部组件分支（hdfs 拆为 boot/dn 两阶段）
 for c in ALL_COMPS:
-    assert f"has {c};" in node, f"node.sh 缺少组件分支: {c}"
-print(f"  [OK] node.sh 覆盖全部 {len(ALL_COMPS)} 个组件分支")
+    assert f"has {c} && deploy_" in node, f"node.sh 缺少组件分支: {c}"
+assert "has hdfs && deploy_hdfs_boot" in node and "has hdfs && deploy_hdfs_dn" in node, "HDFS 应拆为 boot/dn 两阶段"
+print(f"  [OK] node.sh 覆盖全部 {len(ALL_COMPS)} 个组件分支（HDFS 拆为 boot/dn）")
 
 # ================= §B8: HA 渲染校验 =================
 ha_script = (ROOT / "scripts" / "ha.sh").read_text(encoding="utf-8")
@@ -191,6 +205,9 @@ def ha_node(comps, role_ip, role):
         p["__role"] = "worker"
     p.update(blk)
     nd = node.replace("@@HA_SH@@", ha_script)
+    # ha.sh 的 compose heredoc 里有占位整行的 shell 变量（如 ${NM_VOL_}），
+    # 它不是模板变量、只在运行时展开，这里按空行处理以便 YAML 解析。
+    nd = re.sub(r"^\$\{[A-Za-z_][A-Za-z0-9_]*\}$", "", nd, flags=re.M)
     return render(nd, p), p
 
 # HA 场景 1：全家桶，本机 nn1(master)：core-site fs.defaultFS=nameservice、yarn/hive 双实例块注入

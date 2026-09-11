@@ -272,7 +272,7 @@ window.AuditPage = {
     relativeTime(dateStr) {
       if (!dateStr) return '-'
       const now = Date.now()
-      const d = new Date(dateStr.replace(' ', 'T') + (dateStr.includes('Z') ? '' : 'Z'))
+      const d = new Date(dateStr.replace(' ', 'T'))
       const diff = Math.max(0, now - d.getTime())
       const sec = Math.floor(diff / 1000)
       if (sec < 60) return '刚刚'

@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"sort"
 	"strconv"
 	"strings"
@@ -17,9 +18,10 @@ import (
 )
 
 type stackVerifyCheck struct {
-	Name   string `json:"name"`
-	OK     bool   `json:"ok"`
-	Detail string `json:"detail"`
+	Name      string `json:"name"`
+	Component string `json:"component,omitempty"`
+	OK        bool   `json:"ok"`
+	Detail    string `json:"detail"`
 }
 
 type stackVerifyHost struct {
@@ -34,9 +36,10 @@ type stackVerifyHost struct {
 }
 
 type stackVerifyEndpoint struct {
-	Name string `json:"name"`
-	URL  string `json:"url"`
-	Role string `json:"role,omitempty"`
+	Name      string `json:"name"`
+	Component string `json:"component,omitempty"`
+	URL       string `json:"url"`
+	Role      string `json:"role,omitempty"`
 }
 
 type stackVerifyResult struct {
@@ -67,6 +70,11 @@ func (h *stackHandler) VerifyInstance(c *gin.Context) {
 	if len(hosts) == 0 {
 		resp.Fail(c, resp.CodeBadRequest, "集群没有在役成员")
 		return
+	}
+	// bigdata：探活前确保角色计划已物化（缺失时惰性生成并落库，docs/role-plan-design.md §6.1），
+	// 之后 overrideBigdataMasters 以 Plan 的全量 masters 投影为唯一事实源。
+	if inst.StackKey == "bigdata" {
+		_, _ = h.loadRolePlan(inst)
 	}
 	instParams := parseJSONMap(inst.ParamsJSON)
 	outHosts := make([]stackVerifyHost, len(hosts))
@@ -101,6 +109,7 @@ func (h *stackHandler) verifyInstanceHost(inst *model.StackInstance, host model.
 		Checks: []stackVerifyCheck{},
 	}
 	params := mergeParamMaps(instParams, parseJSONMap(host.ParamsJSON))
+	overrideBigdataMasters(inst, params)
 	script := buildStackVerifyScript(inst.StackKey, inst.Mode, host.Role, host.HostIP, params)
 	raw, execErr := execHostWith(h.hostRepo, h.credRepo, h.cryptoS, h.sshC, host.HostID, script, nil)
 	pass := strings.TrimSpace(params["password"])
@@ -115,6 +124,92 @@ func (h *stackHandler) verifyInstanceHost(inst *model.StackInstance, host model.
 	}
 	parseStackVerifyOutput(inst.StackKey, inst.Mode, host, params, raw, &row)
 	return row
+}
+
+// CaCert GET /api/stacks/instances/:id/ca
+// 下载 Elasticsearch 冷热温自签 SSL 的 CA 公钥（PEM）。任一在役节点均可（全员证书一致）。
+func (h *stackHandler) CaCert(c *gin.Context) {
+	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
+	inst, err := h.repo.GetInstanceFull(id)
+	if err != nil || inst == nil {
+		resp.Fail(c, resp.CodeNotFound, "集群实例不存在")
+		return
+	}
+	if inst.StackKey != "elasticsearch" || inst.Mode != "cold_warm_hot" {
+		resp.Fail(c, resp.CodeBadRequest, "仅冷热温模式支持 SSL CA 下载")
+		return
+	}
+	if !strings.EqualFold(strings.TrimSpace(parseJSONMap(inst.ParamsJSON)["ssl_enabled"]), "true") {
+		resp.Fail(c, resp.CodeBadRequest, "当前未启用 SSL，无 CA 证书")
+		return
+	}
+	hosts := activeInstanceHosts(inst)
+	if len(hosts) == 0 {
+		resp.Fail(c, resp.CodeBadRequest, "集群没有在役成员")
+		return
+	}
+	hp := parseJSONMap(hosts[0].ParamsJSON)
+	home := strings.TrimSpace(hp["home_dir"])
+	if home == "" {
+		home = "/data/elasticsearch"
+	}
+	raw, _ := execHostWith(h.hostRepo, h.credRepo, h.cryptoS, h.sshC, hosts[0].HostID,
+		"cat '"+home+"/certs/ca.crt' 2>/dev/null || true", nil)
+	c.Data(http.StatusOK, "application/x-pem-file", []byte(raw))
+}
+// 这是探活与部署之间唯一的一致性来源：备主落点（含 flink_jm2/hbase_hm2/hive_ms2/hive_hs2b）
+// 由引擎按「第一台非主主机」自动分配，而持久化的 masters 里往往只有用户显式指定过的键。
+func bigdataRoleMasters(inst *model.StackInstance) (map[string]string, bool) {
+	if inst == nil || inst.StackKey != "bigdata" {
+		return nil, false
+	}
+	hs := activeInstanceHosts(inst)
+	if len(hs) == 0 {
+		return nil, false
+	}
+	role := stackBigdataRole(instanceHostsAsRunHosts(hs))
+	if !role.Ha {
+		return nil, false
+	}
+	ms2, hs2b := "", ""
+	if len(role.MSs) > 1 {
+		ms2 = role.MSs[1]
+	}
+	if len(role.Hs2s) > 1 {
+		hs2b = role.Hs2s[1]
+	}
+	hivePrimary := ""
+	if len(role.MSs) > 0 {
+		hivePrimary = role.MSs[0]
+	}
+	return map[string]string{
+		"hdfs": role.Nn1, "hdfs_nn2": role.Nn2, "hdfs_jns": strings.Join(role.JNs, ","),
+		"yarn": role.Rm1, "yarn_rm2": role.Rm2,
+		"spark": role.SparkM1, "spark_m2": role.SparkM2,
+		"flink": role.FlinkJM1, "flink_jm2": role.FlinkJm2,
+		"hbase": role.HMaster1, "hbase_hm2": role.HMaster2,
+		"hive": hivePrimary, "hive_ms2": ms2, "hive_hs2b": hs2b, "hive_db": role.HiveDB,
+		"zookeeper_ips": role.ZKIps,
+	}, true
+}
+
+// overrideBigdataMasters 在合并主机级参数之后，确定权威 masters 矩阵。
+// 优先读已物化角色计划的 plan.Masters（唯一事实源，杜绝 41 类不一致）；
+// 无 Plan 时回落到引擎同款算法现场推导（兜底）。
+func overrideBigdataMasters(inst *model.StackInstance, params map[string]string) {
+	if p := decodeRolePlan(inst.RolePlanJSON); p != nil && len(p.Masters) > 0 {
+		if b, err := json.Marshal(p.Masters); err == nil {
+			params["masters"] = string(b)
+			return
+		}
+	}
+	m, ok := bigdataRoleMasters(inst)
+	if !ok {
+		return
+	}
+	if b, err := json.Marshal(m); err == nil {
+		params["masters"] = string(b)
+	}
 }
 
 func assembleStackVerify(inst *model.StackInstance, params map[string]string, hosts []stackVerifyHost) stackVerifyResult {
@@ -162,10 +257,9 @@ func stackVerifyEndpoints(inst *model.StackInstance, params map[string]string, _
 	port := pickParam(params, "port", "6379")
 	out := []stackVerifyEndpoint{}
 	comps := parseComponentsCSV(params["components"])
-	masters := map[string]string{}
-	_ = json.Unmarshal([]byte(params["masters"]), &masters)
 	for _, h := range activeInstanceHosts(inst) {
 		hp := mergeParamMaps(params, parseJSONMap(h.ParamsJSON))
+		overrideBigdataMasters(inst, hp)
 		p := pickParam(hp, "port", port)
 		switch inst.StackKey {
 		case "redis":
@@ -183,7 +277,27 @@ func stackVerifyEndpoints(inst *model.StackInstance, params map[string]string, _
 				out = append(out, stackVerifyEndpoint{Name: "Sentinel", URL: "redis-sentinel://" + h.HostIP + ":" + sp, Role: h.Role})
 			}
 		case "bigdata":
-			out = append(out, bigdataVerifyEndpoints(h, comps, masters, params)...)
+			masters := map[string]string{}
+			_ = json.Unmarshal([]byte(hp["masters"]), &masters)
+			out = append(out, bigdataVerifyEndpoints(h, comps, masters, hp)...)
+		case "elasticsearch":
+			p := pickParam(hp, "port", "9200")
+			roles := strings.Split(pickParam(hp, "roles", "coordinator"), ",")
+			scheme := "http"
+			if strings.EqualFold(strings.TrimSpace(pickParam(hp, "ssl_enabled", "false")), "true") {
+				scheme = "https"
+			}
+			for _, r := range roles {
+				r = strings.TrimSpace(r)
+				if r == "" {
+					continue
+				}
+				label := esTierLabel(r)
+				out = append(out, stackVerifyEndpoint{Name: "Elasticsearch-" + label, URL: scheme + "://" + h.HostIP + ":" + p, Role: r})
+			}
+			if len(roles) == 0 {
+				out = append(out, stackVerifyEndpoint{Name: "Elasticsearch", URL: scheme + "://" + h.HostIP + ":" + p, Role: h.Role})
+			}
 		default:
 			out = append(out, stackVerifyEndpoint{Name: inst.StackName, URL: "tcp://" + h.HostIP, Role: h.Role})
 		}
@@ -191,61 +305,123 @@ func stackVerifyEndpoints(inst *model.StackInstance, params map[string]string, _
 	return out
 }
 
+// esTierLabel 将 ES 冷热温角色映射为面向用户的接入标签。
+func esTierLabel(role string) string {
+	switch role {
+	case "master":
+		return "master"
+	case "coordinator":
+		return "协调"
+	case "data_hot":
+		return "数据-hot"
+	case "data_warm":
+		return "数据-warm"
+	case "data_cold":
+		return "数据-cold"
+	}
+	return role
+}
+
+// bigdataVerifyEndpoints 生成某台主机的访问入口。HA 下同一主机可能同时是「主」与「备」
+// （如 NN2 主机同时跑 DataNode、JN），因此按角色矩阵逐条追加，而不是非主即工作节点的二选一。
 func bigdataVerifyEndpoints(h model.StackInstanceHost, comps []string, masters, params map[string]string) []stackVerifyEndpoint {
-	isMasterOf := func(comp string) bool {
+	roleOf := func(comp string) string {
 		if ip := strings.TrimSpace(masters[comp]); ip != "" {
-			return ip == h.HostIP
+			return ip
 		}
-		return h.Role == "master"
+		if h.Role == "master" {
+			return h.HostIP
+		}
+		return ""
+	}
+	isMasterOf := func(comp string) bool { return roleOf(comp) == h.HostIP }
+	inList := func(key string) bool {
+		for _, p := range strings.Split(strings.TrimSpace(masters[key]), ",") {
+			if strings.TrimSpace(p) == h.HostIP {
+				return true
+			}
+		}
+		return false
 	}
 	webui := pickParam(params, "webui_port", "8080")
-	trinoPort := pickParam(params, "trino_http_port", "8080")
+	trinoPort := pickParam(params, "trino_http_port", "8083")
+	jnRpc := pickParam(params, "jn_rpc_port", "8485")
+	ha := strings.EqualFold(strings.TrimSpace(params["ha"]), "true")
 	var out []stackVerifyEndpoint
-	add := func(name, url string) {
-		out = append(out, stackVerifyEndpoint{Name: name, URL: url, Role: h.Role})
+	add := func(comp, name, url string) {
+		out = append(out, stackVerifyEndpoint{Name: name, Component: comp, URL: url, Role: h.Role})
 	}
 	for _, c := range comps {
 		switch c {
 		case "hdfs":
 			if isMasterOf("hdfs") {
-				add("HDFS NameNode", "http://"+h.HostIP+":9870")
-			} else {
-				add("HDFS DataNode", "http://"+h.HostIP+":9864")
+				add("hdfs", "HDFS NameNode", "http://"+h.HostIP+":9870")
+			}
+			if inList("hdfs_nn2") {
+				add("hdfs", "HDFS NameNode-2", "http://"+h.HostIP+":9870")
+			}
+			if inList("hdfs_jns") {
+				add("hdfs", "HDFS JournalNode", "http://"+h.HostIP+":"+jnRpc)
+			}
+			// HA 下 DataNode 全节点部署（含 NN1/NN2 主机）；非 HA 仅工作节点
+			if ha || !isMasterOf("hdfs") {
+				add("hdfs", "HDFS DataNode", "http://"+h.HostIP+":9864")
 			}
 		case "zookeeper":
-			add("ZooKeeper", "zookeeper://"+h.HostIP+":2181")
+			add("zookeeper", "ZooKeeper", "zookeeper://"+h.HostIP+":2181")
 		case "yarn":
 			if isMasterOf("yarn") {
-				add("YARN RM", "http://"+h.HostIP+":8088")
-			} else {
-				add("YARN NM", "http://"+h.HostIP+":8042")
+				add("yarn", "YARN RM", "http://"+h.HostIP+":8088")
+			}
+			if inList("yarn_rm2") {
+				add("yarn", "YARN RM-2", "http://"+h.HostIP+":8088")
+			}
+			if !isMasterOf("yarn") && !inList("yarn_rm2") {
+				add("yarn", "YARN NM", "http://"+h.HostIP+":8042")
 			}
 		case "spark":
 			if isMasterOf("spark") {
-				add("Spark Master", "http://"+h.HostIP+":"+webui)
-			} else {
-				add("Spark Worker", "http://"+h.HostIP+":8081")
+				add("spark", "Spark Master", "http://"+h.HostIP+":"+webui)
+			}
+			if inList("spark_m2") {
+				add("spark", "Spark Master-2", "http://"+h.HostIP+":8081")
+			}
+			if !isMasterOf("spark") && !inList("spark_m2") {
+				add("spark", "Spark Worker", "http://"+h.HostIP+":8081")
 			}
 		case "flink":
 			if isMasterOf("flink") {
-				add("Flink JM", "http://"+h.HostIP+":8081")
+				add("flink", "Flink JM", "http://"+h.HostIP+":8081")
+			}
+			if inList("flink_jm2") {
+				add("flink", "Flink JM-2", "http://"+h.HostIP+":8081")
 			}
 		case "hive":
 			if isMasterOf("hive") {
-				add("HiveServer2", "jdbc:hive2://"+h.HostIP+":10000")
-				add("Hive WebUI", "http://"+h.HostIP+":10002")
+				add("hive", "Hive Metastore", "thrift://"+h.HostIP+":9083")
+				add("hive", "HiveServer2", "jdbc:hive2://"+h.HostIP+":10000")
+			}
+			if inList("hive_ms2") {
+				add("hive", "Hive Metastore-2", "thrift://"+h.HostIP+":9083")
+			}
+			if inList("hive_hs2b") {
+				add("hive", "HiveServer2-2", "jdbc:hive2://"+h.HostIP+":10000")
 			}
 		case "hbase":
 			if isMasterOf("hbase") {
-				add("HBase Master", "http://"+h.HostIP+":16010")
-			} else {
-				add("HBase RS", "http://"+h.HostIP+":16030")
+				add("hbase", "HBase Master", "http://"+h.HostIP+":16010")
+			}
+			if inList("hbase_hm2") {
+				add("hbase", "HBase Backup Master", "http://"+h.HostIP+":16010")
+			}
+			if !isMasterOf("hbase") && !inList("hbase_hm2") {
+				add("hbase", "HBase RS", "http://"+h.HostIP+":16030")
 			}
 		case "trino":
 			if isMasterOf("trino") {
-				add("Trino Coord", "http://"+h.HostIP+":"+trinoPort)
+				add("trino", "Trino Coord", "http://"+h.HostIP+":"+trinoPort)
 			} else {
-				add("Trino Worker", "http://"+h.HostIP+":"+trinoPort)
+				add("trino", "Trino Worker", "http://"+h.HostIP+":"+trinoPort)
 			}
 		}
 	}
@@ -369,6 +545,14 @@ inspect_ctr() {
 	for _, c := range ctrs {
 		b.WriteString("inspect_ctr " + bashQuote(c) + "\n")
 	}
+	if stackKey == "bigdata" {
+		// 实际运行的大数据容器：用于如实回显本机实例清单（期望集之外的容器只做提示，不算失败）
+		b.WriteString(`echo __IO_LIVE_BEGIN__
+docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^(bigdata-|hadoop-|spark-|flink-|hive-|hbase-|trino-)' | sort | tr '\n' ','
+echo
+echo __IO_LIVE_END__
+`)
+	}
 	if stackKey == "redis" {
 		dataCtr := "redis-repl"
 		switch mode {
@@ -462,19 +646,23 @@ func bigdataExpectedContainers(hostIP, role string, params map[string]string) []
 	if has("zookeeper") {
 		out = append(out, "bigdata-zookeeper")
 	}
-	// HA 模式：镜像 ha.sh 的分支判定（先命中 SECONDARY/CLUSTER 角色，再回落工作节点）
+	// HA 模式：严格对齐 ha.sh / node.sh 的落点。要点：
+	//   1) JournalNode 部署在 JNS 全部主机（含 NN1/NN2），见 ha.sh「JNS 内全部主机（含 NN1/NN2）都部署」；
+	//   2) DataNode 全节点部署（deploy_hdfs_ha_dn 不按角色排除），NN1/NN2 主机同样跑 DataNode；
+	//   3) 备主/备实例与主实例可同主机并存（如 NN2 主机同时是 DataNode + JournalNode），
+	//      所以这里是「按角色逐条追加」，不是非主即工作的二选一。
 	if ha {
 		if has("hdfs") {
-			switch {
-			case isPrimary("hdfs"):
+			if isPrimary("hdfs") {
 				out = append(out, "hadoop-namenode", "hadoop-zkfc")
-			case inList("hdfs_nn2"):
-				out = append(out, "hadoop-namenode2", "hadoop-zkfc2")
-			case inList("hdfs_jns"):
-				out = append(out, "hadoop-journalnode")
-			default:
-				out = append(out, "hadoop-datanode")
 			}
+			if inList("hdfs_nn2") {
+				out = append(out, "hadoop-namenode2", "hadoop-zkfc2")
+			}
+			if inList("hdfs_jns") {
+				out = append(out, "hadoop-journalnode")
+			}
+			out = append(out, "hadoop-datanode")
 		}
 		if has("yarn") {
 			switch {
@@ -683,6 +871,36 @@ func parseStackVerifyOutput(stackKey, mode string, host model.StackInstanceHost,
 	}
 }
 
+// bigdataContainerComponent 由容器名推断所属组件（与 node.sh/ha.sh 命名对齐）。
+func bigdataContainerComponent(name string) string {
+	switch {
+	case name == "bigdata-zookeeper":
+		return "zookeeper"
+	case strings.HasPrefix(name, "hadoop-namenode"),
+		strings.HasPrefix(name, "hadoop-journalnode"),
+		strings.HasPrefix(name, "hadoop-datanode"),
+		strings.HasPrefix(name, "hadoop-zkfc"),
+		strings.HasPrefix(name, "hadoop-resourcemanager"),
+		name == "hadoop-nodemanager":
+		// hadoop-* 需区分 hdfs 与 yarn：rm 走 yarn，其余按 hdfs
+		if name == "hadoop-nodemanager" || name == "hadoop-resourcemanager" || name == "hadoop-resourcemanager2" {
+			return "yarn"
+		}
+		return "hdfs"
+	case strings.HasPrefix(name, "spark-"):
+		return "spark"
+	case strings.HasPrefix(name, "flink-"):
+		return "flink"
+	case strings.HasPrefix(name, "hive-"):
+		return "hive"
+	case strings.HasPrefix(name, "hbase-"):
+		return "hbase"
+	case name == "trino-node" || strings.HasPrefix(name, "trino-"):
+		return "trino"
+	}
+	return ""
+}
+
 // parseBigdataCtrChecks 解析本机应有的大数据容器；全部 running 才算通过。
 func parseBigdataCtrChecks(ctrs []string, raw string, row *stackVerifyHost) bool {
 	if len(ctrs) == 0 {
@@ -695,6 +913,7 @@ func parseBigdataCtrChecks(ctrs []string, raw string, row *stackVerifyHost) bool
 	for _, name := range ctrs {
 		st := extractLine(raw, "__IO_CTR__"+name+"__=")
 		ok, detail, img, start := parseCtrStateEx(name, st)
+		comp := bigdataContainerComponent(name)
 		if img != "" && image == "" {
 			image = img
 		}
@@ -703,11 +922,11 @@ func parseBigdataCtrChecks(ctrs []string, raw string, row *stackVerifyHost) bool
 		}
 		if !ok {
 			allOK = false
-			row.Checks = append(row.Checks, stackVerifyCheck{Name: "容器 " + name, OK: false, Detail: detail})
+			row.Checks = append(row.Checks, stackVerifyCheck{Name: "容器 " + name, Component: comp, OK: false, Detail: detail})
 			continue
 		}
 		running = append(running, name)
-		row.Checks = append(row.Checks, stackVerifyCheck{Name: "容器 " + name, OK: true, Detail: detail})
+		row.Checks = append(row.Checks, stackVerifyCheck{Name: "容器 " + name, Component: comp, OK: true, Detail: detail})
 	}
 	instDetail := strings.Join(running, ", ")
 	if instDetail == "" {
@@ -715,6 +934,20 @@ func parseBigdataCtrChecks(ctrs []string, raw string, row *stackVerifyHost) bool
 	}
 	ok := allOK && len(running) > 0
 	row.Checks = append(row.Checks, stackVerifyCheck{Name: "实例", OK: ok, Detail: instDetail})
+	// 如实回显本机实际运行的大数据容器；仅当出现「未预期的额外容器」时在明细里点出（不作为失败）
+	if live := parseLiveContainers(raw); len(live) > 0 {
+		extra := make([]string, 0, len(live))
+		for _, n := range live {
+			if !containsString(ctrs, n) {
+				extra = append(extra, n)
+			}
+		}
+		detail := strings.Join(live, ", ")
+		if len(extra) > 0 {
+			detail += "（未预期: " + strings.Join(extra, ", ") + "）"
+		}
+		row.Checks = append(row.Checks, stackVerifyCheck{Name: "实际运行", OK: true, Detail: detail})
+	}
 	verDetail := imageShort(image)
 	if started != "" {
 		if verDetail != "" {
@@ -726,6 +959,21 @@ func parseBigdataCtrChecks(ctrs []string, raw string, row *stackVerifyHost) bool
 		row.Checks = append(row.Checks, stackVerifyCheck{Name: "版本", OK: true, Detail: verDetail})
 	}
 	return ok
+}
+
+// parseLiveContainers 解析本机实际运行的大数据容器（逗号分隔）。
+func parseLiveContainers(raw string) []string {
+	blk := strings.TrimSpace(extractBlock(raw, "__IO_LIVE_BEGIN__", "__IO_LIVE_END__"))
+	if blk == "" {
+		return nil
+	}
+	out := []string{}
+	for _, s := range strings.Split(blk, ",") {
+		if s = strings.TrimSpace(s); s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 func imageShort(image string) string {

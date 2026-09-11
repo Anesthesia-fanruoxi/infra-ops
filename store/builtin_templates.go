@@ -18,6 +18,7 @@ type builtinTemplate struct {
 	description string
 	category    string            // 功能分类：系统/运行时/容器/镜像仓库/Web·网关/数据库/缓存/消息队列/配置注册中心/搜索引擎/可观测·监控
 	variables   string            // JSON: [{name,label,default,required}]
+	tags        string            // JSON: ["关系型","时序"...] 类型标签（卡片小徽标，数据库/存储类细分）
 	services    string            // JSON: [{name,url,web}]
 	requires    string            // JSON: [{check,hint}] 前置依赖检查
 	configs     string            // JSON: [{key,label,file,hint,required}] 可被用户覆盖的配置文件
@@ -74,6 +75,7 @@ var builtinTemplates = []builtinTemplate{
 		requires:    requiresDocker,
 		variables:   `[{"name":"root_password","label":"root 密码","default":"","required":true},{"name":"port","label":"端口","default":"3306","required":true},{"name":"home_dir","label":"服务主目录","default":"/data/mysql","required":true},{"name":"image","label":"镜像","default":"mysql:8.0","required":true}]`,
 		path:        "builtin/install-mysql.sh",
+		tags:        `["关系型"]`,
 		services:    `[{"name":"MySQL","url":"mysql://{{ip}}:{{port}}","web":false}]`,
 		configs:     `[{"key":"my_cnf","label":"主配置文件 my.cnf","file":"{{home_dir}}/my.cnf","hint":"默认使用生产参数 my.cnf；粘贴完整自定义 my.cnf（含 [client]/[mysql]/[mysqld] 段）将整体覆盖","required":false}]`,
 	},
@@ -84,6 +86,7 @@ var builtinTemplates = []builtinTemplate{
 		requires:    requiresDocker,
 		variables:   `[{"name":"password","label":"访问密码","default":"","required":true},{"name":"port","label":"端口","default":"6379","required":true},{"name":"home_dir","label":"服务主目录","default":"/data/redis","required":true},{"name":"image","label":"镜像","default":"redis:7","required":true}]`,
 		path:        "builtin/install-redis.sh",
+		tags:        `["缓存"]`,
 		services:    `[{"name":"Redis","url":"redis://{{ip}}:{{port}}","web":false}]`,
 	},
 	{
@@ -93,6 +96,7 @@ var builtinTemplates = []builtinTemplate{
 		requires:    requiresDocker,
 		variables:   `[{"name":"admin_username","label":"管理员用户名","default":"admin","required":true},{"name":"admin_password","label":"管理员密码","default":"","required":true},{"name":"port","label":"端口","default":"27017","required":true},{"name":"home_dir","label":"服务主目录","default":"/data/mongodb","required":true},{"name":"image","label":"镜像","default":"mongo:6.0","required":true}]`,
 		path:        "builtin/install-mongo.sh",
+		tags:        `["文档型"]`,
 		services:    `[{"name":"MongoDB","url":"mongodb://{{ip}}:{{port}}","web":false}]`,
 	},
 	{
@@ -121,6 +125,7 @@ var builtinTemplates = []builtinTemplate{
 		requires:    requiresDocker,
 		variables:   `[{"name":"elastic_password","label":"elastic 密码","default":"","required":true},{"name":"port","label":"端口","default":"9200","required":true},{"name":"home_dir","label":"服务主目录","default":"/data/elasticsearch","required":true},{"name":"java_opts","label":"JVM 内存","default":"-Xms512m -Xmx512m","required":true},{"name":"image","label":"镜像","default":"docker.elastic.co/elasticsearch/elasticsearch:8.11.0","required":true}]`,
 		path:        "builtin/install-elasticsearch.sh",
+		tags:        `["搜索","分析"]`,
 		services:    `[{"name":"Elasticsearch","url":"http://{{ip}}:{{port}}","web":true}]`,
 	},
 	{
@@ -149,6 +154,7 @@ var builtinTemplates = []builtinTemplate{
 		variables:   `[{"name":"port","label":"监听端口","default":"8428","required":true},{"name":"home_dir","label":"服务主目录","default":"/data/victoriametrics","required":true},{"name":"retention","label":"数据保留（月）","default":"3","required":true},{"name":"image","label":"镜像","default":"victoriametrics/victoria-metrics:v1.150.0","required":true}]`,
 		services:    `[{"name":"VictoriaMetrics vmui","url":"http://{{ip}}:{{port}}/vmui","web":true}]`,
 		path:        "builtin/install-victoriametrics.sh",
+		tags:        `["时序"]`,
 	},
 	{
 		name:        "部署 Prometheus",
@@ -158,6 +164,7 @@ var builtinTemplates = []builtinTemplate{
 		variables:   `[{"name":"port","label":"监听端口","default":"9090","required":true},{"name":"home_dir","label":"服务主目录","default":"/data/prometheus","required":true},{"name":"retention_days","label":"数据保留（天）","default":"30","required":true},{"name":"remote_write_url","label":"remote_write 地址（如 VictoriaMetrics，可留空）","default":"","required":false},{"name":"image","label":"镜像","default":"prom/prometheus:v2.55.1","required":true}]`,
 		services:    `[{"name":"Prometheus","url":"http://{{ip}}:{{port}}","web":true}]`,
 		path:        "builtin/install-prometheus.sh",
+		tags:        `["时序","监控"]`,
 	},
 	{
 		name:        "内核网络参数调优",
@@ -223,6 +230,7 @@ var builtinTemplates = []builtinTemplate{
 		variables:   `[{"name":"port","label":"端口","default":"6379","required":true},{"name":"password","label":"访问密码","default":"","required":true},{"name":"home_dir","label":"服务主目录","default":"/data/dragonfly","required":true},{"name":"image","label":"镜像","default":"docker.dragonflydb.io/dragonflydb/dragonfly:v1.20.0","required":true}]`,
 		services:    `[{"name":"DragonflyDB","url":"redis://{{ip}}:{{port}}","web":false}]`,
 		path:        "builtin/install-dragonfly.sh",
+		tags:        `["缓存"]`,
 	},
 	{
 		name:        "部署 ClickHouse",
@@ -232,24 +240,17 @@ var builtinTemplates = []builtinTemplate{
 		variables:   `[{"name":"http_port","label":"HTTP 端口","default":"8123","required":true},{"name":"tcp_port","label":"原生端口","default":"9000","required":true},{"name":"username","label":"账号","default":"default","required":true},{"name":"password","label":"密码","default":"","required":true},{"name":"home_dir","label":"服务主目录","default":"/data/clickhouse","required":true},{"name":"image","label":"镜像","default":"clickhouse/clickhouse-server:23.11","required":true}]`,
 		services:    `[{"name":"ClickHouse HTTP","url":"http://{{ip}}:{{http_port}}","web":true}]`,
 		path:        "builtin/install-clickhouse.sh",
+		tags:        `["分析","OLAP"]`,
 	},
 	{
 		name:        "部署 MinIO",
 		description: "docker compose 部署 MinIO（S3 兼容对象存储，生成 compose.yml 落盘）：root 账号密码、middleware_net 共享网络、数据目录持久化。API 9000 / 控制台 9001。依赖 Docker。",
-		category:    "工具",
+		category:    "对象存储",
 		requires:    requiresDocker,
 		variables:   `[{"name":"api_port","label":"API 端口","default":"9000","required":true},{"name":"console_port","label":"控制台端口","default":"9001","required":true},{"name":"root_user","label":"访问账号","default":"admin","required":true},{"name":"root_password","label":"访问密码（≥8位）","default":"","required":true},{"name":"home_dir","label":"服务主目录","default":"/data/minio","required":true},{"name":"image","label":"镜像","default":"minio/minio:latest","required":true}]`,
+		tags:        `["对象存储"]`,
 		services:    `[{"name":"MinIO 控制台","url":"http://{{ip}}:{{console_port}}","web":true}]`,
 		path:        "builtin/install-minio.sh",
-	},
-	{
-		name:        "部署 Elasticsearch 集群节点",
-		description: "部署 ES 9.x 集群的任一节点（引导/加入由 is_bootstrap 决定，生成 elasticsearch.yml 落盘，compose + middleware_net）：引导节点填 cluster.initial_master_nodes，加入节点仅靠 seed_hosts 单播并入。默认关闭 xpack 安全以简化局域网集群。编排：先 is_bootstrap=true 部署引导首节点，再把「首节点IP:transport」填入其余节点 seed_hosts 依次部署。依赖 Docker。",
-		category:    "数据库",
-		requires:    requiresDocker,
-		variables:   `[{"name":"node_name","label":"节点名","default":"es-node-1","required":true},{"name":"roles","label":"节点角色(master,data,ingest 逗号分隔)","default":"master,data","required":true},{"name":"port","label":"HTTP 端口","default":"9200","required":true},{"name":"transport_port","label":"Transport 端口","default":"9300","required":true},{"name":"cluster_name","label":"集群名","default":"elasticsearch-cluster","required":true},{"name":"home_dir","label":"服务主目录","default":"/data/es-cluster","required":true},{"name":"seed_hosts","label":"集群其他节点 IP:transport（JSON 列表文本，逗号分隔）","default":"","required":false},{"name":"is_bootstrap","label":"是否引导首节点(true/false)","default":"false","required":true},{"name":"java_opts","label":"JVM 内存","default":"-Xms1g -Xmx1g","required":true},{"name":"image","label":"镜像","default":"docker.elastic.co/elasticsearch/elasticsearch:9.5.3","required":true}]`,
-		services:    `[{"name":"Elasticsearch 节点","url":"http://{{ip}}:{{port}}","web":true}]`,
-		path:        "stacks/elasticsearch/scripts/node.sh",
 	},
 	{
 		name:        "部署 RocketMQ NameServer",
@@ -277,6 +278,26 @@ var builtinTemplates = []builtinTemplate{
 		variables:   `[{"name":"node_name","label":"节点名","default":"rabbit-node-1","required":true},{"name":"amqp_port","label":"AMQP 端口","default":"5672","required":true},{"name":"mgmt_port","label":"管理端口","default":"15672","required":true},{"name":"erlang_cookie","label":"Erlang cookie(全节点必须一致)","default":"","required":true},{"name":"admin_user","label":"管理账号","default":"admin","required":false},{"name":"admin_pass","label":"管理密码","default":"","required":true},{"name":"home_dir","label":"服务主目录","default":"/data/rabbitmq","required":true},{"name":"is_bootstrap","label":"是否集群首节点(true/false)","default":"false","required":true},{"name":"join_cluster_host","label":"加入目标节点 rabbit@host","default":"","required":false},{"name":"image","label":"镜像","default":"rabbitmq:3.13-management","required":true}]`,
 		services:    `[{"name":"RabbitMQ 管理台","url":"http://{{ip}}:{{mgmt_port}}","web":true}]`,
 		path:        "stacks/rabbitmq/scripts/node.sh",
+	},
+	{
+		name:        "部署 Manticore Search",
+		description: "docker compose 部署 Manticore Search（MySQL 协议兼容的全文搜索/分析引擎，生成 compose.yml 落盘）：9306 MySQL 协议 / 9308 HTTP API、data 目录持久化、ulimit 调优。SQL 客户端经 mysql 协议直连，HTTP 走 /sql 端点。依赖 Docker。",
+		category:    "数据库",
+		requires:    requiresDocker,
+		variables:   `[{"name":"sql_port","label":"MySQL 协议端口","default":"9306","required":true},{"name":"http_port","label":"HTTP API 端口","default":"9308","required":true},{"name":"home_dir","label":"服务主目录","default":"/data/manticore","required":true},{"name":"image","label":"镜像","default":"manticoresearch/manticore:6.3.8","required":true}]`,
+		tags:        `["搜索","分析"]`,
+		services:    `[{"name":"Manticore MySQL 协议","url":"mysql://{{ip}}:{{sql_port}}","web":false},{"name":"Manticore HTTP API","url":"http://{{ip}}:{{http_port}}","web":true}]`,
+		path:        "builtin/install-manticore.sh",
+	},
+	{
+		name:        "部署 InfluxDB",
+		description: "docker compose 部署 InfluxDB v2 时序数据库（生成 compose.yml 落盘）：首次启动自动初始化（用户/组织/桶/All-Access Token，已有数据则跳过初始化）、8086 单端口（UI+API）、data 与 config 分离持久化。Token 留空自动生成并打印。依赖 Docker。",
+		category:    "数据库",
+		requires:    requiresDocker,
+		variables:   `[{"name":"port","label":"监听端口","default":"8086","required":true},{"name":"home_dir","label":"服务主目录","default":"/data/influxdb","required":true},{"name":"admin_username","label":"管理员用户名","default":"admin","required":true},{"name":"admin_password","label":"管理员密码","default":"","required":true},{"name":"org","label":"组织名","default":"default","required":true},{"name":"bucket","label":"初始数据桶","default":"data","required":true},{"name":"admin_token","label":"管理员 Token（留空自动生成）","default":"","required":false},{"name":"image","label":"镜像","default":"influxdb:2.7","required":true}]`,
+		tags:        `["时序"]`,
+		services:    `[{"name":"InfluxDB UI","url":"http://{{ip}}:{{port}}","web":true}]`,
+		path:        "builtin/install-influxdb.sh",
 	},
 }
 
@@ -355,12 +376,16 @@ func seedBuiltinTemplates(db *sql.DB) error {
 		if configs == "" {
 			configs = "[]"
 		}
+		tags := t.tags
+		if tags == "" {
+			tags = "[]"
+		}
 		if exists > 0 {
-			var curScript, curVars, curServices, curRequires, curConfigs, curCat string
-			if err := db.QueryRow(`SELECT script, variables, services, requires, configs, category FROM deploy_templates WHERE name=? AND is_builtin=1`, t.name).Scan(&curScript, &curVars, &curServices, &curRequires, &curConfigs, &curCat); err == nil && (curScript != script || curVars != t.variables || curServices != services || curRequires != requires || curConfigs != configs || curCat != t.category) {
+			var curScript, curVars, curServices, curRequires, curConfigs, curCat, curTags string
+			if err := db.QueryRow(`SELECT script, variables, services, requires, configs, category, tags FROM deploy_templates WHERE name=? AND is_builtin=1`, t.name).Scan(&curScript, &curVars, &curServices, &curRequires, &curConfigs, &curCat, &curTags); err == nil && (curScript != script || curVars != t.variables || curServices != services || curRequires != requires || curConfigs != configs || curCat != t.category || curTags != tags) {
 				if _, err := db.Exec(
-					`UPDATE deploy_templates SET description=?, script=?, variables=?, services=?, requires=?, configs=?, category=?, updated_at=datetime('now','localtime') WHERE name=? AND is_builtin=1`,
-					t.description, script, t.variables, services, requires, configs, t.category, t.name,
+					`UPDATE deploy_templates SET description=?, script=?, variables=?, services=?, requires=?, configs=?, category=?, tags=?, updated_at=datetime('now','localtime') WHERE name=? AND is_builtin=1`,
+					t.description, script, t.variables, services, requires, configs, t.category, tags, t.name,
 				); err != nil {
 					return err
 				}
@@ -368,8 +393,8 @@ func seedBuiltinTemplates(db *sql.DB) error {
 			continue
 		}
 		_, err := db.Exec(
-			`INSERT INTO deploy_templates(name, description, script, variables, services, requires, configs, category, is_builtin) VALUES(?,?,?,?,?,?,?,?,1)`,
-			t.name, t.description, script, t.variables, services, requires, configs, t.category,
+			`INSERT INTO deploy_templates(name, description, script, variables, services, requires, configs, category, tags, is_builtin) VALUES(?,?,?,?,?,?,?,?,?,1)`,
+			t.name, t.description, script, t.variables, services, requires, configs, t.category, tags,
 		)
 		if err != nil && err != sql.ErrNoRows {
 			return err

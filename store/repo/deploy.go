@@ -16,7 +16,7 @@ type DeployRepo struct{}
 
 func NewDeployRepo() *DeployRepo { return &DeployRepo{} }
 
-const tplCols = "id,name,description,category,script,variables,services,requires,configs,is_builtin,created_at,updated_at"
+const tplCols = "id,name,description,category,script,variables,services,requires,configs,tags,is_builtin,created_at,updated_at"
 
 // ListTemplates 全量模板列表（数量小，不分页）。
 func (r *DeployRepo) ListTemplates() ([]model.DeployTemplate, error) {
@@ -49,6 +49,7 @@ type tplRow struct {
 	Services    string
 	Requires    string
 	Configs     string
+	Tags        string
 	IsBuiltin   bool
 	CreatedAt   string
 	UpdatedAt   string
@@ -58,14 +59,14 @@ func (r tplRow) toModel() *model.DeployTemplate {
 	return &model.DeployTemplate{
 		ID: r.ID, Name: r.Name, Description: r.Description, Category: r.Category,
 		Script: r.Script, Variables: json.RawMessage(r.Variables), Services: json.RawMessage(r.Services),
-		Requires: json.RawMessage(r.Requires), Configs: json.RawMessage(r.Configs),
+		Requires: json.RawMessage(r.Requires), Configs: json.RawMessage(r.Configs), Tags: json.RawMessage(r.Tags),
 		IsBuiltin: r.IsBuiltin, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
 	}
 }
 
 func scanTplRow(rows *sql.Rows, r *tplRow) error {
 	return rows.Scan(&r.ID, &r.Name, &r.Description, &r.Category, &r.Script, &r.Variables,
-		&r.Services, &r.Requires, &r.Configs, &r.IsBuiltin, &r.CreatedAt, &r.UpdatedAt)
+		&r.Services, &r.Requires, &r.Configs, &r.Tags, &r.IsBuiltin, &r.CreatedAt, &r.UpdatedAt)
 }
 
 // GetTemplateByName 按名称取模板（套件 Docker 前置等按内置名查找）。
@@ -73,7 +74,7 @@ func (r *DeployRepo) GetTemplateByName(name string) (*model.DeployTemplate, erro
 	row := tplRow{}
 	err := store.DB.QueryRow("SELECT "+tplCols+" FROM deploy_templates WHERE name=?", name).
 		Scan(&row.ID, &row.Name, &row.Description, &row.Category, &row.Script, &row.Variables,
-			&row.Services, &row.Requires, &row.Configs, &row.IsBuiltin, &row.CreatedAt, &row.UpdatedAt)
+			&row.Services, &row.Requires, &row.Configs, &row.Tags, &row.IsBuiltin, &row.CreatedAt, &row.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -88,7 +89,7 @@ func (r *DeployRepo) GetTemplate(id int64) (*model.DeployTemplate, error) {
 	row := tplRow{}
 	err := store.DB.QueryRow("SELECT "+tplCols+" FROM deploy_templates WHERE id=?", id).
 		Scan(&row.ID, &row.Name, &row.Description, &row.Category, &row.Script, &row.Variables,
-			&row.Services, &row.Requires, &row.Configs, &row.IsBuiltin, &row.CreatedAt, &row.UpdatedAt)
+			&row.Services, &row.Requires, &row.Configs, &row.Tags, &row.IsBuiltin, &row.CreatedAt, &row.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -109,9 +110,9 @@ func normalizeJSON(s json.RawMessage) string {
 // CreateTemplate 新建模板。
 func (r *DeployRepo) CreateTemplate(t *model.DeployTemplate) (int64, error) {
 	res, err := store.DB.Exec(
-		`INSERT INTO deploy_templates(name,description,category,script,variables,services,requires,configs,is_builtin) VALUES(?,?,?,?,?,?,?,?,0)`,
+		`INSERT INTO deploy_templates(name,description,category,script,variables,services,requires,configs,tags,is_builtin) VALUES(?,?,?,?,?,?,?,?,?,0)`,
 		t.Name, t.Description, t.Category, t.Script, string(t.Variables),
-		normalizeJSON(t.Services), normalizeJSON(t.Requires), normalizeJSON(t.Configs),
+		normalizeJSON(t.Services), normalizeJSON(t.Requires), normalizeJSON(t.Configs), normalizeJSON(t.Tags),
 	)
 	if err != nil {
 		return 0, fmt.Errorf("create template: %w", err)
@@ -122,10 +123,10 @@ func (r *DeployRepo) CreateTemplate(t *model.DeployTemplate) (int64, error) {
 // UpdateTemplate 更新模板内容（内置模板仅允许改描述以外的场景由上层限制）。
 func (r *DeployRepo) UpdateTemplate(t *model.DeployTemplate) error {
 	_, err := store.DB.Exec(
-		`UPDATE deploy_templates SET name=?, description=?, category=?, script=?, variables=?, services=?, requires=?, configs=?,
+		`UPDATE deploy_templates SET name=?, description=?, category=?, script=?, variables=?, services=?, requires=?, configs=?, tags=?,
 		updated_at=datetime('now','localtime') WHERE id=?`,
 		t.Name, t.Description, t.Category, t.Script, string(t.Variables),
-		normalizeJSON(t.Services), normalizeJSON(t.Requires), normalizeJSON(t.Configs), t.ID,
+		normalizeJSON(t.Services), normalizeJSON(t.Requires), normalizeJSON(t.Configs), normalizeJSON(t.Tags), t.ID,
 	)
 	return err
 }

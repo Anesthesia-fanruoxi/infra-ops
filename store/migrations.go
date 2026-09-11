@@ -28,6 +28,95 @@ var migrations = []migration{
 	{18, migrateV18},
 	{19, migrateV19},
 	{20, migrateV20},
+	{21, migrateV21},
+	{22, migrateV22},
+	{23, migrateV23},
+	{24, migrateV24},
+	{25, migrateV25},
+}
+
+// migrateV25 部署模板-tags：类型标签列（如 ["时序","监控"]），卡片小徽标展示，
+// 与 category 并存：category 管分区筛选，tags 表达库型/用途等细分。
+func migrateV25(db *sql.DB) error {
+	return addColumnIfMissing(db, "deploy_templates", "tags", `TEXT NOT NULL DEFAULT '[]'`)
+}
+
+// migrateV24 套件-RolePlan：stack_instances 增 role_plan_json 列，
+// 存部署前物化的角色计划（docs/role-plan-design.md §4.2），只保留最近一份。
+func migrateV24(db *sql.DB) error {
+	return addColumnIfMissing(db, "stack_instances", "role_plan_json", `TEXT NOT NULL DEFAULT ''`)
+}
+
+// migrateV23 工具-SFTP：SFTP 连接配置表，密码/私钥加密存储。
+func migrateV23(db *sql.DB) error {
+	stmts := []string{
+		`CREATE TABLE IF NOT EXISTS sftp_conns (
+			id               INTEGER PRIMARY KEY AUTOINCREMENT,
+			name             TEXT NOT NULL UNIQUE,
+			host             TEXT NOT NULL,
+			port             INTEGER NOT NULL DEFAULT 22,
+			username         TEXT NOT NULL DEFAULT '',
+			encrypted_secret BLOB,
+			encrypted_key    BLOB,
+			remark           TEXT NOT NULL DEFAULT '',
+			created_at       TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+			updated_at       TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+		)`,
+	}
+	for _, s := range stmts {
+		if _, err := db.Exec(s); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// migrateV21 工具-镜像仓库：连接 Docker Registry 的配置表，密码加密存储。
+func migrateV21(db *sql.DB) error {
+	stmts := []string{
+		`CREATE TABLE IF NOT EXISTS registries (
+			id               INTEGER PRIMARY KEY AUTOINCREMENT,
+			name             TEXT NOT NULL UNIQUE,
+			url              TEXT NOT NULL,
+			insecure         INTEGER NOT NULL DEFAULT 0,
+			auth_type        TEXT NOT NULL DEFAULT 'anonymous' CHECK (auth_type IN ('anonymous','basic')),
+			username         TEXT NOT NULL DEFAULT '',
+			encrypted_secret BLOB,
+			remark           TEXT NOT NULL DEFAULT '',
+			created_at       TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+			updated_at       TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+		)`,
+	}
+	for _, s := range stmts {
+		if _, err := db.Exec(s); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// migrateV22 工具-Elasticsearch：连接 ES 集群的配置表，密码加密存储。
+func migrateV22(db *sql.DB) error {
+	stmts := []string{
+		`CREATE TABLE IF NOT EXISTS es_conns (
+			id               INTEGER PRIMARY KEY AUTOINCREMENT,
+			name             TEXT NOT NULL UNIQUE,
+			url              TEXT NOT NULL,
+			insecure         INTEGER NOT NULL DEFAULT 0,
+			auth_type        TEXT NOT NULL DEFAULT 'anonymous' CHECK (auth_type IN ('anonymous','basic')),
+			username         TEXT NOT NULL DEFAULT '',
+			encrypted_secret BLOB,
+			remark           TEXT NOT NULL DEFAULT '',
+			created_at       TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+			updated_at       TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+		)`,
+	}
+	for _, s := range stmts {
+		if _, err := db.Exec(s); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // migrateV17 deploy_templates 增加 configs 列：声明可被用户覆盖的配置文件（JSON 数组）。

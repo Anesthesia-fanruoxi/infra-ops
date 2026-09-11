@@ -41,8 +41,11 @@ window.TemplatesPage = {
         <el-table-column label="模板名称" min-width="180">
           <template #default="{row}"><span style="font-weight:600">{{row.name}}</span><el-tag v-if="row.is_builtin" size="small" type="info" style="margin-left:8px">内置</el-tag></template>
         </el-table-column>
-        <el-table-column label="分类" width="100">
-          <template #default="{row}"><span class="tpl-cat-badge">{{row.category || '未分类'}}</span></template>
+        <el-table-column label="分类" width="120">
+          <template #default="{row}">
+            <span class="tpl-cat-badge">{{row.category || '未分类'}}</span>
+            <div v-if="(row.tags||[]).length" class="tpl-table-tags"><span v-for="tg in row.tags" :key="tg" class="tpl-meta-chip tag">{{tg}}</span></div>
+          </template>
         </el-table-column>
         <el-table-column label="描述" min-width="200">
           <template #default="{row}"><span style="color:var(--text-sub);font-size:12.5px">{{row.description || '-'}}</span></template>
@@ -83,6 +86,7 @@ window.TemplatesPage = {
           </div>
           <div class="tpl-card-desc">{{t.description || '暂无描述'}}</div>
           <div class="tpl-card-meta">
+            <span v-for="tg in (t.tags||[])" :key="tg" class="tpl-meta-chip tag">{{tg}}</span>
             <span v-if="(t.variables||[]).length" class="tpl-meta-chip">变量 {{(t.variables||[]).length}}</span>
             <span v-if="(t.services||[]).filter(s=>s&&s.web).length" class="tpl-meta-chip svc">Web 服务</span>
           </div>
@@ -118,6 +122,16 @@ window.TemplatesPage = {
         <el-form-item label="功能分类">
           <el-select v-model="editing.category" :disabled="viewMode" placeholder="选择分类" style="width:100%" filterable allow-create>
             <el-option v-for="c in categoryOptions" :key="c" :label="c" :value="c" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="类型标签">
+          <el-select v-model="editing.tags" :disabled="viewMode" multiple filterable allow-create default-first-option placeholder="如：关系型/缓存/时序/搜索（可自定义，卡片小徽标）" style="width:100%">
+            <el-option v-for="tg in tagOptions" :key="tg" :label="tg" :value="tg" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="类型标签">
+          <el-select v-model="editing.tags" :disabled="viewMode" multiple filterable allow-create default-first-option placeholder="如：关系型/缓存/时序/搜索（可自定义，卡片小徽标）" style="width:100%">
+            <el-option v-for="tg in tagOptions" :key="tg" :label="tg" :value="tg" />
           </el-select>
         </el-form-item>
         <el-form-item label="描述" class="span-2">
@@ -214,8 +228,9 @@ window.TemplatesPage = {
       gutterScroll: 0,
       mode: localStorage.getItem('tpl-view-mode') || 'card',
       activeCat: '全部',
-      categoryOptions: ['系统', '工具', '数据库', '可视化', '消息队列', '配置注册中心', '其他'],
-      editing: { name: '', description: '', category: '其他', script: '', variables: [], requires: [], configs: [] },
+      categoryOptions: ['系统', '工具', '数据库', '消息队列', '配置注册中心', '对象存储', '监控', '可视化', '其他'],
+      tagOptions: ['关系型', '文档型', '缓存', 'KV', '时序', '搜索', '分析', 'OLAP', '对象存储', '向量', '监控', '消息'],
+      editing: { name: '', description: '', category: '其他', tags: [], script: '', variables: [], requires: [], configs: [] },
       formRules: {
         name: [{ required: true, message: '请输入模板名称', trigger: 'blur' }],
         script: [{ required: true, message: '请输入脚本内容', trigger: 'blur' }]
@@ -326,21 +341,21 @@ window.TemplatesPage = {
     },
     formatTime(t) {
       if (!t) return '-'
-      const d = new Date(t.replace(' ', 'T') + (t.includes('Z') ? '' : 'Z'))
+      const d = new Date(t.replace(' ', 'T'))
       return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0') + ' ' + String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0')
     },
     openDialog(row) {
       this.viewMode = false
       if (row) {
-        this.editing = { ...row, variables: (row.variables || []).map(v => ({...v})), requires: (row.requires || []).map(d => ({...d})), configs: (row.configs || []).map(c => ({...c})) }
+        this.editing = { ...row, tags: [...(row.tags || [])], variables: (row.variables || []).map(v => ({...v})), requires: (row.requires || []).map(d => ({...d})), configs: (row.configs || []).map(c => ({...c})) }
       } else {
-        this.editing = { name: '', description: '', category: '其他', script: '', variables: [], requires: [], configs: [] }
+        this.editing = { name: '', description: '', category: '其他', tags: [], script: '', variables: [], requires: [], configs: [] }
       }
       this.dlgVisible = true
     },
     openView(row) {
       this.viewMode = true
-      this.editing = { ...row, variables: (row.variables || []).map(v => ({...v})), requires: (row.requires || []).map(d => ({...d})), configs: (row.configs || []).map(c => ({...c})) }
+      this.editing = { ...row, tags: [...(row.tags || [])], variables: (row.variables || []).map(v => ({...v})), requires: (row.requires || []).map(d => ({...d})), configs: (row.configs || []).map(c => ({...c})) }
       this.dlgVisible = true
     },
     addVar() { this.editing.variables.push({ name: '', label: '', default: '', required: false }) },
@@ -365,7 +380,7 @@ window.TemplatesPage = {
       }
       this.saving = true
       try {
-        const body = { name: this.editing.name, description: this.editing.description, category: this.editing.category, script: this.editing.script, variables: this.editing.variables, requires: this.editing.requires, configs: this.editing.configs }
+        const body = { name: this.editing.name, description: this.editing.description, category: this.editing.category, tags: this.editing.tags, script: this.editing.script, variables: this.editing.variables, requires: this.editing.requires, configs: this.editing.configs }
         if (this.editing.id) { await api.put('/deploy/templates/' + this.editing.id, body) }
         else { await api.post('/deploy/templates', body) }
         ElMessage.success('保存成功'); this.dlgVisible = false; this.load()
@@ -381,7 +396,7 @@ window.TemplatesPage = {
       }).catch(() => {})
     },
     async duplicate(row) {
-      const body = { name: row.name + ' (副本)', description: row.description, category: row.category || '其他', script: row.script, variables: (row.variables || []).map(v => ({...v})), requires: (row.requires || []).map(d => ({...d})), configs: (row.configs || []).map(c => ({...c})) }
+      const body = { name: row.name + ' (副本)', description: row.description, category: row.category || '其他', tags: [...(row.tags || [])], script: row.script, variables: (row.variables || []).map(v => ({...v})), requires: (row.requires || []).map(d => ({...d})), configs: (row.configs || []).map(c => ({...c})) }
       try {
         await api.post('/deploy/templates', body)
         ElMessage.success('已创建副本'); this.load()

@@ -223,23 +223,27 @@ func TestBigdataExpectedContainersHA(t *testing.T) {
 				`"hive_ms2":"10.0.0.2","hive_hs2b":"10.0.0.2","hive_db":"10.0.0.3","hdfs_jns":"10.0.0.1,10.0.0.2,10.0.0.3"}`,
 		}
 	}
+	// .1 = NN1/RM1/SparkM1/JM1/HM1/MS1/HS1/HiveDB 主机；
+	// JournalNode 在 JNS 全部主机（含 NN1/NN2）部署，DataNode 全节点部署（ha.sh / node.sh 落点）。
 	primary := bigdataExpectedContainers("10.0.0.1", "master", ha())
-	// 主节点：NN1+zkfc、RM1、Master、JM、MS1+HS1、HMaster、ZK、Trino（NN1/NN2 主机不承载 journalnode，仅纯 JN 主机运行）
-	primaryW := []string{"bigdata-zookeeper", "hadoop-namenode", "hadoop-zkfc", "hadoop-resourcemanager",
-		"spark-master", "flink-jobmanager", "hbase-master", "hive-metastore", "hive-hiveserver2", "trino-node"}
+	primaryW := []string{"bigdata-zookeeper", "hadoop-namenode", "hadoop-zkfc", "hadoop-journalnode",
+		"hadoop-datanode", "hadoop-resourcemanager", "spark-master", "flink-jobmanager",
+		"hbase-master", "hive-metastore", "hive-hiveserver2", "trino-node"}
 	if strings.Join(primary, ",") != strings.Join(primaryW, ",") {
 		t.Fatalf("primary=%v", primary)
 	}
 	secondary := bigdataExpectedContainers("10.0.0.2", "node", ha())
-	secW := []string{"bigdata-zookeeper", "hadoop-namenode2", "hadoop-zkfc2", "hadoop-resourcemanager2",
-		"spark-master2", "flink-jobmanager2", "hbase-backup-master", "hive-metastore2", "hive-hiveserver2-2", "trino-node"}
+	secW := []string{"bigdata-zookeeper", "hadoop-namenode2", "hadoop-zkfc2", "hadoop-journalnode",
+		"hadoop-datanode", "hadoop-resourcemanager2", "spark-master2", "flink-jobmanager2",
+		"hbase-backup-master", "hive-metastore2", "hive-hiveserver2-2", "trino-node"}
 	if strings.Join(secondary, ",") != strings.Join(secW, ",") {
 		t.Fatalf("secondary=%v", secondary)
 	}
-	// 第三台：纯 JN + ZK + metastore_db + 其余工作节点容器（JN 主机不跑 datanode）
+	// 第三台：JN 之一 + 纯工作节点容器 + metastore_db 主机
 	w3 := bigdataExpectedContainers("10.0.0.3", "node", ha())
-	w3W := []string{"bigdata-zookeeper", "hadoop-journalnode", "hadoop-nodemanager",
-		"spark-worker", "flink-taskmanager", "hbase-regionserver", "hive-metastore-db", "trino-node"}
+	w3W := []string{"bigdata-zookeeper", "hadoop-journalnode", "hadoop-datanode",
+		"hadoop-nodemanager", "spark-worker", "flink-taskmanager", "hbase-regionserver",
+		"hive-metastore-db", "trino-node"}
 	if strings.Join(w3, ",") != strings.Join(w3W, ",") {
 		t.Fatalf("w3=%v", w3)
 	}

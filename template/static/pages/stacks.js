@@ -1,3 +1,6 @@
+// 探活表格：把「a, b, c」这类逗号列表拆成数组，供省略号 + tooltip 展示
+const splitList = (s) => String(s == null ? '' : s).split(/,\s*/).map(x => x.trim()).filter(Boolean)
+
 window.StacksPage = {
   props: ['page', 'user', 'versionData'],
   template: `
@@ -38,20 +41,30 @@ window.StacksPage = {
           <span class="stack-inst-status" :class="'is-'+it.status"><i class="dot"></i>{{instStatusLabel(it.status)}}</span>
         </div>
       </div>
-      <div class="stack-inst-tags" v-if="instDisplayComps(it).length">
-        <el-tag v-for="c in instDisplayComps(it)" :key="c" size="small" effect="plain" round>{{compLabel(it.stack_key, c)}}</el-tag>
+      <div class="stack-inst-tags">
+        <template v-if="isEsCwh(it)">
+          <span v-for="t in instTierTags(it)" :key="t" class="es-tier-chip">{{t}}</span>
+        </template>
+        <el-tag v-else v-for="c in instDisplayComps(it)" :key="c" size="small" effect="plain" round>{{compLabel(it.stack_key, c)}}</el-tag>
       </div>
       <div class="stack-inst-foot">
         <span class="stack-inst-hosts"><el-icon :size="14"><Monitor /></el-icon>{{it.host_count || 0}} 台主机</span>
         <div class="stack-inst-ops" @click.stop>
-          <el-button v-if="canReinstall(it)" size="small" type="primary" @click="reinstallInstance(it)">重新安装</el-button>
-          <el-button v-else size="small" type="danger" plain :disabled="busyInst(it) || it.status==='uninstalled'" @click="uninstallInstance(it)">卸载</el-button>
-          <el-button size="small" text @click="renameInstance(it)">重命名</el-button>
-          <el-tooltip :disabled="it.status==='uninstalled'" content="请先卸载后再删除" placement="top">
-            <span>
-              <el-button size="small" text type="danger" :disabled="it.status!=='uninstalled'" @click="deleteInstance(it)">删除</el-button>
-            </span>
-          </el-tooltip>
+          <!-- 安装中：按钮全部置灰，禁止任何操作 -->
+          <template v-if="busyInst(it)">
+            <el-button size="small" type="primary" disabled>重新安装</el-button>
+            <el-button size="small" type="danger" plain disabled>卸载</el-button>
+            <el-button size="small" text disabled>重命名</el-button>
+          </template>
+          <template v-else>
+            <!-- 安装失败 / 已卸载：可重新安装 -->
+            <el-button v-if="instFailed(it) || instUninstalled(it)" size="small" type="primary" @click="reinstallInstance(it)">重新安装</el-button>
+            <!-- 安装失败 / 安装成功：可卸载 -->
+            <el-button v-if="instFailed(it) || instReady(it)" size="small" type="danger" plain @click="uninstallInstance(it)">卸载</el-button>
+            <el-button size="small" text @click="renameInstance(it)">重命名</el-button>
+            <!-- 仅已卸载可删除 -->
+            <el-button v-if="instUninstalled(it)" size="small" text type="danger" @click="deleteInstance(it)">删除</el-button>
+          </template>
         </div>
       </div>
     </div>
@@ -127,7 +140,7 @@ window.StacksPage = {
           ref="roleHostTable"
           :data="filteredHosts"
           size="small"
-          border
+          max-height="320"
           v-loading="hostsLoading"
           class="stack-role-host-table"
           row-key="id"
@@ -159,6 +172,13 @@ window.StacksPage = {
       <!-- Redis 等仍用主从/引导节点单选 -->
       <template v-else>
         <component v-if="step===2 && step2FormComp" :is="step2FormComp" :ctx="selfCtx" />
+        <!-- 扩缩容边界（全部套件，拍板 ②）：落点角色冻结，扩缩容只操作数据/工作节点 -->
+        <div v-if="wizardOp==='scale_out'" class="stack-freeze-hint">
+          主节点 / 引导节点已随集群部署冻结，扩容不改变主节点布局；新机自动承担从属 / 成员等全员角色。
+        </div>
+        <div v-if="wizardOp==='scale_in'" class="stack-freeze-hint">
+          缩容仅限数据 / 工作节点：承载落点角色的成员已标红置灰，不可移除（如需调整主节点布局请重装）。
+        </div>
         <div class="deploy-host-toolbar">
           <el-input v-model="hostFilter" placeholder="搜索主机名 / IP / 标签" clearable size="small" style="width:220px" />
           <el-select v-model="hostSort.field" size="small" style="width:100px" :teleported="false"><el-option label="按主机名" value="name" /><el-option label="按 IP" value="ip" /></el-select>
@@ -167,12 +187,13 @@ window.StacksPage = {
           <span class="deploy-sel-count">已选 {{selectedHosts.length}} 台 · {{hostHint}}</span>
         </div>
         <div class="deploy-host-list deploy-host-list--dialog" v-loading="hostsLoading">
-          <label v-for="h in filteredHosts" :key="h.id" class="deploy-host-item" :class="{'deploy-host-item--sel': selectedHostIds.has(h.id)}">
-            <el-checkbox :model-value="selectedHostIds.has(h.id)" @change="toggleHost(h.id)" />
+          <label v-for="h in filteredHosts" :key="h.id" class="deploy-host-item" :class="{'deploy-host-item--sel': selectedHostIds.has(h.id), 'deploy-host-item--locked': !!scaleInProtected[h.ip]}">
+            <el-checkbox :model-value="selectedHostIds.has(h.id)" :disabled="!!scaleInProtected[h.ip]" @change="toggleHost(h.id)" />
             <span class="deploy-host-name">{{h.name}}</span>
             <span class="mono deploy-host-ip">{{h.ip}}</span>
             <span class="tag-badge other" style="font-size:10px">{{h.tag || 'other'}}</span>
             <span class="status-badge" :class="h.status"><span class="dot"></span>{{h.status==='online'?'在线':h.status==='offline'?'离线':'未验证'}}</span>
+            <el-tag v-if="scaleInProtected[h.ip]" size="small" type="danger" effect="plain" style="margin-left:auto">{{scaleInProtected[h.ip]}} · 不可缩容</el-tag>
             <el-radio v-if="needMaster && selectedHostIds.has(h.id)" :model-value="masterHostId" :label="h.id" @change="masterHostId=h.id" style="margin-left:auto">主节点</el-radio>
           </label>
           <div v-if="!filteredHosts.length && !hostsLoading" class="deploy-placeholder">无匹配主机</div>
@@ -252,6 +273,29 @@ window.StacksPage = {
       <div class="stack-preflight-title">已有 Docker，跳过且不改动（{{preflight.will_skip.length}}）</div>
       <div v-for="h in preflight.will_skip" :key="h.host_id">{{h.name}} <span class="mono">{{h.ip}}</span></div>
     </div>
+    <!-- 部署前角色预览（全部套件）：与部署前置一同确认落点，未通过不能确认部署 -->
+    <div v-if="needOpPlan" class="stack-plan-preview" style="margin-top:12px">
+      <div class="stack-plan-preview-head">
+        <span>角色计划预览 · 确认落点后开始部署</span>
+        <span v-if="opPlan" class="faint">{{opPlan.generated_by === 'manual' ? '含手动指定' : '自动分配'}}</span>
+        <el-button v-if="opPlanErr" size="small" text type="primary" @click="refreshOpPlan">重试</el-button>
+      </div>
+      <div v-if="opPlanErr" class="stack-plan-preview-warn"><div>{{opPlanErr}}</div></div>
+      <div v-else-if="opPlan" class="stack-plan-preview-grid">
+        <div v-for="h in opPlan.hosts" :key="h.host_ip" class="stack-plan-preview-row">
+          <span class="mono stack-plan-preview-ip">{{h.host_ip}}</span>
+          <div class="stack-plan-preview-chips">
+            <span v-for="(r, i) in h.roles" :key="i" class="stack-plan-chip" :class="[r.source==='manual' ? 'is-manual' : 'is-auto', roleTextClass(r)]" :title="r.source==='manual' ? '手动指定' : '自动分配'">{{r.label}}</span>
+            <span v-if="!(h.roles||[]).length" class="faint">—</span>
+          </div>
+        </div>
+      </div>
+      <div v-else class="faint" style="font-size:12px;padding-top:6px">正在生成角色计划预览…</div>
+      <div class="plan-legend"><span class="plan-legend-item"><i class="dot is-manual"></i>手动</span><span class="plan-legend-item"><i class="dot is-auto"></i>自动</span><span class="plan-legend-sep"></span><span class="plan-legend-item rt-primary">主/Active</span><span class="plan-legend-item rt-standby">备/Standby</span><span class="plan-legend-item rt-quorum">仲裁</span><span class="plan-legend-item rt-worker">工作/成员</span><span class="plan-legend-item rt-aux">辅助</span></div>
+      <div v-if="opPlan && (opPlan.warnings||[]).length" class="stack-plan-preview-warn">
+        <div v-for="(w, i) in opPlan.warnings" :key="i">{{w}}</div>
+      </div>
+    </div>
     <template #footer>
       <el-button @click="preflightVisible=false">取消</el-button>
       <el-button type="primary" :loading="deploying" :disabled="!preflightReady" @click="confirmRun">确认部署</el-button>
@@ -270,28 +314,58 @@ window.StacksPage = {
     <div class="stack-inst-ops stack-drawer-ops" style="margin-bottom:16px" v-if="instDetail">
       <el-button v-if="canReinstall(instDetail)" size="small" type="primary" @click="reinstallInstance(instDetail)">重新安装</el-button>
       <el-button size="small" type="primary" plain :loading="verifying" :disabled="instDetail.status==='uninstalled'" @click="openVerifyDialog(instDetail)">探活</el-button>
+      <el-button v-if="caDownloadAvailable" size="small" type="primary" plain @click="downloadCa">下载 CA 证书</el-button>
       <el-button size="small" :disabled="busyInst(instDetail) || instDetail.status==='uninstalled'" @click="openScaleOut(instDetail)">扩容</el-button>
       <el-button size="small" :disabled="busyInst(instDetail) || instDetail.status==='uninstalled' || activeInstHosts(instDetail).length<2" @click="openScaleIn(instDetail)">缩容</el-button>
-      <el-button v-if="isPlatformStack(instDetail)" size="small" :disabled="busyInst(instDetail) || instDetail.status==='uninstalled' || !unusedCompsOf(instDetail).length" @click="openAddComp(instDetail)">加装组件</el-button>
-      <el-button v-if="isPlatformStack(instDetail)" size="small" :disabled="busyInst(instDetail) || instDetail.status==='uninstalled' || !removableCompsOf(instDetail).length" @click="openRemoveComp(instDetail)">卸载组件</el-button>
+      <el-button v-if="isPlatformStack(instDetail)" size="small" :disabled="busyInst(instDetail) || instDetail.status==='uninstalled'" :title="unusedCompsOf(instDetail).length ? '加装尚未安装的组件' : '所有组件均已安装'" @click="openAddComp(instDetail)">加装组件</el-button>
+      <el-button v-if="isPlatformStack(instDetail)" size="small" :disabled="busyInst(instDetail) || instDetail.status==='uninstalled'" :title="removableCompsOf(instDetail).length ? '按组件卸载' : '没有可单独卸载的组件'" @click="openRemoveComp(instDetail)">卸载组件</el-button>
+      <el-button v-if="instDetail.status==='failed' || instDetail.status==='partial'" size="small" type="warning" plain :disabled="busyInst(instDetail)" @click="purgeInstance(instDetail)">清理残留</el-button>
     </div>
-    <div class="drawer-sec-title">成员</div>
-    <div class="deploy-drawer-hostlist">
-      <div class="deploy-drawer-host" v-for="h in (instDetail.hosts||[]).filter(x => x.status!=='removed')" :key="h.id">
-        <span class="deploy-host-name">{{h.host_name}}</span>
-        <span class="mono deploy-host-ip">{{h.host_ip}}</span>
-        <el-tag size="small" type="info">{{roleLabel(h.role)}}</el-tag>
-        <template v-for="tag in haDrawnRoles(h.host_ip)" :key="tag"><el-tag size="small" effect="plain">{{tag}}</el-tag></template>
+    <div class="drawer-sec-title"><span>成员节点</span><span class="inst-mem-count">{{(instDetail.hosts||[]).filter(x => x.status!=='removed').length}} 台</span></div>
+    <div class="inst-mem-grid">
+      <div class="inst-mem-card" v-for="h in (instDetail.hosts||[]).filter(x => x.status!=='removed')" :key="h.id" :class="h.role === 'master' ? 'is-master' : ''">
+        <div class="inst-mem-top">
+          <span class="inst-mem-name" :title="h.host_name">{{h.host_name}}</span>
+          <el-tag size="small" :type="h.role === 'master' ? 'primary' : 'info'" effect="light">{{roleLabel(h.role)}}</el-tag>
+        </div>
+        <div class="mono inst-mem-ip">{{h.host_ip}}</div>
+        <div class="inst-mem-tags">
+          <template v-for="tag in memTags(h)" :key="tag"><span class="inst-mem-tag">{{tag}}</span></template>
+          <span v-if="!memTags(h).length" class="inst-mem-tag is-idle">工作正常</span>
+        </div>
       </div>
-      <div v-if="!(instDetail.hosts||[]).filter(x => x.status!=='removed').length" class="faint">暂无成员</div>
+      <div v-if="!(instDetail.hosts||[]).filter(x => x.status!=='removed').length" class="faint inst-mem-empty">暂无成员</div>
     </div>
-    <div class="drawer-sec-title" style="margin-top:16px">流程记录</div>
-    <el-table :data="instRuns" size="small" @row-click="openDrawer">
-      <el-table-column label="ID" width="70"><template #default="{row}"><span class="mono">#{{row.id}}</span></template></el-table-column>
-      <el-table-column label="操作" width="80"><template #default="{row}">{{opLabel(row.op)}}</template></el-table-column>
-      <el-table-column label="状态" width="90"><template #default="{row}"><el-tag :type="taskTagType(row.status)" size="small">{{taskStatusLabel(row.status)}}</el-tag></template></el-table-column>
-      <el-table-column label="时间"><template #default="{row}"><span class="mono faint">{{formatTime(row.created_at)}}</span></template></el-table-column>
-    </el-table>
+    <!-- 角色计划（全部套件）：部署前物化的落点契约，部署/探活/扩缩容共读（docs/role-plan-design.md） -->
+    <template v-if="instDetail.id">
+      <div class="drawer-sec-title inst-runs-title">
+        <span>角色计划</span>
+        <span class="inst-mem-count">
+          <el-button v-if="instPlan" size="small" text type="primary" @click="replanInst">重新规划</el-button>
+          <span v-else class="faint">加载中…</span>
+        </span>
+      </div>
+      <div v-if="instPlan" class="inst-plan-box">
+        <div class="inst-plan-meta">rev {{instPlan.rev}} · {{instPlan.ha ? 'HA' : '单机'}} · <span class="mono">{{instPlan.generated_at}}</span></div>
+        <div v-for="h in instPlan.hosts" :key="h.host_ip" class="inst-plan-row">
+          <span class="mono inst-plan-ip">{{h.host_ip}}</span>
+          <div class="inst-plan-chips">
+            <span v-for="(r, i) in h.roles" :key="i" class="inst-plan-chip" :class="[r.source==='manual' ? 'is-manual' : 'is-auto', roleTextClass(r)]" :title="r.source==='manual' ? '手动指定' : '自动分配'">{{r.label}}</span>
+            <span v-if="!(h.roles||[]).length" class="faint">—</span>
+          </div>
+        </div>
+        <div class="plan-legend" style="margin-top:2px"><span class="plan-legend-item"><i class="dot is-manual"></i>手动</span><span class="plan-legend-item"><i class="dot is-auto"></i>自动</span><span class="plan-legend-sep"></span><span class="plan-legend-item rt-primary">主/Active</span><span class="plan-legend-item rt-standby">备/Standby</span><span class="plan-legend-item rt-quorum">仲裁</span><span class="plan-legend-item rt-worker">工作/成员</span><span class="plan-legend-item rt-aux">辅助</span></div>
+      </div>
+    </template>
+    <div class="drawer-sec-title inst-runs-title"><span>流程记录</span><span class="inst-mem-count">{{instRuns.length}} 条</span></div>
+    <div class="inst-runs-wrap">
+      <el-table :data="instRuns" size="small" height="100%" class="inst-runs-table" empty-text="暂无流程记录" @row-click="openDrawer">
+        <el-table-column label="ID" width="72" align="center"><template #default="{row}"><span class="mono">#{{row.id}}</span></template></el-table-column>
+        <el-table-column label="操作" width="76"><template #default="{row}"><span class="inst-op">{{opLabel(row.op)}}</span></template></el-table-column>
+        <el-table-column label="状态" width="120" align="center"><template #default="{row}"><span class="inst-status" :class="row.status"><i class="dot"></i>{{taskStatusLabel(row.status)}}</span></template></el-table-column>
+        <el-table-column label="时间"><template #default="{row}"><span class="mono faint">{{formatTime(row.created_at)}}</span></template></el-table-column>
+      </el-table>
+    </div>
   </el-drawer>
 
   <el-dialog v-model="verifyVisible" :title="'集群探活 · ' + (verifyTarget?.name || '')" width="65%" top="6vh" class="stack-verify-dialog" :close-on-click-modal="false">
@@ -311,28 +385,141 @@ window.StacksPage = {
         </div>
       </div>
 
-      <!-- 接入地址 -->
-      <div class="sv-section">
-        <div class="sv-section-title">接入地址</div>
-        <div class="sv-ep-grid">
-          <div class="sv-ep-host-card" v-for="hg in verifyEndpointsByHost" :key="hg.host_ip">
-            <div class="sv-ep-host-header">
-              <span class="sv-ep-host-role" :class="hg.role === 'master' ? 'is-master' : 'is-replica'">{{hg.role === 'master' ? '主' : '从'}}</span>
-              <span class="mono sv-ep-host-ip">{{hg.host_ip}}</span>
-            </div>
-            <div class="sv-ep-host-eps">
-              <div class="sv-ep-mini" v-for="ep in hg.endpoints" :key="ep.url">
-                <span class="sv-ep-badge" :class="epProtocolClass(ep.url)">{{epProtocolLabel(ep.url)}}</span>
-                <span class="mono sv-ep-mini-url">{{ep.url}}</span>
-                <span class="sv-ep-copy" @click="copyText(ep.url)" title="复制">
-                  <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-                </span>
+      <!-- 组件标签：bigdata 多组件探活 -->
+      <div v-if="isBigdataVerify" class="sv-tabs">
+        <div class="sv-tab" :class="{ active: verifyActiveTab === 'all' }" @click="verifyActiveTab = 'all'">查看所有</div>
+        <div class="sv-tab" v-for="c in verifyComponents" :key="c.key" :class="{ active: verifyActiveTab === c.key }" @click="verifyActiveTab = c.key">{{c.label}}</div>
+      </div>
+
+      <!-- 组件视角：选中具体组件（仅 bigdata） -->
+      <template v-if="isBigdataVerify && verifyActiveTab !== 'all'">
+        <div class="sv-section">
+          <div class="sv-section-title">接入地址 · {{currentVerifyCompLabel}}</div>
+          <div class="sv-ep-grid">
+            <div class="sv-ep-host-card" v-for="hg in verifyCompEndpointsByHost" :key="hg.host_ip">
+              <div class="sv-ep-host-header">
+                <span class="mono sv-ep-host-ip">{{hg.host_ip}}</span>
+              </div>
+              <div class="sv-ep-host-eps">
+                <div class="sv-ep-mini" v-for="ep in hg.endpoints" :key="ep.url">
+                  <span class="sv-ep-badge" :class="epProtocolClass(ep.url)">{{epProtocolLabel(ep.url)}}</span>
+                  <span class="mono sv-ep-mini-url">{{ep.url}}</span>
+                  <span class="sv-ep-copy" @click="copyText(ep.url)" title="复制">
+                    <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                  </span>
+                </div>
               </div>
             </div>
+            <div v-if="!verifyCompEndpointsByHost.length" class="sv-empty">该组件暂无接入地址</div>
           </div>
-          <div v-if="!verifyEndpointsByHost.length" class="sv-empty">暂无接入地址</div>
         </div>
-      </div>
+
+        <div class="sv-section">
+          <div class="sv-section-title">{{currentVerifyCompLabel}} 节点状态 <span class="sv-section-count">{{verifyCompHostRows.length}} 台</span></div>
+          <el-table :data="verifyCompHostRows" size="small" empty-text="该组件暂无节点结果" class="sv-node-table" :show-overflow-tooltip="false">
+            <el-table-column prop="ip" label="IP" min-width="130" :show-overflow-tooltip="false">
+              <template #default="{row}"><span class="mono">{{row.ip}}</span></template>
+            </el-table-column>
+            <el-table-column prop="host_name" label="主机名" min-width="120" :show-overflow-tooltip="false" />
+            <el-table-column prop="ok" label="状态" width="70" align="center" :show-overflow-tooltip="false">
+              <template #default="{row}">
+                <span class="sv-table-dot" :class="row.ok ? 'ok' : 'fail'"></span>
+              </template>
+            </el-table-column>
+            <el-table-column prop="role" label="角色" width="90" :show-overflow-tooltip="false">
+              <template #default="{row}">
+                <span class="sv-role-badge" :class="row.role === 'master' ? 'is-master' : 'is-replica'">{{row.role}}</span>
+              </template>
+            </el-table-column>
+            <el-table-column prop="instances" label="容器实例" min-width="200" :show-overflow-tooltip="false">
+              <template #default="{row}">
+                <el-tooltip v-if="row.instList && row.instList.length" placement="top" :show-after="120" raw-content :content="tipHtml(row.instList)">
+                  <span class="sv-cell-text mono">{{row.instances}}</span>
+                </el-tooltip>
+                <span v-else class="sv-cell-text mono" :class="{'sv-cell-muted': !row.instances || row.instances === '无'}">{{row.instances}}</span>
+              </template>
+            </el-table-column>
+            <el-table-column prop="version" label="版本" width="90" :show-overflow-tooltip="false" />
+            <el-table-column prop="uptime" label="运行时间" min-width="140" :show-overflow-tooltip="false">
+              <template #default="{row}">
+                <el-tooltip v-if="row.uptime && row.uptime !== '-'" placement="top" :show-after="120" raw-content :content="tipHtml(row.uptimeList)">
+                  <span class="sv-cell-text">{{row.uptime}}</span>
+                </el-tooltip>
+                <span v-else class="sv-cell-text sv-cell-muted">—</span>
+              </template>
+            </el-table-column>
+          </el-table>
+        </div>
+      </template>
+
+      <!-- 整体视角：常规集群 或 bigdata「查看所有」 -->
+      <template v-else>
+        <!-- 接入地址 -->
+        <div class="sv-section">
+          <div class="sv-section-title">接入地址</div>
+          <div class="sv-ep-grid">
+            <div class="sv-ep-host-card" v-for="hg in verifyEndpointsByHost" :key="hg.host_ip">
+              <div class="sv-ep-host-header">
+                <template v-if="esVerifyHostRole(hg)">
+                  <span class="sv-ep-host-role is-es">{{esVerifyHostRole(hg)}}</span>
+                </template>
+                <template v-else>
+                  <span class="sv-ep-host-role" :class="hg.role === 'master' ? 'is-master' : 'is-replica'">{{hg.role === 'master' ? '主' : '从'}}</span>
+                </template>
+                <span class="mono sv-ep-host-ip">{{hg.host_ip}}</span>
+              </div>
+              <div class="sv-ep-host-eps">
+                <div class="sv-ep-mini" v-for="ep in hg.endpoints" :key="ep.url">
+                  <span class="sv-ep-badge" :class="epProtocolClass(ep.url)">{{epProtocolLabel(ep.url)}}</span>
+                  <span class="mono sv-ep-mini-url">{{ep.url}}</span>
+                  <span class="sv-ep-copy" @click="copyText(ep.url)" title="复制">
+                    <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                  </span>
+                </div>
+              </div>
+            </div>
+            <div v-if="!verifyEndpointsByHost.length" class="sv-empty">暂无接入地址</div>
+          </div>
+        </div>
+
+        <!-- 节点状态 -->
+        <div class="sv-section">
+          <div class="sv-section-title">节点状态 <span class="sv-section-count">{{verifyHostRows.length}} 台</span></div>
+          <el-table :data="verifyHostRows" size="small" empty-text="暂无节点结果" class="sv-node-table" :show-overflow-tooltip="false">
+            <el-table-column prop="ip" label="IP" min-width="130" :show-overflow-tooltip="false">
+              <template #default="{row}"><span class="mono">{{row.ip}}</span></template>
+            </el-table-column>
+            <el-table-column prop="host_name" label="主机名" min-width="120" :show-overflow-tooltip="false" />
+            <el-table-column prop="status" label="状态" width="70" align="center" :show-overflow-tooltip="false">
+              <template #default="{row}">
+                <span class="sv-table-dot" :class="row.ok ? 'ok' : 'fail'"></span>
+              </template>
+            </el-table-column>
+            <el-table-column prop="role" label="角色" width="90" :show-overflow-tooltip="false">
+              <template #default="{row}">
+                <span class="sv-role-badge" :class="row.role === 'master' ? 'is-master' : 'is-replica'">{{row.role}}</span>
+              </template>
+            </el-table-column>
+            <el-table-column prop="replication" :label="verifyTarget?.stack_key === 'redis' ? '复制' : '实例'" min-width="200" :show-overflow-tooltip="false">
+              <template #default="{row}">
+                <el-tooltip v-if="row.instList && row.instList.length" placement="top" :show-after="120" raw-content :content="tipHtml(row.instList)">
+                  <span class="sv-cell-text mono"><span class="sv-cell-count">{{row.instList.length}}</span>{{row.replication}}</span>
+                </el-tooltip>
+                <span v-else class="sv-cell-text mono" :class="{'sv-cell-muted': !row.replication || row.replication === '—'}">{{row.replication || '—'}}</span>
+              </template>
+            </el-table-column>
+            <el-table-column prop="version" label="版本" width="90" :show-overflow-tooltip="false" />
+            <el-table-column prop="uptime" label="运行时间" min-width="140" :show-overflow-tooltip="false">
+              <template #default="{row}">
+                <el-tooltip v-if="row.uptime && row.uptime !== '-'" placement="top" :show-after="120" raw-content :content="tipHtml(row.uptimeList)">
+                  <span class="sv-cell-text">{{row.uptime}}</span>
+                </el-tooltip>
+                <span v-else class="sv-cell-text sv-cell-muted">—</span>
+              </template>
+            </el-table-column>
+          </el-table>
+        </div>
+      </template>
 
       <!-- 访问密码 -->
       <div class="sv-section" v-if="verifyPassword">
@@ -344,32 +531,6 @@ window.StacksPage = {
             <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
           </div>
         </div>
-      </div>
-
-      <!-- 节点状态 -->
-      <div class="sv-section">
-        <div class="sv-section-title">节点状态 <span class="sv-section-count">{{verifyHostRows.length}} 台</span></div>
-        <el-table :data="verifyHostRows" size="small" empty-text="暂无节点结果" class="sv-node-table" :show-overflow-tooltip="false">
-          <el-table-column prop="ip" label="IP" min-width="130" :show-overflow-tooltip="false">
-            <template #default="{row}"><span class="mono">{{row.ip}}</span></template>
-          </el-table-column>
-          <el-table-column prop="host_name" label="主机名" min-width="120" :show-overflow-tooltip="false" />
-          <el-table-column prop="status" label="状态" width="70" align="center" :show-overflow-tooltip="false">
-            <template #default="{row}">
-              <span class="sv-table-dot" :class="row.ok ? 'ok' : 'fail'"></span>
-            </template>
-          </el-table-column>
-          <el-table-column prop="role" label="角色" width="90" :show-overflow-tooltip="false">
-            <template #default="{row}">
-              <span class="sv-role-badge" :class="row.role === 'master' ? 'is-master' : 'is-replica'">{{row.role}}</span>
-            </template>
-          </el-table-column>
-          <el-table-column prop="replication" :label="verifyTarget?.stack_key === 'redis' ? '复制' : '实例'" min-width="180" :show-overflow-tooltip="false">
-            <template #default="{row}"><span class="mono">{{row.replication || '—'}}</span></template>
-          </el-table-column>
-          <el-table-column prop="version" label="版本" width="90" :show-overflow-tooltip="false" />
-          <el-table-column prop="uptime" label="运行时间" min-width="110" :show-overflow-tooltip="false" />
-        </el-table>
       </div>
 
       <!-- 提示信息 -->
@@ -440,9 +601,10 @@ window.StacksPage = {
       sharedParams: {}, hostParams: {},
       deploying: false, wizardVisible: false, wizardOp: 'create', clusterName: '',
       targetInstance: null, memberHostIds: new Set(),
+      scaleInProtected: {}, instPlan: null, opPlan: null, opPlanErr: '', opPlanLoading: false,
       instances: [], instancesLoading: false,
       instDrawerVisible: false, instDetail: null, instRuns: [],
-      verifyVisible: false, verifyTarget: null, verifyResult: null, verifying: false,
+      verifyVisible: false, verifyTarget: null, verifyResult: null, verifying: false, verifyActiveTab: 'all',
       preflightVisible: false, preflight: {},
       drawerVisible: false, recordMeta: null, recordHosts: [], recordLogs: [], logFilter: '',
       sseLog: null, setupSse: null, logAutoScroll: true
@@ -475,7 +637,7 @@ window.StacksPage = {
       }[this.wizardOp] || '套件部署'
     },
     wizardFirstStepTitle() {
-      return { create: '选择套件', add_component: '选择组件', remove_component: '选择卸载组件' }[this.wizardOp] || '选择套件'
+      return { create: '选择套件', add_component: '选择加装组件', remove_component: '选择卸载组件' }[this.wizardOp] || '选择套件'
     },
     wizardStepIndex() {
       if (this.wizardOp === 'create' || this.wizardOp === 'add_component' || this.wizardOp === 'remove_component') return this.step - 1
@@ -493,6 +655,11 @@ window.StacksPage = {
       return this.unusedCompsOf(this.targetInstance)
     },
     needMaster() { return this.wizardOp === 'create' && !!this.selectedMode?.assign_master && !this.useRolePlan },
+    // 部署前角色预览门禁（全部套件，docs/role-plan-design.md §二·全套件覆盖）：
+    // bigdata 走 useRolePlan 分支自带预览；其余套件在主机勾选后自动生成，未出预览不能进下一步
+    needOpPlan() {
+      return !this.useRolePlan && (this.wizardOp === 'create' || this.wizardOp === 'scale_out')
+    },
     // 大数据等：表格勾选 + 按组件指定主角色（不再用单一「主节点」单选）
     useRolePlan() {
       return !!(this.formEntry?.masterComps?.length) &&
@@ -510,7 +677,9 @@ window.StacksPage = {
     },
     hostVars() {
       const list = this.selectedStack?.host_vars || []
-      return list.filter(v => !v.modes || !v.modes.length || v.modes.includes(this.mode))
+      const byMode = list.filter(v => !v.modes || !v.modes.length || v.modes.includes(this.mode))
+      const fn = this.formEntry?.filterHostVars
+      return fn ? fn(this, byMode) : byMode
     },
     visibleSharedVars() {
       const list = (this.selectedStack?.shared_vars || [])
@@ -581,9 +750,9 @@ window.StacksPage = {
       const it = this.verifyTarget
       const extractIP = (url) => { const m = url && url.match(/(\d+\.\d+\.\d+\.\d+)/); return m ? m[1] : url }
       const inferRole = (name) => { if (/主\b|master/i.test(name)) return 'master'; if (/从\b|replica|slave/i.test(name)) return 'replica'; return '' }
-      if (!it) return (this.verifyResult?.endpoints || []).map(ep => ({ name: ep.name, url: ep.url, role: ep.role || inferRole(ep.name), host_ip: extractIP(ep.url) }))
+      if (!it) return (this.verifyResult?.endpoints || []).map(ep => ({ name: ep.name, component: ep.component, url: ep.url, role: ep.role || inferRole(ep.name), host_ip: extractIP(ep.url) }))
       if (this.verifyResult?.endpoints?.length) {
-        return this.verifyResult.endpoints.map(ep => ({ name: ep.name, url: ep.url, role: ep.role || inferRole(ep.name), host_ip: extractIP(ep.url) }))
+        return this.verifyResult.endpoints.map(ep => ({ name: ep.name, component: ep.component, url: ep.url, role: ep.role || inferRole(ep.name), host_ip: extractIP(ep.url) }))
       }
       const hosts = (it.hosts || []).filter(h => h.status !== 'removed')
       const p = this.verifyParams
@@ -606,9 +775,9 @@ window.StacksPage = {
           // 优先用探活接口返回的 endpoints（按组件拆分）
           const fromApi = (this.verifyResult?.endpoints || []).filter(ep => (ep.role === h.role || true) && (ep.url || '').includes(h.host_ip))
           if (fromApi.length) {
-            fromApi.forEach(ep => out.push({ name: ep.name, url: ep.url, role: h.role, host_ip: h.host_ip, host_name: h.host_name }))
+            fromApi.forEach(ep => out.push({ name: ep.name, component: ep.component, url: ep.url, role: h.role, host_ip: h.host_ip, host_name: h.host_name }))
           } else {
-            out.push({ name: (this.roleLabel(h.role) || '节点'), url: 'http://' + h.host_ip, role: h.role, host_ip: h.host_ip, host_name: h.host_name })
+            out.push({ name: (this.roleLabel(h.role) || '节点'), component: '', url: 'http://' + h.host_ip, role: h.role, host_ip: h.host_ip, host_name: h.host_name })
           }
         } else {
           out.push({ name: (this.roleLabel(h.role) || '节点'), url: 'tcp://' + h.host_ip, role: h.role, host_ip: h.host_ip, host_name: h.host_name })
@@ -627,6 +796,18 @@ window.StacksPage = {
         map.get(key).endpoints.push(ep)
       })
       return Array.from(map.values())
+    },
+    // 探活接入地址主机头：冷热温按实际分层角色展示，其余沿用主/从
+    esVerifyHostRole(hg) {
+      const it = this.verifyTarget
+      if (!this.isEsCwh(it)) return ''
+      const parts = []
+      const seen = new Set()
+      ;(hg.endpoints || []).forEach(ep => {
+        const r = (ep.role || '').trim()
+        if (r && !seen.has(r)) { seen.add(r); parts.push(this.esRoleLabel(r)) }
+      })
+      return parts.join(' / ')
     },
     verifyHostRows() {
       return (this.verifyResult?.hosts || []).map(h => {
@@ -667,12 +848,77 @@ window.StacksPage = {
           ok: !!h.ok,
           role,
           replication,
+          instList: replication.includes(',') ? splitList(replication) : [],
           version: version || '-',
-          uptime: uptime || '-'
+          uptime: uptime || '-',
+          uptimeList: uptime ? splitList(uptime) : []
         }
       })
     },
-    preflightReady() { return !(this.preflight.unreachable && this.preflight.unreachable.length) },
+    // —— 多组件（bigdata）探活：组件标签式 ——
+    isBigdataVerify() { return this.verifyTarget?.stack_key === 'bigdata' },
+    COMP_LABELS() { return { hdfs: 'HDFS', zookeeper: 'ZooKeeper', yarn: 'YARN', spark: 'Spark', flink: 'Flink', hive: 'Hive', hbase: 'HBase', trino: 'Trino' } },
+    verifyComponents() {
+      if (!this.isBigdataVerify) return []
+      const order = (this.verifyParams.components || '').split(',').map(s => s.trim()).filter(Boolean)
+      const seen = new Set(), keys = []
+      ;[...order, ...(this.verifyResult?.endpoints || []).map(e => e.component)]
+        .forEach(k => { if (k && !seen.has(k)) { seen.add(k); keys.push(k) } })
+      const L = this.COMP_LABELS
+      return keys.map(k => ({ key: k, label: L[k] || k.toUpperCase() }))
+    },
+    currentVerifyCompLabel() {
+      const c = this.verifyComponents.find(c => c.key === this.verifyActiveTab)
+      return c ? c.label : ''
+    },
+    verifyCompEndpoints() {
+      const comp = this.verifyActiveTab
+      if (!comp || comp === 'all') return []
+      return this.verifyEndpoints.filter(ep => ep.component === comp)
+    },
+    verifyCompEndpointsByHost() {
+      const eps = this.verifyCompEndpoints
+      const map = new Map()
+      eps.forEach(ep => {
+        const key = ep.host_ip || ep.url
+        if (!map.has(key)) {
+          map.set(key, { host_ip: key, host_name: ep.host_name || key, endpoints: [] })
+        }
+        map.get(key).endpoints.push(ep)
+      })
+      return Array.from(map.values())
+    },
+    verifyCompHostRows() {
+      const comp = this.verifyActiveTab
+      if (!comp || comp === 'all') return []
+      const fullMap = Object.fromEntries(this.verifyHostRows.map(r => [r.ip, r]))
+      const out = []
+      for (const h of (this.verifyResult?.hosts || [])) {
+        const compChecks = (h.checks || []).filter(c => c.component === comp)
+        if (!compChecks.length) continue
+        const f = fullMap[h.host_ip] || {}
+        const instances = compChecks.filter(c => c.ok).map(c => c.name.replace(/^容器\s*/, ''))
+        const instStr = instances.length ? instances.join(', ') : '无'
+        const uptimeStr = f.uptime || '-'
+        out.push({
+          ip: h.host_ip, host_name: h.host_name,
+          ok: compChecks.every(c => c.ok),
+          role: f.role || '-',
+          instances: instStr,
+          instList: instances.length > 1 ? instances : [],
+          version: f.version || '-',
+          uptime: uptimeStr,
+          uptimeList: uptimeStr !== '-' ? splitList(uptimeStr) : []
+        })
+      }
+      return out
+    },
+    preflightReady() {
+      if (this.preflight.unreachable && this.preflight.unreachable.length) return false
+      // 部署前角色预览（全部套件）：预览未生成或失败时不允许确认部署
+      if (this.needOpPlan && !this.opPlan) return false
+      return true
+    },
     filteredLogs() {
       if (!this.logFilter) return this.recordLogs
       const kw = this.logFilter.toLowerCase()
@@ -686,6 +932,13 @@ window.StacksPage = {
   },
   beforeUnmount() { this.closeDrawer(); this.closeSetup() },
   methods: {
+    // 探活表格 tooltip：把长列表渲染成逐行文本（已转义），配合列内省略号使用
+    escHtml(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])) },
+    tipHtml(list) {
+      const arr = (list || []).map(x => String(x || '').trim()).filter(Boolean)
+      if (!arr.length) return ''
+      return '<div class="sv-tip-list">' + arr.map(x => this.escHtml(x)).join('<br>') + '</div>'
+    },
     async loadStacks() {
       this.stacksLoading = true
       try { const r = await api.get('/stacks'); if (r.code === 0) this.stacks = r.data || [] } catch (e) { /* */ }
@@ -713,6 +966,53 @@ window.StacksPage = {
     },
     instDisplayComps(it) {
       return this.instCompTags(it).filter(c => c && c !== it.mode)
+    },
+    // Elasticsearch 冷热温/集群角色与 tier 的中文标签
+    esRoleLabel(r) { return { master: 'master 候选', coordinator: '纯协调', data_hot: '数据-hot', data_warm: '数据-warm', data_cold: '数据-cold' }[r] || r },
+    isEsCwh(it) { return !!it && it.stack_key === 'elasticsearch' && it.mode === 'cold_warm_hot' },
+    hostRolesTags(h) {
+      let hp = {}
+      try { hp = JSON.parse((h && h.params_json) || '{}') || {} } catch (e) { hp = {} }
+      const roles = String(hp.roles || '').split(',').map(s => s.trim()).filter(Boolean)
+      return roles.length ? roles.map(r => this.esRoleLabel(r)) : []
+    },
+    // 实例卡片/抽屉：冷热温实例展示分层分布（数据-hot/warm/cold 聚合；含 master/协调）
+    instTierTags(it) {
+      if (!this.isEsCwh(it)) return []
+      const seen = new Set()
+      ;(it.hosts || []).forEach(h => this.hostRolesTags(h).forEach(t => seen.add(t)))
+      const order = ['数据-hot', '数据-warm', '数据-cold', 'master 候选', '纯协调']
+      return order.filter(t => seen.has(t))
+    },
+    // 抽屉成员：冷热温模式下按角色渲染分层标签，其余套件沿用 HA 角色矩阵
+    esMemberRoles(h) {
+      if (!this.isEsCwh(this.instDetail)) return []
+      return this.hostRolesTags(h)
+    },
+    // 冷热温 + SSL 开启时可下载 CA 证书
+    caDownloadAvailable() {
+      const it = this.instDetail || this.verifyTarget
+      if (!this.isEsCwh(it)) return false
+      try { return JSON.parse(it.params_json || '{}').ssl_enabled === 'true' } catch (e) { return false }
+    },
+    async downloadCa() {
+      const it = this.instDetail || this.verifyTarget
+      if (!it) return
+      try {
+        const text = await window.api.get('/stacks/instances/' + it.id + '/ca', { responseType: 'text', timeout: 30000 })
+        const str = String(text || '')
+        if (!str.includes('BEGIN CERTIFICATE')) { ElMessage.error('未获取到 CA 证书'); return }
+        const blob = new Blob([str], { type: 'application/x-pem-file' })
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement('a'); a.href = url; a.download = (it.name || 'es') + '-ca.crt'; a.click()
+        URL.revokeObjectURL(url)
+        ElMessage.success('已下载 CA 证书')
+      } catch (e) { ElMessage.error(e.message || '下载 CA 失败') }
+    },
+    // 抽屉成员标签统一入口：冷热温取角色分层，bigdata HA 取角色矩阵，其余空
+    memTags(h) {
+      if (this.isEsCwh(this.instDetail)) return this.esMemberRoles(h)
+      return this.haDrawnRoles(h.host_ip)
     },
     // 集群实例是否以 HA 模式创建（bigdata）
     instIsHa(it) {
@@ -800,6 +1100,10 @@ window.StacksPage = {
       })
     },
     busyInst(it) { return !it || it.status === 'deploying' },
+    // 安装未成功（失败 / 部分成功），可重新安装或卸载
+    instFailed(it) { return !!it && (it.status === 'failed' || it.status === 'partial') },
+    instReady(it) { return !!it && it.status === 'ready' },
+    instUninstalled(it) { return !!it && it.status === 'uninstalled' },
     canReinstall(it) { return !!(it && !this.busyInst(it) && it.status !== 'ready') },
     isPlatformStack(it) {
       if (!it) return false
@@ -831,7 +1135,12 @@ window.StacksPage = {
       const ascii = n.match(/[A-Za-z]/)
       return { t: ascii ? ascii[0].toUpperCase() : n.slice(0, 1), c: this.isContainerStack(it) ? 'is-container' : 'is-host' }
     },
-    compLabel(stackKey, k) { return (this.compsOf(stackKey).find(c => c.key === k) || {}).label || k },
+    compLabel(stackKey, k) {
+      const def = this.compsOf(stackKey).find(c => c.key === k)
+      if (def) return def.label
+      // 运行期组件（不在组件目录里，如 HA 的 metastore_db）给出中文名而不是裸键名
+      return { metastore_db: 'Hive MetaDB' }[k] || k
+    },
     instStatusType(s) { return { ready: 'success', deploying: 'warning', partial: 'danger', failed: 'danger', uninstalled: 'info' }[s] || 'info' },
     instStatusLabel(s) { return { ready: '就绪', deploying: '变更中', partial: '部分成功', failed: '失败', uninstalled: '已卸载' }[s] || s },
     applyInstanceContext(it) {
@@ -845,7 +1154,6 @@ window.StacksPage = {
     },
     async prepareInstance(it, op) {
       this.resetWizard()
-      this.instDrawerVisible = false
       this.wizardOp = op || 'create'
       let full = it
       try {
@@ -869,6 +1177,19 @@ window.StacksPage = {
     },
     async openScaleIn(it) {
       await this.prepareInstance(it, 'scale_in')
+      // 落点角色保护（全部套件，docs/role-plan-design.md §3.3）：承载落点角色的成员置灰，仅数据/工作节点可缩容
+      this.scaleInProtected = {}
+      try {
+        const r = await api.get('/stacks/instances/' + it.id + '/plan')
+        if (r.code === 0 && r.data) {
+          const m = {}
+          ;(r.data.hosts || []).forEach(h => {
+            const singles = (h.roles || []).filter(x => (x.scope || '') === '')
+            if (singles.length) m[h.host_ip] = singles.map(x => x.label).join('+')
+          })
+          this.scaleInProtected = m
+        }
+      } catch (e) { /* 读取失败时由后端兜底拦截 */ }
       this.step = 2
     },
     async openAddComp(it) {
@@ -892,10 +1213,62 @@ window.StacksPage = {
         const d = await api.get('/stacks/instances/' + it.id)
         if (d.code === 0) this.instDetail = d.data
       } catch (e) { /* */ }
+      this.loadInstPlan(it.id)
       try {
         const r = await api.get('/stacks/instances/' + it.id + '/runs')
         if (r.code === 0) this.instRuns = r.data || []
       } catch (e) { /* */ }
+    },
+    async loadInstPlan(id) {
+      this.instPlan = null
+      try {
+        const r = await api.get('/stacks/instances/' + id + '/plan')
+        if (r.code === 0) this.instPlan = r.data
+      } catch (e) { /* */ }
+    },
+    // 角色类型 → 文字颜色（底框颜色区分手动/自动，文字颜色区分角色，docs/role-plan-design.md §五）
+    roleTextClass(r) {
+      const role = (r || {}).role || ''
+      if (['nn1','rm1','spark_m1','jm1','hm1','ms1','hs2a','db','coordinator','master','boot_master','boot','seed'].includes(role)) return 'rt-primary'
+      if (['nn2','rm2','spark_m2','jm2','hm2','ms2','hs2b','replica','slave','data'].includes(role)) return 'rt-standby'
+      if (['zk','jn','zkfc','broker'].includes(role)) return 'rt-quorum'
+      if (['ui','sentinel'].includes(role)) return 'rt-aux'
+      return 'rt-worker'
+    },
+    // 部署前角色预览（全部套件，docs/role-plan-design.md §二）：create 取所选主机；scale_out 取既有成员 + 新选主机
+    async refreshOpPlan() {
+      if (!this.needOpPlan || !this.selectedKey || !this.mode) return
+      const ids = this.wizardOp === 'scale_out'
+        ? [...new Set([...this.memberHostIds, ...this.selectedHostIds])]
+        : [...this.selectedHostIds]
+      if (!ids.length) { this.opPlan = null; this.opPlanErr = ''; return }
+      const masterHost = ((this.targetInstance || {}).hosts || []).find(h => h.role === 'master' && h.status !== 'removed')
+      this.opPlanLoading = true
+      this.opPlanErr = ''
+      try {
+        const r = await api.post('/stacks/plan/preview', {
+          stack_key: this.selectedKey,
+          mode: this.mode,
+          host_ids: ids,
+          master_host_id: this.masterHostId || (this.wizardOp === 'scale_out' && masterHost ? masterHost.host_id : 0),
+          params: this.sharedParams || {},
+          host_params: this.hostParams || {}
+        })
+        if (r.code === 0) { this.opPlan = r.data; this.opPlanErr = '' }
+        else { this.opPlan = null; this.opPlanErr = r.message || '角色计划预览失败' }
+      } catch (e) {
+        this.opPlan = null; this.opPlanErr = (e && e.message) || '角色计划预览失败'
+      }
+      this.opPlanLoading = false
+    },
+    async replanInst() {
+      if (!this.instDetail) return
+      try {
+        const r = await api.post('/stacks/instances/' + this.instDetail.id + '/replan')
+        if (r.code !== 0) { ElMessage.error(r.message || '重规划失败'); return }
+        ElMessage.success('角色计划已重规划' + (r.data && r.data.rev ? '（rev ' + r.data.rev + '）' : ''))
+        this.instPlan = r.data
+      } catch (e) { ElMessage.error(e.message || '重规划失败') }
     },
     async openVerifyDialog(it) {
       this.verifyVisible = true
@@ -959,7 +1332,7 @@ window.StacksPage = {
     },
     async reinstallInstance(it) {
       try {
-        await ElMessageBox.confirm('将按原主机和参数重新部署。已有容器会按脚本幂等重建，实例记录保留。', '重新安装 ' + it.name, {
+        await ElMessageBox.confirm('第一步会自动清理：停止并移除各节点残留容器、清空服务数据目录（避免上次失败污染），随后按原主机和参数全新部署。实例记录保留。', '重新安装 ' + it.name, {
           type: 'warning', confirmButtonText: '开始重装', cancelButtonText: '取消'
         })
       } catch (e) { return }
@@ -972,7 +1345,7 @@ window.StacksPage = {
     },
     async uninstallInstance(it) {
       try {
-        await ElMessageBox.confirm('将停止全部节点上的套件服务，集群记录会保留为「已卸载」，之后仍可查看流程或删除记录。', '卸载 ' + it.name, {
+        await ElMessageBox.confirm('将停止并移除全部节点上的套件容器；服务数据目录默认保留（重装会先自动清空），实例记录保留为「已卸载」。', '卸载 ' + it.name, {
           type: 'warning', confirmButtonText: '确认卸载', cancelButtonText: '取消'
         })
       } catch (e) { return }
@@ -982,6 +1355,22 @@ window.StacksPage = {
         ElMessage.success('已开始卸载')
         await this.afterStackOp({ ...r.data, op: 'uninstall' })
       } catch (e) { ElMessage.error(e.message || '卸载失败') }
+    },
+    async purgeInstance(it) {
+      try {
+        await ElMessageBox.confirm(
+          '⚠️ 将停止并删除全部节点上的套件容器、数据卷与服务目录（' + (it.home_hint || '含 Hive/HBase 等全部数据') + '），删除后不可恢复！' +
+          '清理完成后集群转为「已卸载」，可重新安装。',
+          '清理残留 · ' + it.name, {
+            type: 'error', confirmButtonText: '确认清理', cancelButtonText: '取消'
+          })
+      } catch (e) { return }
+      try {
+        const r = await api.post('/stacks/instances/' + it.id + '/uninstall', { purge: true })
+        if (r.code !== 0) { ElMessage.error(r.message || '清理失败'); return }
+        ElMessage.success('已开始清理残留')
+        await this.afterStackOp({ ...r.data, op: 'uninstall' })
+      } catch (e) { ElMessage.error(e.message || '清理失败') }
     },
     async deleteInstance(it) {
       if (it.status !== 'uninstalled') { ElMessage.warning('请先卸载后再删除'); return }
@@ -1003,6 +1392,7 @@ window.StacksPage = {
       this.selectedHostIds = new Set(); this.sharedParams = {}; this.hostParams = {}
       this.preflightVisible = false; this.preflight = {}; this.deploying = false
       this.wizardOp = 'create'; this.clusterName = ''; this.targetInstance = null; this.memberHostIds = new Set()
+      this.opPlan = null; this.opPlanErr = ''; this.opPlanLoading = false
     },
     selectStack(s) {
       this.selectedKey = s.key
@@ -1172,8 +1562,10 @@ window.StacksPage = {
       this.$nextTick(() => this.syncRoleHostTableSelection())
     },
     toggleSelectAll() {
-      if (this.selectedHosts.length === this.filteredHosts.length) this.selectedHostIds = new Set()
-      else this.selectedHostIds = new Set(this.filteredHosts.map(h => h.id))
+      // 缩容（bigdata）：全选跳过承载落点角色的成员
+      const pool = this.filteredHosts.filter(h => !this.scaleInProtected[h.ip])
+      if (this.selectedHosts.length === pool.length && pool.length) this.selectedHostIds = new Set()
+      else this.selectedHostIds = new Set(pool.map(h => h.id))
       if (this.needMaster && this.selectedHosts.length && !this.selectedHostIds.has(this.masterHostId)) {
         this.masterHostId = this.selectedHosts[0]?.id || 0
       }
@@ -1208,6 +1600,11 @@ window.StacksPage = {
       this.hostParams = next
     },
     async startPreflight() {
+      // 部署前角色预览（全部套件，docs/role-plan-design.md §二）：参数已就绪，与部署前置一同确认落点
+      if (this.needOpPlan) {
+        await this.refreshOpPlan()
+        if (!this.opPlan) { ElMessage.error(this.opPlanErr || '角色计划预览未生成，无法部署'); return }
+      }
       if (!this.selectedStack?.requires_docker) {
         await this.confirmRun()
         return
@@ -1411,7 +1808,7 @@ window.StacksPage = {
     taskStatusLabel(s) { return { running: '执行中', success: '已完成', partial: '部分成功', failed: '失败' }[s] || s },
     formatTime(t) {
       if (!t) return '-'
-      const d = new Date(t.replace(' ', 'T') + (t.includes('Z') ? '' : 'Z'))
+      const d = new Date(t.replace(' ', 'T'))
       return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0') + ' ' + String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0')
     }
   }

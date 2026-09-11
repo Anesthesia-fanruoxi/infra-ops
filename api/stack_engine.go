@@ -79,8 +79,22 @@ func (h *stackHandler) execute(runID int64) {
 		}
 	}
 	extraAll := stackClusterExtraMerged(op, existing, hosts)
-	// bigdata：节点脚本里的 {{__master_<comp>}} 角色变量必须在节点阶段注入，否则 NameNode 不会被拉起
-	mergeBigdataMasterExtra(bp, hosts, extraAll)
+	// ES 冷热温：角色由每台主机勾选（roles csv，非平台隐式主从），需覆盖通用 extra 中的 __roles/初识 master 推导
+	if bp.Key == "elasticsearch" && run.Mode == "cold_warm_hot" {
+		extraAll = stackCWHExtraMerged(op, existing, hosts)
+	}
+	// bigdata：节点脚本里的 {{__master_<comp>}} 角色变量必须在节点阶段注入，否则 NameNode 不会被拉起。
+	// 优先使用已物化角色计划（docs/role-plan-design.md）：扩容/加装时运行主机只是成员子集，
+	// 现场推导会算错落点，Plan.Injected 是部署渲染的唯一事实源。
+	var bigdataPlan *model.RolePlan
+	if bp.Key == "bigdata" && run.InstanceID > 0 {
+		if inst, ierr := h.repo.GetInstance(run.InstanceID); ierr == nil && inst != nil {
+			if p, perr := h.loadRolePlan(inst); perr == nil {
+				bigdataPlan = p
+			}
+		}
+	}
+	mergeBigdataMasterExtra(bp, hosts, extraAll, bigdataPlan)
 
 	if bp.RequiresDocker {
 		ok := h.runPhasePrereq(runID, hosts)
@@ -95,7 +109,37 @@ func (h *stackHandler) execute(runID int64) {
 		hosts, _ = h.repo.RunHosts(runID)
 	}
 
-	ok := h.runPhaseAllHosts(runID, run.InstanceID, run.Mode, bp, hosts, extraAll)
+	// 主脑编排的流水线：套件声明了 ordered 多阶段时，逐阶段调度主机（替代 node→bootstrap 单步）。
+	// installPhases 会按运行类型裁剪：create/reinstall 全量、add_component 只跑新增组件、scale_out 只跑节点阶段。
+	installPhases := selectPipelinePhases(bp, run, op)
+	if len(bp.Pipeline(run.Mode)) > 0 && len(installPhases) == 0 &&
+		(op == "add_component" || op == "scale_out") {
+		// 声明了流水线的套件，加装/扩容必须走流水线；阶段为空说明请求无效（如未解析到新增组件）。
+		// 此处显式失败——若放任回落到 node 阶段，脚本无对应分支，会"秒回 5/5 假成功"却什么都没部署。
+		h.failAll(runID, hosts, "未解析到需要执行的流水线阶段（新增组件为空？）")
+		return
+	}
+	if len(installPhases) > 0 {
+		ok := h.runPipeline(runID, run.InstanceID, run.Mode, bp, hosts, extraAll, installPhases)
+		hosts, _ = h.repo.RunHosts(runID)
+		if !ok {
+			h.skipRemaining(hosts, false, true)
+			h.finish(runID)
+			return
+		}
+		// 流水线仅主节点跑收尾/校验（Target=leader），其余主机 BootstrapStatus 回落到 skipped，避免被判 running
+		for i := range hosts {
+			if hosts[i].BootstrapStatus == "" || hosts[i].BootstrapStatus == "pending" {
+				hosts[i].BootstrapStatus = "skipped"
+				_ = h.repo.UpdateHost(&hosts[i])
+			}
+		}
+		h.markHostsDone(hosts)
+		h.finish(runID)
+		return
+	}
+
+	ok := h.runPhaseNode(runID, run.InstanceID, run.Mode, bp, hosts, extraAll, "node", true)
 	hosts, _ = h.repo.RunHosts(runID)
 	if !ok {
 		h.skipRemaining(hosts, false, true)
@@ -256,7 +300,7 @@ func (h *stackHandler) runPhasePrereq(runID int64, hosts []model.StackRunHost) b
 	return atomic.LoadInt32(&failed) == 0
 }
 
-func (h *stackHandler) runPhaseAllHosts(runID int64, instanceID int64, mode string, bp *store.BuiltinStack, hosts []model.StackRunHost, extraAll map[int64]map[string]string) bool {
+func (h *stackHandler) runPhaseNode(runID int64, instanceID int64, mode string, bp *store.BuiltinStack, hosts []model.StackRunHost, extraAll map[int64]map[string]string, phase string, register bool) bool {
 	script, err := bp.LoadPhase(mode, "node")
 	if err != nil {
 		h.appendLog(runID, "node", 0, "", "加载节点脚本失败: "+err.Error())
@@ -265,6 +309,14 @@ func (h *stackHandler) runPhaseAllHosts(runID int64, instanceID int64, mode stri
 	varsJSON := stackVarsJSON(bp.Blueprint(), mode)
 	if extraAll == nil {
 		extraAll = stackClusterExtra(hosts)
+	}
+	// 流水线阶段注入 {{__run}}，驱动单脚本 RUN 分发器只执行当前阶段对应的组件。
+	// 注意：extraAll 跨阶段共享且为原地修改，必须无条件用当前阶段键覆盖 __run，
+	// 否则首个阶段（reset）写入后后续阶段因 "__run 已存在" 被跳过，导致全部阶段跑成 reset。
+	if phase != "" {
+		for _, m := range extraAll {
+			m["__run"] = phase
+		}
 	}
 	h.appendLog(runID, "node", 0, "", "开始部署 "+bp.Name+" 节点")
 	var failed int32
@@ -284,7 +336,7 @@ func (h *stackHandler) runPhaseAllHosts(runID int64, instanceID int64, mode stri
 
 		params := map[string]string{}
 		_ = json.Unmarshal([]byte(host.ParamsJSON), &params)
-		rendered, rerr := renderScript(script, varsJSON, params)
+		rendered, rerr := renderScript(script, varsJSON, privatizeImages(params))
 		if rerr != nil {
 			host.NodeStatus = "failed"
 			host.Status = "failed"
@@ -309,16 +361,57 @@ func (h *stackHandler) runPhaseAllHosts(runID int64, instanceID int64, mode stri
 		} else {
 			host.NodeStatus = "success"
 			h.appendLog(runID, "node", host.HostID, host.HostIP, "节点已就绪")
-			if bp.Key == "redis" {
-				h.registerRedisService(host, mode, params, instanceID)
-			} else {
-				h.registerStackService(bp, host, mode, params, instanceID, hosts)
+			if register {
+				if bp.Key == "redis" {
+					h.registerRedisService(host, mode, params, instanceID)
+				} else {
+					h.registerStackService(bp, host, mode, params, instanceID, hosts)
+				}
 			}
 		}
 		_ = h.repo.UpdateHost(host)
 		h.publishHost(runID, host, "node")
 	})
 	return atomic.LoadInt32(&failed) == 0
+}
+
+// runPipeline 主脑流水线编排器：按顺序逐阶段调度主机，每阶段全部成功才进入下一阶段。
+// Target=all 走节点脚本（注入 {{__run}} 驱动 RUN 分发），Target=leader 走 bootstrap 收尾/校验。
+func (h *stackHandler) runPipeline(runID, instanceID int64, mode string, bp *store.BuiltinStack, hosts []model.StackRunHost, extraAll map[int64]map[string]string, phases []model.StackPhase) bool {
+	for _, step := range phases {
+		h.appendLog(runID, "node", 0, "", "【流水线】"+step.Label)
+		var ok bool
+		if step.Target == "leader" {
+			h.runPhaseBootstrap(runID, mode, bp, hosts)
+			hosts, _ = h.repo.RunHosts(runID)
+			ok = true
+			for i := range hosts {
+				if hosts[i].BootstrapStatus == "failed" {
+					ok = false
+					break
+				}
+			}
+		} else {
+			ok = h.runPhaseNode(runID, instanceID, mode, bp, hosts, extraAll, step.Key, false)
+			hosts, _ = h.repo.RunHosts(runID)
+		}
+		if !ok {
+			h.appendLog(runID, "node", 0, "", "阶段未通过，终止流水线: "+step.Label)
+			return false
+		}
+	}
+	// 流水线全成功后再统一注册主机服务，供探活与 UI 展示
+	hosts, _ = h.repo.RunHosts(runID)
+	for i := range hosts {
+		p := map[string]string{}
+		_ = json.Unmarshal([]byte(hosts[i].ParamsJSON), &p)
+		if bp.Key == "redis" {
+			h.registerRedisService(&hosts[i], mode, p, instanceID)
+		} else {
+			h.registerStackService(bp, &hosts[i], mode, p, instanceID, hosts)
+		}
+	}
+	return true
 }
 
 func (h *stackHandler) runPhaseBootstrap(runID int64, mode string, bp *store.BuiltinStack, hosts []model.StackRunHost) {
@@ -350,7 +443,7 @@ func (h *stackHandler) runPhaseBootstrap(runID int64, mode string, bp *store.Bui
 	if bp.Key == "redis" && strings.TrimSpace(params["replicas"]) == "" {
 		params["replicas"] = "0"
 	}
-	rendered, rerr := renderScript(script, varsJSON, params)
+	rendered, rerr := renderScript(script, varsJSON, privatizeImages(params))
 	if rerr != nil {
 		leader.BootstrapStatus = "failed"
 		leader.Status = "failed"
@@ -400,10 +493,27 @@ func (h *stackHandler) runPhaseRemove(runID int64, run *model.StackRun, hosts []
 		"uninstall":        "开始卸载集群：停止全部节点上的套件服务",
 		"remove_component": "开始卸载组件：" + strings.Join(removeComps, ","),
 	}[op]
+	purge := false
+	{
+		p := map[string]string{}
+		_ = json.Unmarshal([]byte(run.ParamsJSON), &p)
+		if p["purge"] == "true" {
+			purge = true
+			lead = "开始清理残留：停止并删除全部节点上的套件容器与数据/配置目录"
+		}
+	}
 	if lead == "" {
 		lead = "开始停止套件服务"
 	}
 	h.appendLog(runID, "node", 0, "", lead)
+	// 冷热温缩容：先走官方软下线（排空分片 + 安全退场），失败则中止，避免直接拔容器造成分片丢失
+	if op == "scale_in" && run != nil && run.StackKey == "elasticsearch" && run.Mode == "cold_warm_hot" {
+		if !h.drainCWHRemoved(runID, run, hosts) {
+			h.failAll(runID, hosts, "缩容软下线失败，已中止（未停止任何容器，分片数据未受影响）")
+			h.finish(runID)
+			return
+		}
+	}
 	h.forEachHost(hosts, func(host *model.StackRunHost) {
 		host.Status = "running"
 		host.NodeStatus = "running"
@@ -421,7 +531,7 @@ func (h *stackHandler) runPhaseRemove(runID int64, run *model.StackRun, hosts []
 			h.publishHost(runID, host, "node")
 			return
 		}
-		script := stackComposeDownScript(home, removeComps)
+		script := stackComposeDownScript(home, removeComps, purge)
 		out, execErr := h.execScript(host, script, "node")
 		host.Output = out
 		if execErr != nil {
@@ -439,7 +549,7 @@ func (h *stackHandler) runPhaseRemove(runID int64, run *model.StackRun, hosts []
 	})
 }
 
-func stackComposeDownScript(home string, comps []string) string {
+func stackComposeDownScript(home string, comps []string, purge bool) string {
 	dirs := []string{}
 	if len(comps) == 0 {
 		dirs = []string{"", "hadoop", "zookeeper", "yarn", "spark", "flink", "hive", "hbase", "trino"}
@@ -455,13 +565,30 @@ func stackComposeDownScript(home string, comps []string) string {
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "HOME_DIR=%q\n", home)
-	b.WriteString("down_one() { if [ -f \"$1\" ]; then docker compose -f \"$1\" down || true; echo \"已停止 $1\"; fi; }\n")
+	if purge {
+		// 清理残留模式：down -v 连同匿名卷/孤儿容器一并移除，并删除 bind-mount 的数据/配置目录
+		b.WriteString("down_one() { if [ -f \"$1\" ]; then docker compose -f \"$1\" down -v --remove-orphans || docker compose -f \"$1\" down || true; echo \"已清理 $1\"; fi; }\n")
+	} else {
+		b.WriteString("down_one() { if [ -f \"$1\" ]; then docker compose -f \"$1\" down || true; echo \"已停止 $1\"; fi; }\n")
+	}
 	for _, d := range dirs {
 		if d == "" {
 			b.WriteString("down_one \"${HOME_DIR}/compose.yml\"\n")
 			continue
 		}
 		fmt.Fprintf(&b, "down_one \"${HOME_DIR}/%s/compose.yml\"\n", d)
+	}
+	if purge {
+		// 目录仅限 HOME_DIR 之下，逐个组件目录删除（metadb 嵌套在 hive 下，随 hive 一起删除）
+		b.WriteString("rm -rf")
+		for _, d := range dirs {
+			if d == "" {
+				continue
+			}
+			fmt.Fprintf(&b, " \"${HOME_DIR}/%s\"", d)
+		}
+		b.WriteString(" \"${HOME_DIR}/compose.yml\"\n")
+		b.WriteString("echo \"[Purge] 残留数据/配置目录已删除\"\n")
 	}
 	return b.String()
 }
@@ -511,7 +638,7 @@ func (h *stackHandler) runPhaseScaleOut(runID int64, mode string, bp *store.Buil
 		params["replicas"] = "0"
 	}
 	varsJSON := stackVarsJSON(bp.Blueprint(), mode)
-	rendered, rerr := renderScript(script, varsJSON, params)
+	rendered, rerr := renderScript(script, varsJSON, privatizeImages(params))
 	if rerr != nil {
 		leader.BootstrapStatus = "failed"
 		leader.Status = "failed"
@@ -559,6 +686,11 @@ func (h *stackHandler) syncInstanceAfterRun(run *model.StackRun, status string, 
 	for i := range hosts {
 		host := hosts[i]
 		if host.Status != "success" {
+			continue
+		}
+		// 加装组件是集群级原子变更：只有全部成员都成功才落库，
+		// 否则会出现"实例已声明组件、部分机器并未部署"的中间态，且无法重试。
+		if op == "add_component" && status != "success" {
 			continue
 		}
 		switch op {
@@ -623,6 +755,15 @@ func (h *stackHandler) syncInstanceAfterRun(run *model.StackRun, status string, 
 		instStatus = "uninstalled"
 	case status == "success":
 		instStatus = "ready"
+	case op == "add_component":
+		// 加装失败/部分成功不影响既有集群可用性：恢复运行前状态，
+		// 否则实例会被留在 deploying（失败详情保存在该次运行记录里）
+		instStatus = "partial"
+		if p := map[string]string{}; json.Unmarshal([]byte(run.ParamsJSON), &p) == nil {
+			if prev := strings.TrimSpace(p["prev_instance_status"]); prev != "" && prev != "deploying" {
+				instStatus = prev
+			}
+		}
 	case status == "partial":
 		instStatus = "partial"
 	case stackInstallOp(op):
@@ -779,6 +920,45 @@ func (h *stackHandler) registerStackService(bp *store.BuiltinStack, host *model.
 	// 大数据底座：按勾选组件 + 角色登记多个服务入口
 	if bp.Key == "bigdata" {
 		h.registerBigdataServices(host, params, instanceID, hosts)
+		return
+	}
+	// ES 冷热温：按每台主机勾选角色登记（携带 tier 角色标签），协议随 SSL 开关 http/https
+	if bp.Key == "elasticsearch" && mode == "cold_warm_hot" {
+		scheme := "http"
+		if strings.EqualFold(strings.TrimSpace(params["ssl_enabled"]), "true") {
+			scheme = "https"
+		}
+		bind := func(label string) string {
+			_ = h.tplRepo.UpsertHostService(&model.HostService{
+				HostID: host.HostID, HostIP: ip, ServiceName: "Elasticsearch-"+label,
+				URL: scheme + "://" + ip + ":" + pick("port", "9200"), Web: true,
+				TemplateID: 0, InstanceID: instanceID,
+			})
+			return label
+		}
+		registered := false
+		for _, r := range strings.Split(params["roles"], ",") {
+			r = strings.TrimSpace(r)
+			switch r {
+			case "master":
+				bind("master")
+			case "coordinator":
+				bind("协调")
+			case "data_hot":
+				bind("数据-hot")
+			case "data_warm":
+				bind("数据-warm")
+			case "data_cold":
+				bind("数据-cold")
+			}
+			if r != "" {
+				registered = true
+			}
+		}
+		if !registered {
+			bind("节点")
+		}
+		_ = h.tplRepo.MarkHostInstalled(host.HostID, 0, "套件:elasticsearch/"+mode, 0)
 		return
 	}
 	registry := map[string]map[string]svcEntry{
@@ -1247,6 +1427,10 @@ func bigdataHAXMLBlocks(r bigdataRole, params map[string]string) map[string]stri
 	if nnRpc == "" {
 		nnRpc = "9000"
 	}
+	jnRpc := strings.TrimSpace(params["jn_rpc_port"])
+	if jnRpc == "" {
+		jnRpc = "8485"
+	}
 	compOn := func(c string) bool {
 		for _, x := range parseComponentsCSV(params["components"]) {
 			if strings.EqualFold(strings.TrimSpace(x), c) {
@@ -1265,7 +1449,7 @@ func bigdataHAXMLBlocks(r bigdataRole, params map[string]string) map[string]stri
 		out["__ha_core_props"] = b.String()
 
 		b.Reset()
-		b.WriteString(xmlProp("dfs.namenode.shared.edits.dir", "qjournal://"+strings.Join(r.JNs, ":"+nnRpc+";")+":"+nnRpc+"/"+ns))
+		b.WriteString(xmlProp("dfs.namenode.shared.edits.dir", "qjournal://"+strings.Join(r.JNs, ":"+jnRpc+";")+":"+jnRpc+"/"+ns))
 		b.WriteString(xmlProp("dfs.journalnode.edits.dir", "/hadoop/dfs/journal"))
 		b.WriteString(xmlProp("dfs.namenode.rpc-address."+ns+".nn1", r.Nn1+":"+nnRpc))
 		b.WriteString(xmlProp("dfs.namenode.rpc-address."+ns+".nn2", r.Nn2+":"+nnRpc))
@@ -1273,6 +1457,8 @@ func bigdataHAXMLBlocks(r bigdataRole, params map[string]string) map[string]stri
 		b.WriteString(xmlProp("dfs.namenode.http-address."+ns+".nn2", r.Nn2+":9870"))
 		b.WriteString(xmlProp("dfs.ha.automatic-failover.enabled", "true"))
 		b.WriteString(xmlProp("dfs.ha.fencing.methods", "shell(/bin/true)"))
+		// 容器内主机名为 IP 字面量时默认反解失败会拒收 DataNode 注册，需关闭该检查
+		b.WriteString(xmlProp("dfs.namenode.datanode.registration.ip-hostname-check", "false"))
 		out["__ha_hdfs_props"] = b.String()
 
 		if compOn("yarn") {
@@ -1281,6 +1467,11 @@ func bigdataHAXMLBlocks(r bigdataRole, params map[string]string) map[string]stri
 			b.WriteString(xmlProp("yarn.resourcemanager.ha.rm-ids", "rm1,rm2"))
 			b.WriteString(xmlProp("yarn.resourcemanager.hostname.rm1", r.Rm1))
 			b.WriteString(xmlProp("yarn.resourcemanager.hostname.rm2", r.Rm2))
+			// HA 下 MR AppMaster 的 AmFilterInitializer 会读取 yarn.resourcemanager.webapp.address.<rmId>
+			// 拼装 RM_HA_URLS；若缺失则该值为 null，StringUtils.join 直接抛 NPE，
+			// 导致 AM WebApp 启动失败 → MRClientService.getHttpPort() NPE → AM exit 1。
+			b.WriteString(xmlProp("yarn.resourcemanager.webapp.address.rm1", r.Rm1+":8088"))
+			b.WriteString(xmlProp("yarn.resourcemanager.webapp.address.rm2", r.Rm2+":8088"))
 			b.WriteString(xmlProp("yarn.resourcemanager.cluster-id", "bigdata-yarn"))
 			b.WriteString(xmlProp("yarn.resourcemanager.zk-address", r.ZKIps))
 			b.WriteString(xmlProp("yarn.resourcemanager.recovery.enabled", "true"))
@@ -1327,8 +1518,21 @@ func bigdataHAXMLBlocks(r bigdataRole, params map[string]string) map[string]stri
 }
 
 // mergeBigdataMasterExtra 将大数据底座主/从角色变量并入 per-host 注入表。
-func mergeBigdataMasterExtra(bp *store.BuiltinStack, hosts []model.StackRunHost, extraAll map[int64]map[string]string) {
+// 存在已物化 Plan 时直接取 plan.Injected（唯一事实源）；否则按旧路径现场推导（兜底）。
+func mergeBigdataMasterExtra(bp *store.BuiltinStack, hosts []model.StackRunHost, extraAll map[int64]map[string]string, plan *model.RolePlan) {
 	if bp == nil || bp.Key != "bigdata" || len(extraAll) == 0 {
+		return
+	}
+	if plan != nil && len(plan.Injected) > 0 {
+		for id, extra := range extraAll {
+			if extra == nil {
+				extra = map[string]string{}
+				extraAll[id] = extra
+			}
+			for k, v := range plan.Injected {
+				extra[k] = v
+			}
+		}
 		return
 	}
 	m := bigdataMasterExtra(hosts)
@@ -1353,6 +1557,48 @@ func mergeBigdataMasterExtra(bp *store.BuiltinStack, hosts []model.StackRunHost,
 			extra[k] = v
 		}
 	}
+}
+
+// privatizeImages 在参数中提供了 image_registry（内网/私有镜像仓库前缀，如 192.168.7.13:5000）时，
+// 把 image / image_* / *_image 类镜像参数统一改写为 <前缀>/<仓库>:<标签>，便于离线内网部署；
+// 未提供前缀时原样返回，不影响既有行为。
+func privatizeImages(params map[string]string) map[string]string {
+	reg := strings.TrimSuffix(strings.TrimSpace(params["image_registry"]), "/")
+	if reg == "" {
+		return params
+	}
+	out := make(map[string]string, len(params))
+	for k, v := range params {
+		out[k] = v
+	}
+	for k, v := range out {
+		if !isImageParam(k) {
+			continue
+		}
+		img := strings.TrimSpace(v)
+		if img == "" {
+			continue
+		}
+		out[k] = reg + "/" + trimRegistryPrefix(img)
+	}
+	return out
+}
+
+func isImageParam(k string) bool {
+	if k == "image_registry" {
+		return false
+	}
+	return k == "image" || strings.HasPrefix(k, "image_") || strings.HasSuffix(k, "_image")
+}
+
+// trimRegistryPrefix 去掉镜像地址中已存在的 registry 段（首段含 . 或 : 即视为 registry），
+// 保证前缀重复应用时不会叠加成 a:5000/a:5000/img。
+func trimRegistryPrefix(img string) string {
+	parts := strings.SplitN(img, "/", 2)
+	if len(parts) == 2 && (strings.Contains(parts[0], ".") || strings.Contains(parts[0], ":")) {
+		return parts[1]
+	}
+	return img
 }
 
 func applyStackVars(script string, seq int, host model.StackRunHost, extra map[string]string) string {
@@ -1501,8 +1747,139 @@ func stackClusterExtraMerged(op string, existing, newHosts []model.StackRunHost)
 	return extra
 }
 
+// cwhNodeRoles 将冷热温每台主机的 roles csv 映射为 ES node.roles 列表体（yml 用）。
+// master→"master"；纯协调(coordinator)→空（node.roles: [] 为纯协调）；数据层→按勾选叠加 data_hot/warm/cold。
+func cwhNodeRoles(rolesCSV string) string {
+	var parts []string
+	for _, r := range strings.Split(rolesCSV, ",") {
+		r = strings.TrimSpace(r)
+		switch r {
+		case "master":
+			return `"master"`
+		case "coordinator":
+			// 纯协调：不落 data，node.roles 为空数组
+		default:
+			if r != "" {
+				parts = append(parts, strconv.Quote(r))
+			}
+		}
+	}
+	return strings.Join(parts, ",")
+}
+
+// stackCWHExtra 冷热温专用注入：以每台主机 roles 参数为权威来源派生 node.roles 与初识 master 变量，
+// 其余通用变量（seed_hosts/node_name/cluster_size 等）复用 stackClusterExtra。
+func stackCWHExtra(hosts []model.StackRunHost) map[int64]map[string]string {
+	base := stackClusterExtra(hosts)
+	bootName, bootSeq := "", 0
+	for _, h := range hosts {
+		p := map[string]string{}
+		_ = json.Unmarshal([]byte(h.ParamsJSON), &p)
+		if strings.Contains(p["roles"], "master") && (bootSeq == 0 || h.Seq < bootSeq) {
+			bootSeq, bootName = h.Seq, "n"+strconv.Itoa(h.Seq)
+		}
+	}
+	for _, h := range hosts {
+		p := map[string]string{}
+		_ = json.Unmarshal([]byte(h.ParamsJSON), &p)
+		isMaster := strings.Contains(p["roles"], "master")
+		name := "n" + strconv.Itoa(h.Seq)
+		m := base[h.HostID]
+		m["__es_roles"] = cwhNodeRoles(p["roles"])
+		m["__es_is_master"] = strconv.FormatBool(isMaster)
+		m["__es_bootstrap"] = strconv.FormatBool(bootName != "" && name == bootName)
+		m["__es_bootstrap_name"] = bootName
+		base[h.HostID] = m
+	}
+	return base
+}
+
+func stackCWHExtraMerged(op string, existing, newHosts []model.StackRunHost) map[int64]map[string]string {
+	byID := map[int64]model.StackRunHost{}
+	order := make([]int64, 0, len(existing)+len(newHosts))
+	for _, h := range existing {
+		if _, ok := byID[h.HostID]; !ok {
+			order = append(order, h.HostID)
+		}
+		byID[h.HostID] = h
+	}
+	for _, h := range newHosts {
+		if _, ok := byID[h.HostID]; !ok {
+			order = append(order, h.HostID)
+		}
+		byID[h.HostID] = h
+	}
+	all := make([]model.StackRunHost, 0, len(order))
+	for _, id := range order {
+		all = append(all, byID[id])
+	}
+	return stackCWHExtra(all)
+}
+
 func stackInstallOp(op string) bool {
 	return op == "create" || op == "reinstall"
+}
+
+// selectPipelinePhases 按运行类型裁剪套件流水线阶段：
+//   - create/reinstall：整机部署，全量执行；
+//   - add_component：只执行本次新增组件对应的阶段（Always 阶段恒执行），
+//     并跳过 FullOnly 阶段（典型是 reset，否则"加装"会把既有集群数据清空）；
+//   - scale_out：新节点入列，执行各组件阶段，但跳过 FullOnly（reset）
+//     与 Target=leader 的收尾阶段（bootstrap 必须在元老主节点上跑）。
+//
+// 返回 nil 表示本次操作不走流水线（交由调用方回落到 node→bootstrap 路径）。
+func selectPipelinePhases(bp *store.BuiltinStack, run *model.StackRun, op string) []model.StackPhase {
+	all := bp.Pipeline(run.Mode)
+	if len(all) == 0 {
+		return nil
+	}
+	switch op {
+	case "create", "reinstall":
+		return all
+	case "add_component":
+		p := map[string]string{}
+		_ = json.Unmarshal([]byte(run.ParamsJSON), &p)
+		added := parseComponentsCSV(p["add_components"])
+		if len(added) == 0 {
+			// 兼容早期未落 add_components 的历史运行：退回"合并后组件 − 已安装组件"的差集由调用方判定为空
+			return nil
+		}
+		want := map[string]bool{}
+		for _, c := range added {
+			want[strings.TrimSpace(c)] = true
+		}
+		out := make([]model.StackPhase, 0, len(all))
+		for _, ph := range all {
+			if ph.FullOnly {
+				continue
+			}
+			if ph.Always || phaseHasComponent(ph, want) {
+				out = append(out, ph)
+			}
+		}
+		return out
+	case "scale_out":
+		out := make([]model.StackPhase, 0, len(all))
+		for _, ph := range all {
+			if ph.FullOnly || ph.Target == "leader" {
+				continue
+			}
+			out = append(out, ph)
+		}
+		return out
+	}
+	return nil
+}
+
+// phaseHasComponent 判断阶段是否归属给定组件集合（Component 为逗号分隔的组件名列表）。
+func phaseHasComponent(ph model.StackPhase, want map[string]bool) bool {
+	for _, c := range strings.Split(ph.Component, ",") {
+		c = strings.TrimSpace(c)
+		if c != "" && want[c] {
+			return true
+		}
+	}
+	return false
 }
 
 func stackVarsJSON(bp model.StackBlueprint, mode string) json.RawMessage {
@@ -1519,4 +1896,87 @@ func stackVarsJSON(bp model.StackBlueprint, mode string) json.RawMessage {
 	add(bp.HostVars)
 	b, _ := json.Marshal(vars)
 	return b
+}
+
+// drainCWHRemoved 冷热温缩容软下线：在存活 leader 上先排空待下线节点分片、安全退场，
+// 集群回 green 后再放行停容器。返回 false 表示软下线失败（中止缩容，保护分片数据）。
+// 非冷热温模式直接返回 true（走通用直接停服路径）。
+func (h *stackHandler) drainCWHRemoved(runID int64, run *model.StackRun, removed []model.StackRunHost) bool {
+	if run == nil || len(removed) == 0 {
+		return true
+	}
+	bp := store.FindBuiltinStack(run.StackKey)
+	if bp == nil || bp.Key != "elasticsearch" || run.Mode != "cold_warm_hot" {
+		return true
+	}
+	script, err := bp.LoadPhase(run.Mode, "scale_in")
+	if err != nil {
+		h.appendLog(runID, "node", 0, "", "缩容下线脚本缺失，降级为直接停服: "+err.Error())
+		return true
+	}
+	removedIDs := map[int64]bool{}
+	var removeNodes, removeMasters []string
+	for i := range removed {
+		name := "n" + strconv.Itoa(removed[i].Seq)
+		removeNodes = append(removeNodes, name)
+		removedIDs[removed[i].HostID] = true
+		p := map[string]string{}
+		_ = json.Unmarshal([]byte(removed[i].ParamsJSON), &p)
+		if strings.Contains(p["roles"], "master") {
+			removeMasters = append(removeMasters, name)
+		}
+	}
+	sort.Slice(removeNodes, func(a, b int) bool { return removeNodes[a] < removeNodes[b] })
+	sort.Slice(removeMasters, func(a, b int) bool { return removeMasters[a] < removeMasters[b] })
+
+	// 选存活 leader：master 优先，否则首个存活成员；全被移除则无存活，跳过软下线
+	var survivors []model.StackRunHost
+	if run.InstanceID > 0 {
+		if instHosts, ierr := h.repo.InstanceHosts(run.InstanceID, true); ierr == nil {
+			for _, ih := range instHosts {
+				if removedIDs[ih.HostID] {
+					continue
+				}
+				rh := model.StackRunHost{HostID: ih.HostID, HostName: ih.HostName, HostIP: ih.HostIP, Seq: ih.Seq, ParamsJSON: ih.ParamsJSON}
+				p := map[string]string{}
+				_ = json.Unmarshal([]byte(ih.ParamsJSON), &p)
+				if strings.Contains(p["roles"], "master") {
+					survivors = append([]model.StackRunHost{rh}, survivors...)
+				} else {
+					survivors = append(survivors, rh)
+				}
+			}
+		}
+	}
+	if len(survivors) == 0 {
+		h.appendLog(runID, "node", 0, "", "无存活成员，跳过软下线直接停服")
+		return true
+	}
+	leader := &survivors[0]
+
+	params := map[string]string{}
+	_ = json.Unmarshal([]byte(leader.ParamsJSON), &params)
+	params["self_ip"] = leader.HostIP
+	params["remove_nodes"] = strings.Join(removeNodes, ",")
+	params["remove_masters"] = strings.Join(removeMasters, ",")
+	varsJSON := stackVarsJSON(bp.Blueprint(), run.Mode)
+	rendered, rerr := renderScript(script, varsJSON, privatizeImages(params))
+	if rerr != nil {
+		h.appendLog(runID, "node", leader.HostID, leader.HostIP, "缩容下线脚本渲染失败: "+rerr.Error())
+		return false
+	}
+	h.appendLog(runID, "node", leader.HostID, leader.HostIP,
+		fmt.Sprintf("软下线开始：在 %s 排空节点 %s", leader.HostIP, strings.Join(removeNodes, ",")))
+	target := *leader
+	target.RunID = runID
+	target.Output = ""
+	out, execErr := h.execScript(&target, rendered, "node")
+	if execErr != nil {
+		leader.Output = out
+		h.appendLog(runID, "node", leader.HostID, leader.HostIP, "软下线失败，中止缩容: "+execErr.Error())
+		_ = h.repo.UpdateHost(leader)
+		return false
+	}
+	h.appendLog(runID, "node", leader.HostID, leader.HostIP, "软下线完成，集群已排空回绿，可安全停服")
+	return true
 }

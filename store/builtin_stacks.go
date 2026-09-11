@@ -19,9 +19,13 @@ type stackPhaseFile struct {
 // BuiltinStack 内置套件（蓝图 + 脚本路径）。脚本与配置在 store/stacks/<套件>/{scripts,configs}/。
 type BuiltinStack struct {
 	model.StackBlueprint
-	nodeByMode      map[string]stackPhaseFile
-	bootstrapByMode map[string]stackPhaseFile
-	scaleOutByMode  map[string]stackPhaseFile
+	nodeByMode       map[string]stackPhaseFile
+	bootstrapByMode  map[string]stackPhaseFile
+	scaleOutByMode   map[string]stackPhaseFile
+	scaleInByMode    map[string]stackPhaseFile
+	// pipelineByMode：ordered 多阶段流水线（服务端主脑编排，替代 node→bootstrap 单步）。
+	// 定义后，execute 将按顺序逐阶段调度主机，阶段间全机成功才进入下一阶段。
+	pipelineByMode map[string][]model.StackPhase
 }
 
 var builtinStacks = []BuiltinStack{
@@ -118,6 +122,8 @@ var builtinStacks = []BuiltinStack{
 				{Name: "jn_rpc_port", Label: "JournalNode RPC 端口", Default: "8485"},
 				{Name: "hive_db_image", Label: "Hive HA · 元数据库镜像", Default: "mysql:8.4"},
 				{Name: "hive_db_password", Label: "Hive HA · 元数据库密码", Default: ""},
+				// 选填：填入内网/私有镜像仓库前缀（如 192.168.7.13:5000）后，下方所有镜像参数会自动改写为 <前缀>/<原镜像>，无需逐个修改
+				{Name: "image_registry", Label: "私有镜像仓库前缀（选填，填后自动应用到下列全部镜像）", Default: ""},
 				{Name: "image", Label: "Hadoop 镜像", Default: "apache/hadoop:3.3.6", Required: true},
 				{Name: "nn_rpc_port", Label: "NameNode RPC 端口", Default: "9000", Required: true},
 				{Name: "replication", Label: "HDFS 副本数", Default: "2", Required: true},
@@ -133,9 +139,9 @@ var builtinStacks = []BuiltinStack{
 				{Name: "jm_rpc_port", Label: "Flink · JobManager RPC 端口", Default: "6123", Required: true},
 				{Name: "tm_slots", Label: "Flink · 每 TaskManager Slots", Default: "4", Required: true},
 				{Name: "image_hive", Label: "Hive 镜像", Default: "apache/hive:4.0.0", Required: true},
-				{Name: "image_hbase", Label: "HBase 镜像", Default: "apache/hbase:2.5.10", Required: true},
+				{Name: "image_hbase", Label: "HBase 镜像", Default: "openeuler/hbase:latest", Required: true},
 				{Name: "image_trino", Label: "Trino 镜像", Default: "trinodb/trino:435", Required: true},
-				{Name: "trino_http_port", Label: "Trino · HTTP 端口", Default: "8080", Required: true},
+				{Name: "trino_http_port", Label: "Trino · HTTP 端口", Default: "8083", Required: true},
 				{Name: "trino_mem", Label: "Trino · JVM 最大堆", Default: "4G", Required: true},
 			},
 			HostVars: []model.StackVar{
@@ -146,17 +152,38 @@ var builtinStacks = []BuiltinStack{
 			"cluster": {
 				path: "stacks/bigdata/scripts/node.sh",
 				assets: map[string]string{
-					"CORE_SITE":  "stacks/bigdata/configs/hdfs/core-site.xml",
-					"HDFS_SITE":  "stacks/bigdata/configs/hdfs/hdfs-site.xml",
-					"YARN_SITE":  "stacks/bigdata/configs/yarn/yarn-site.xml",
-					"HIVE_SITE":  "stacks/bigdata/configs/hive/hive-site.xml",
-					"HBASE_SITE": "stacks/bigdata/configs/hbase/hbase-site.xml",
-					"HA_SH":      "stacks/bigdata/scripts/ha.sh",
+					"CORE_SITE":   "stacks/bigdata/configs/hdfs/core-site.xml",
+					"HDFS_SITE":   "stacks/bigdata/configs/hdfs/hdfs-site.xml",
+					"MAPRED_SITE": "stacks/bigdata/configs/hdfs/mapred-site.xml",
+					"YARN_SITE":   "stacks/bigdata/configs/yarn/yarn-site.xml",
+					"HIVE_SITE":   "stacks/bigdata/configs/hive/hive-site.xml",
+					"HBASE_SITE":  "stacks/bigdata/configs/hbase/hbase-site.xml",
+					"HA_SH":       "stacks/bigdata/scripts/ha.sh",
 				},
 			},
 		},
 		bootstrapByMode: map[string]stackPhaseFile{
 			"cluster": {path: "stacks/bigdata/scripts/bootstrap.sh"},
+		},
+		// 主脑编排的多阶段流水线：清理 → ZK → 格式化并启动 NameNode → 再启动 DataNode（DN 等 NN）→
+		// YARN → Spark → Flink → Hive → HBase → Trino → 校验。每阶段全机成功才进入下一步，
+		// 修复旧版"先起 DN 后格式化 NN"的顺序问题，并在第 1 阶段自动清理上次失败残留。
+		// Component/FullOnly/Always 供「加装组件 / 扩容」裁剪阶段：加装只跑新增组件对应的阶段
+		// （reset 标 FullOnly 故绝不在加装时执行，避免清掉既有数据）。
+		pipelineByMode: map[string][]model.StackPhase{
+			"cluster": {
+				{Key: "reset", Label: "清理旧环境与残留容器", Target: "all", FullOnly: true},
+				{Key: "zookeeper", Label: "启动 ZooKeeper 集群", Target: "all", Component: "zookeeper"},
+				{Key: "hdfs_boot", Label: "初始化并启动 NameNode/JournalNode", Target: "all", Component: "hdfs"},
+				{Key: "hdfs_dn", Label: "启动 DataNode", Target: "all", Component: "hdfs"},
+				{Key: "yarn", Label: "启动 YARN", Target: "all", Component: "yarn"},
+				{Key: "spark", Label: "启动 Spark", Target: "all", Component: "spark"},
+				{Key: "flink", Label: "启动 Flink", Target: "all", Component: "flink"},
+				{Key: "hive", Label: "启动 Hive", Target: "all", Component: "hive,metastore_db"},
+				{Key: "hbase", Label: "启动 HBase", Target: "all", Component: "hbase"},
+				{Key: "trino", Label: "启动 Trino", Target: "all", Component: "trino"},
+				{Key: "verify", Label: "校验集群状态并初始化目录", Target: "leader", Always: true},
+			},
 		},
 	},
 	{
@@ -207,7 +234,7 @@ var builtinStacks = []BuiltinStack{
 			Key:            "elasticsearch",
 			Name:           "Elasticsearch",
 			Category:       "service",
-			Description:    "一次成型部署 Elasticsearch 集群。指定一台引导主节点（含 initial_master_nodes），其余经 seed_hosts 加入；host 网络直连，默认关闭 xpack 安全。",
+			Description:    "一次成型部署 Elasticsearch 集群。双模式：原「集群」模式（指定一台引导主节点，其余 seed_hosts 加入）；新增「冷热温」模式（按主机勾选 master/纯协调/数据层角色，主脑流水线阶段编排，支持 SSL 自签）。host 网络直连，默认关闭 xpack 安全。",
 			RequiresDocker: true,
 			Modes: []model.StackMode{
 				{
@@ -216,16 +243,31 @@ var builtinStacks = []BuiltinStack{
 					MinHosts:    1, HostHint: "至少 1 台；多节点请指定一台引导主节点，生产建议 ≥3 台",
 					AssignMaster: true, DefaultHomeDir: "/data/elasticsearch",
 				},
+				{
+					Key: "cold_warm_hot", Label: "冷热温",
+					Description: "按数据热度分层：每台多选 master/纯协调/数据-hot/warm/cold 角色；master 不与数据层混部；生产建议 master ≥3 台（奇数）。SSL 可自签。",
+					MinHosts:    4, HostHint: "至少 4 台；建议 1+ master（≥3，奇数）+ ≥2 纯协调 + 数据层（按 tier）",
+					HasBootstrap: true, DefaultHomeDir: "/data/elasticsearch",
+				},
 			},
 			SharedVars: []model.StackVar{
 				{Name: "cluster_name", Label: "集群名", Default: "es-cluster", Required: true},
-				{Name: "image", Label: "镜像", Default: "elasticsearch:8.17.0", Required: true},
-				{Name: "java_opts", Label: "堆内存", Default: "-Xms1g -Xmx1g", Required: true},
+				{Name: "image", Label: "镜像", Default: "elasticsearch:9.5.3", Required: true},
+				{Name: "java_opts", Label: "堆内存", Default: "-Xms1g -Xmx1g", Required: true, Modes: []string{"cluster"}},
 				{Name: "transport_port", Label: "Transport 端口", Default: "9300", Required: true},
+				// 冷热温模式级变量：SSL 开关、纯协调数量、JVM 堆与额外参数
+				{Name: "ssl_enabled", Label: "启用 SSL（节点自签证书）", Default: "false", Type: "bool", Required: false, Modes: []string{"cold_warm_hot"}},
+				{Name: "coordinator_count", Label: "纯协调节点数", Default: "2", Required: false, Modes: []string{"cold_warm_hot"}},
+				{Name: "heap_xms", Label: "JVM 初始堆", Default: "1g", Required: false, Modes: []string{"cold_warm_hot"}},
+				{Name: "heap_xmx", Label: "JVM 最大堆", Default: "1g", Required: false, Modes: []string{"cold_warm_hot"}},
+				{Name: "jvm_opts", Label: "JVM 额外参数（追加进 ES_JAVA_OPTS）", Default: "-XX:+UseG1GC", Required: false, Modes: []string{"cold_warm_hot"}},
 			},
 			HostVars: []model.StackVar{
 				{Name: "port", Label: "HTTP 端口", Default: "9200", Required: true},
 				{Name: "home_dir", Label: "服务主目录", Default: "/data/elasticsearch", Required: true},
+				// 冷热温：每台主机的角色勾选（逗号分隔 master/coordinator/data_hot,data_warm,data_cold），
+				// 声明为 HostVar 以便 mergeStackParams 持久化到主机 ParamsJSON，后端与脚本据此派生 node.roles。
+				{Name: "roles", Label: "节点角色", Default: "coordinator", Required: false, Modes: []string{"cold_warm_hot"}},
 			},
 		},
 		nodeByMode: map[string]stackPhaseFile{
@@ -235,6 +277,27 @@ var builtinStacks = []BuiltinStack{
 					"ES_MASTER_YML": "stacks/elasticsearch/configs/elasticsearch-master.yml",
 					"ES_MEMBER_YML": "stacks/elasticsearch/configs/elasticsearch-member.yml",
 				},
+			},
+			"cold_warm_hot": {
+				path: "stacks/elasticsearch/scripts/cold-warm-hot/node.sh",
+				// 角色动态（node.roles/初识 master/SSL 条件块），elasticsearch.yml 由脚本内联生成，不走静态素材
+			},
+		},
+		bootstrapByMode: map[string]stackPhaseFile{
+			"cold_warm_hot": {path: "stacks/elasticsearch/scripts/cold-warm-hot/bootstrap.sh"},
+		},
+		scaleInByMode: map[string]stackPhaseFile{
+			"cold_warm_hot": {path: "stacks/elasticsearch/scripts/cold-warm-hot/scale_in.sh"},
+		},
+		// 冷热温模式主脑流水线：reset（清残留）→ masters → coords → data → verify（leader 校验）。
+		// reset 标 FullOnly 故扩容/加装时绝不清空既有数据。
+		pipelineByMode: map[string][]model.StackPhase{
+			"cold_warm_hot": {
+				{Key: "reset", Label: "清理旧环境与残留容器", Target: "all", FullOnly: true},
+				{Key: "masters", Label: "启动 master 候选节点", Target: "all"},
+				{Key: "coords", Label: "启动纯协调节点", Target: "all"},
+				{Key: "data", Label: "启动数据节点（hot/warm/cold）", Target: "all"},
+				{Key: "verify", Label: "校验集群健康与各分层", Target: "leader", Always: true},
 			},
 		},
 	},
@@ -415,6 +478,11 @@ func (s *BuiltinStack) ModeDef(mode string) *model.StackMode {
 
 func (s *BuiltinStack) Blueprint() model.StackBlueprint { return s.StackBlueprint }
 
+// Pipeline 返回套件指定模式的有序流水线阶段；空表示走传统 node→bootstrap 单步流程。
+func (s *BuiltinStack) Pipeline(mode string) []model.StackPhase {
+	return s.pipelineByMode[mode]
+}
+
 func (s *BuiltinStack) LoadPhase(mode, phase string) (string, error) {
 	var f stackPhaseFile
 	switch phase {
@@ -424,6 +492,8 @@ func (s *BuiltinStack) LoadPhase(mode, phase string) (string, error) {
 		f = s.bootstrapByMode[mode]
 	case "scale_out":
 		f = s.scaleOutByMode[mode]
+	case "scale_in":
+		f = s.scaleInByMode[mode]
 	default:
 		return "", fmt.Errorf("未知阶段: %s", phase)
 	}

@@ -93,3 +93,36 @@
 - [x] F4 实例展示：卡片 HA 徽标 + 抽屉角色标签 —— 验收：node --check + 渲染正确
 - [ ] F5 非 HA 全回归 + 联调验收：关开关全流程 + HA 真机端到端部署 + 故障演练矩阵 —— 验收：控制台零报错，逐组件 30s 接管
 
+### Elasticsearch 套件冷热温双模式（规划中）→ [tasks/06-es-cold-warm-hot/](./tasks/06-es-cold-warm-hot/)
+
+> 方案：ES 套件升级为双模式部署——「集群」模式原样保留（仅升默认镜像 9.5.3），新增「冷热温」架构模式：每台多选 master/纯协调/数据-hot/warm/cold 角色，沿用主脑流水线多阶段编排（reset→masters→coords→data→verify），提供 SSL 自签开关、JVM 参数透传与自定义 scale_in 官方下线流程。LLM/ILM 等延到大套件。设计依据 `docs/es-suite-cold-warm-hot.md`。详见 frontend.md / backend.md / boundary.md
+
+- [x] B1 蓝图与模式接入：cold_warm_hot 模式 + 模式级变量（ssl_enabled/coordinator_count/heap/jvm_opts）+「集群」镜像升 9.5.3 —— 验收：go build/vet 通过，旧「集群」渲染除镜像外零差异（check_es_tpl.py 隐式回归）
+- [x] B2 角色模型与 node.roles 生成：角色勾选→node.roles、master 与数据层互斥、协调 2 台兜底 —— 验收：非法组合逐条 400（validateCWHRoles + 单测全过）
+- [x] B3 主脑流水线编排：Pipeline 阶段 + node.sh 改 RUN 分发器（run_reset/masters/coords/data/verify）—— 验收：go build/vet + 渲染校验阶段序列（check_es_tpl.py 全过）
+- [x] B4 SSL 自签签发：openssl CA + 每节点证书 + xpack 注入 + CA 下载 —— 验收：双形态渲染校验，开启形态 HTTPS 就绪（PEM 免密码，显式 security=false 规避隐性认证）
+- [x] B5 JVM 参数调优：heap_xms/xmx 分层 + jvm_opts 透传 —— 验收：渲染校验 ES_JAVA_OPTS 拼装正确
+- [x] B6 缩容 scale_in 官方下线：exclude._name 排空 + voting exclusions + 回 green 再停容器 + 末台 master 保护 —— 验收：软下线脚本渲染校验 + 缩容保护单测（真机缩一台待联调）
+- [x] B7 服务登记/探活/接入地址：角色标签 + 按 tier 接入地址 + SSL 双形态 —— 验收：registerStackService/stackVerifyEndpoints 按 tier 分组语义正确
+- [x] B8 渲染校验与回归：check_es_tpl.py 三场景 + 「集群」全回归 —— 验收：渲染全绿（10 项），go build/vet + 既有单测全过，bigdata 渲染无回归
+- [ ] F1 模式选择：向导第一步 radio 集群/冷热温，动态渲染其次 —— 验收：node --check + 切换即时生效
+- [ ] F2 角色分配：每台角色多选，master 与数据层互斥置灰，协调默认 2 台 —— 验收：node --check + 非法组合拦截
+- [ ] F3 参数配置：SSL 开关 + coordinator_count + 端口 + JVM 堆与 jvm_opts —— 验收：node --check + true/false 字符串正确
+- [ ] F4 结果展示：模式/tier 徽标 + 成员角色标签 + 按 tier 接入地址 + CA 下载 —— 验收：node --check + 渲染正确无回归
+- [ ] F5 双模式全回归 + 联调验收：「集群」全流程零差异 + 冷热温真机端到端部署 → 分层 → 缩容下线 —— 验收：控制台零报错，真机扩缩容与 SSL 形态走通
+
+### API 目录重构（已规划）→ [tasks/07-api-refactor/](./tasks/07-api-refactor/)
+
+> 方案：删除无用 `api/data` 残留目录；将扁平单包 `api/` 按菜单功能拆分为子包（auth/credential/host/overview/deploy/orchestration/stack/tool/{es,registry,sftp}/sse），跨模块共享辅助收敛到 `api/shared`；大文件（stack_engine 1706 / stack_verify 1170 / stack_instance 975 / deploy_task 817 / es / registry / sftp / stack）拆至单文件 ≤300 行；不新增/不修改端点，纯导出路径与可见性调整。设计依据 `docs/api目录重构.md`。纯后端任务，详见 backend.md / boundary.md
+
+- [ ] B1 基线：git 工作区干净，记录 go build/vet/test 基线 —— 验收：基线全通过可复现
+- [ ] B2 删除无用目录 api/data：git rm -r + rg "api/data" 零残留 —— 验收：目录消失、零引用、构建通过
+- [ ] B3 抽取共享层 api/shared：迁 applyHostVars/containsString/containsInt64/mergeStringList/filterEmpty —— 验收：go build/test 全绿，无逻辑改动
+- [ ] B4 拆分子包（auth/credential/overview/sse/host）+ router 引用更新 —— 验收：每包独立 commit、构建测试全绿
+- [ ] B5 拆分子包（tool/es、registry、sftp）—— 验收：go build/vet 全绿
+- [ ] B6 拆分子包（deploy/orchestration，单向依赖）+ 测试随迁 —— 验收：编排运行链路不回归
+- [ ] B7 拆分子包（stack 全部文件 + 测试）—— 验收：go test ./api/stack/... 全绿
+- [ ] B8 大文件拆分：deploy_task 拆 4、es/registry/sftp 各拆 handler+client —— 验收：新文件 ≤300 行、测试全绿
+- [ ] B9 大文件拆分：stack_engine 拆 5、stack_verify 拆 5、stack_instance 拆 4、stack 拆 2 —— 验收：≤300 行、HA 单测与探活解析不回归
+- [ ] B10 收尾回归 + 冒烟：构建/vet/test 与基线比对、git diff 在白名单、服务启动各菜单接口正常 —— 验收：构建静态检查单测全绿，各菜单功能不变
+

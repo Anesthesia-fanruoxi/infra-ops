@@ -1,0 +1,44 @@
+<?xml version="1.0"?>
+<?xml-stylesheet type="text/xsl" href="configuration.xsl"?>
+<!--
+  大数据底座 · MapReduce on YARN 配置（由主脑渲染进各节点 {{home_dir}}/hadoop/conf/mapred-site.xml）
+
+  为什么必须显式提供：
+  - Hive 默认执行引擎为 MR（hive.execution.engine=mr），Hive 的 INSERT/CTAS 会提交 MR 作业；
+  - apache/hadoop 镜像自带的 mapred-site.xml 是空模板，缺失时 MR 作业在 YARN 上启动会报
+    "No valid local directories in property: mapreduce.cluster.local.dir"；
+  - `${hadoop.tmp.dir}` 在本套件中为 /hadoop/dfs/tmp，该目录由 NodeManager compose 挂载并
+    授权 hadoop(1000)，故本地目录统一落在其下，保证容器内可写。
+-->
+<configuration>
+  <property>
+    <name>mapreduce.framework.name</name>
+    <value>yarn</value>
+  </property>
+  <property>
+    <name>mapreduce.cluster.local.dir</name>
+    <value>/hadoop/dfs/tmp/mapred/local</value>
+  </property>
+  <!-- YARN 上分发 MR 作业所需 jar：镜像内 Hadoop 位于 /opt/hadoop。
+       必须带上 /opt/hadoop/etc/hadoop，AM 才能读到 core-site/hdfs-site（HA nameservice 解析依赖它）。 -->
+  <property>
+    <name>mapreduce.application.classpath</name>
+    <value>/opt/hadoop/etc/hadoop,/opt/hadoop/share/hadoop/common/*,/opt/hadoop/share/hadoop/common/lib/*,/opt/hadoop/share/hadoop/hdfs/*,/opt/hadoop/share/hadoop/hdfs/lib/*,/opt/hadoop/share/hadoop/yarn/*,/opt/hadoop/share/hadoop/yarn/lib/*,/opt/hadoop/share/hadoop/mapreduce/*,/opt/hadoop/share/hadoop/mapreduce/lib/*</value>
+  </property>
+  <property>
+    <name>yarn.app.mapreduce.am.env</name>
+    <value>HADOOP_MAPRED_HOME=/opt/hadoop</value>
+  </property>
+  <property>
+    <name>mapreduce.map.env</name>
+    <value>HADOOP_MAPRED_HOME=/opt/hadoop</value>
+  </property>
+  <property>
+    <name>mapreduce.reduce.env</name>
+    <value>HADOOP_MAPRED_HOME=/opt/hadoop</value>
+  </property>
+  <property>
+    <name>yarn.app.mapreduce.am.command-opts</name>
+    <value>-Xmx1024m</value>
+  </property>
+</configuration>

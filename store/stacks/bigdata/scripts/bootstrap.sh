@@ -22,9 +22,28 @@ if ! docker ps --format '{{.Names}}' | grep -qx "hadoop-namenode"; then
   echo "未找到运行中的 hadoop-namenode 容器"; exit 1
 fi
 
+# HA 双 NameNode 场景下，若 active 尚未选出，dfsadmin/客户端经 nameservice 连接会长时间挂起，
+# 进而拖垮整个 bootstrap 的 SSH 超时。先等待任一 NN 进入 active（有界），并给所有 hdfs 命令加 timeout。
+wait_active_nn() {
+  echo "等待 active NameNode 选出（最长 3 分钟）..."
+  for _ in $(seq 1 60); do
+    ST=$(timeout 20 docker exec hadoop-namenode hdfs haadmin -getAllServiceState 2>/dev/null || true)
+    if echo "${ST}" | grep -qi active; then
+      echo "active NameNode 已就绪：$(echo "${ST}" | tr '\n' ' ')"
+      return 0
+    fi
+    sleep 3
+  done
+  echo "仍未见 active NameNode（当前：$(echo "${ST}" | tr '\n' ' ' | cut -c1-120)），继续尝试，可能影响后续操作"
+  return 1
+}
+if [ "${HA}" = "true" ]; then
+  wait_active_nn || true
+fi
+
 echo "等待 DataNode 注册（最长 2 分钟）..."
 for _ in $(seq 1 40); do
-  REPORT=$(docker exec hadoop-namenode hdfs dfsadmin -report 2>/dev/null || true)
+  REPORT=$(timeout 30 docker exec hadoop-namenode hdfs dfsadmin -report 2>/dev/null || true)
   if echo "${REPORT}" | grep -q "Live datanodes ([1-9]"; then
     echo "DataNode 已注册"
     break
@@ -33,31 +52,31 @@ for _ in $(seq 1 40); do
 done
 
 echo "=== HDFS 集群报告 ==="
-docker exec hadoop-namenode hdfs dfsadmin -report 2>/dev/null | head -30 || true
+timeout 30 docker exec hadoop-namenode hdfs dfsadmin -report 2>/dev/null | head -30 || true
 
 echo "初始化常用目录（幂等）..."
 for d in /apps /data; do
-  docker exec hadoop-namenode hdfs dfs -mkdir -p "${d}" 2>/dev/null || true
+  timeout 30 docker exec hadoop-namenode hdfs dfs -mkdir -p "${d}" 2>/dev/null || true
 done
 
 if has hive; then
   echo "初始化 Hive 数仓目录 /apps/hive/warehouse ..."
-  docker exec hadoop-namenode hdfs dfs -mkdir -p /apps/hive/warehouse 2>/dev/null || true
-  docker exec hadoop-namenode hdfs dfs -chmod -R 777 /apps/hive 2>/dev/null || true
+  timeout 30 docker exec hadoop-namenode hdfs dfs -mkdir -p /apps/hive/warehouse 2>/dev/null || true
+  timeout 30 docker exec hadoop-namenode hdfs dfs -chmod -R 777 /apps/hive 2>/dev/null || true
 fi
 
 if has hbase; then
   echo "初始化 HBase 根目录 /hbase ..."
-  docker exec hadoop-namenode hdfs dfs -mkdir -p /hbase 2>/dev/null || true
-  docker exec hadoop-namenode hdfs dfs -chmod 777 /hbase 2>/dev/null || true
+  timeout 30 docker exec hadoop-namenode hdfs dfs -mkdir -p /hbase 2>/dev/null || true
+  timeout 30 docker exec hadoop-namenode hdfs dfs -chmod 777 /hbase 2>/dev/null || true
 fi
 
-docker exec hadoop-namenode hdfs dfs -ls / || true
+timeout 30 docker exec hadoop-namenode hdfs dfs -ls / || true
 
 # HA 模式：校验各组件主备状态（§4.4，非 HA 时跳过）
 if [ "${HA}" = "true" ]; then
   echo "=== HDFS HA 状态（haadmin） ==="
-  NN1_STATE=$(docker exec hadoop-namenode hdfs haadmin -getAllServiceState 2>/dev/null || true)
+  NN1_STATE=$(timeout 30 docker exec hadoop-namenode hdfs haadmin -getAllServiceState 2>/dev/null || true)
   echo "${NN1_STATE}" || true
   if echo "${NN1_STATE}" | grep -qi "standby\|active"; then
     echo "[OK] HDFS HA 双 NameNode 已就绪（nn1/nn2 自动选主中）"
@@ -66,7 +85,7 @@ if [ "${HA}" = "true" ]; then
   fi
   if has yarn; then
     echo "=== YARN HA 状态（rmadmin） ==="
-    docker exec hadoop-resourcemanager yarn rmadmin -getAllServiceState 2>/dev/null || true
+    timeout 30 docker exec hadoop-resourcemanager yarn rmadmin -getAllServiceState 2>/dev/null || true
   fi
   if has hive; then
     echo "=== Hive HA 服务状态 ==="

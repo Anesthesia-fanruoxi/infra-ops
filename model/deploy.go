@@ -13,6 +13,7 @@ type DeployTemplate struct {
 	Services    json.RawMessage `json:"services"`  // [{name,url,web}]
 	Requires    json.RawMessage `json:"requires"`  // [{check,hint}] 前置依赖检查
 	Configs     json.RawMessage `json:"configs"`   // [{key,label,file,hint,required}] 可被用户覆盖的配置文件
+	Tags        json.RawMessage `json:"tags"`      // ["关系型","时序"...] 类型标签（卡片小便签）
 	IsBuiltin   bool            `json:"is_builtin"`
 	CreatedAt   string          `json:"created_at"`
 	UpdatedAt   string          `json:"updated_at"`

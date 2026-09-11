@@ -188,6 +188,31 @@ func (r *StackRepo) ListRunningRuns() ([]model.StackRun, error) {
 	return items, rows.Err()
 }
 
+// FailStaleRuns 启动恢复：服务重启后，running 状态的流程已成孤儿（不会再有引擎推进），
+// 统一标记其未完成主机为失败并结算，避免实例被永久锁死。返回受影响实例 ID 列表。
+func (r *StackRepo) FailStaleRuns() ([]int64, error) {
+	runs, err := r.ListRunningRuns()
+	if err != nil {
+		return nil, err
+	}
+	instIDs := []int64{}
+	for _, run := range runs {
+		instIDs = append(instIDs, run.InstanceID)
+		if _, err := store.DB.Exec(`UPDATE stack_run_hosts SET
+			status=CASE WHEN status IN ('running','pending') THEN 'failed' ELSE status END,
+			prereq_status=CASE WHEN prereq_status IN ('running','pending') THEN 'failed' ELSE prereq_status END,
+			node_status=CASE WHEN node_status IN ('running','pending') THEN 'failed' ELSE node_status END,
+			bootstrap_status=CASE WHEN bootstrap_status IN ('running','pending') THEN 'failed' ELSE bootstrap_status END
+			WHERE run_id=?`, run.ID); err != nil {
+			return instIDs, err
+		}
+		if _, err := r.FinishRun(run.ID); err != nil {
+			return instIDs, err
+		}
+	}
+	return instIDs, nil
+}
+
 // AppendLogs 批量写日志，返回落库后的行。
 func (r *StackRepo) AppendLogs(runID int64, rows []model.StackRunLog) ([]model.StackRunLog, error) {
 	if len(rows) == 0 {
@@ -247,11 +272,11 @@ func (r *StackRepo) RunLogs(runID int64) ([]model.StackRunLog, error) {
 	return items, rows.Err()
 }
 
-const stackInstCols = `id,name,stack_key,stack_name,mode,category,status,params_json,components_json,created_at,updated_at`
+const stackInstCols = `id,name,stack_key,stack_name,mode,category,status,params_json,components_json,role_plan_json,created_at,updated_at`
 
 func scanStackInstance(sc interface{ Scan(...interface{}) error }, inst *model.StackInstance) error {
 	return sc.Scan(&inst.ID, &inst.Name, &inst.StackKey, &inst.StackName, &inst.Mode, &inst.Category,
-		&inst.Status, &inst.ParamsJSON, &inst.ComponentsJSON, &inst.CreatedAt, &inst.UpdatedAt)
+		&inst.Status, &inst.ParamsJSON, &inst.ComponentsJSON, &inst.RolePlanJSON, &inst.CreatedAt, &inst.UpdatedAt)
 }
 
 // CreateInstance 新建集群实例（部署开始即落库，便于失败后仍可查看/删除）。
@@ -377,6 +402,15 @@ func (r *StackRepo) UpdateInstance(id int64, name, status, paramsJSON, component
 			updated_at=datetime('now','localtime')
 		 WHERE id=?`,
 		name, name, status, status, paramsJSON, paramsJSON, componentsJSON, componentsJSON, id,
+	)
+	return err
+}
+
+// SetInstanceRolePlan 写入最近一份角色计划（覆盖式，docs/role-plan-design.md §3.2）。
+func (r *StackRepo) SetInstanceRolePlan(id int64, planJSON string) error {
+	_, err := store.DB.Exec(
+		`UPDATE stack_instances SET role_plan_json=?, updated_at=datetime('now','localtime') WHERE id=?`,
+		planJSON, id,
 	)
 	return err
 }
