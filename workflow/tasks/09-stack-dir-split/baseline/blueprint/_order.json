@@ -1,0 +1,11 @@
+[
+  "redis",
+  "bigdata",
+  "kafka",
+  "elasticsearch",
+  "rabbitmq",
+  "rocketmq",
+  "nacos",
+  "powerjob",
+  "elfk"
+]

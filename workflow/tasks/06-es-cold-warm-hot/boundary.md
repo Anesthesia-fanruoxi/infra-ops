@@ -17,7 +17,7 @@ store/stacks/elasticsearch/**         # node.sh（RUN 分发器）、configs/**�
 template/static/pages/stacks-forms.js # 模式单选、角色多选、SSL/JVM 参数渲染、显隐联动
 template/static/pages/stacks.js       # 实例展示 tier 徽标、成员角色标签、按 tier 接入地址
 template/static/style.css             # 仅追加/扩展相关样式（走 CSS 变量）
-docs/es-suite-cold-warm-hot.md        # 实施中同步修订设计文档
+docs/ES套件冷热温架构设计.md        # 实施中同步修订设计文档
 workflow/tasks/06-es-cold-warm-hot/** # 本任务执行文档进度记录
 workflow/workflow.md                  # 仅勾选本任务步骤 [x]
 ```

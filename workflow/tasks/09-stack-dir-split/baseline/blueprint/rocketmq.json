@@ -1,0 +1,60 @@
+{
+  "key": "rocketmq",
+  "name": "RocketMQ",
+  "description": "一步成型部署 RocketMQ 集群：指定一台 Master，首节点自动部署 NameServer + Broker Master，其余节点自动成为同组 Broker Slave 加入（无需先分两步布 NameServer 与 Broker）。全容器 host 网络，brokerIP1 自动取本机 IP。",
+  "requires_docker": true,
+  "category": "service",
+  "ha_support": false,
+  "modes": [
+    {
+      "key": "cluster",
+      "label": "一步成型",
+      "description": "首节点（Master）部署 NameServer + Broker Master（brokerId=0），其余节点自动作为同组 Slave（brokerId\u003e0）加入；namesrvAddr 自动指向首节点。",
+      "min_hosts": 1,
+      "host_hint": "至少 1 台；多节点请指定一台 Master，其余自动为同组 Slave（生产建议 ≥2 台）",
+      "has_bootstrap": false,
+      "assign_master": true,
+      "default_home_dir": "/data/rocketmq"
+    }
+  ],
+  "shared_vars": [
+    {
+      "name": "image",
+      "label": "镜像",
+      "default": "apache/rocketmq:4.9.7",
+      "required": true
+    },
+    {
+      "name": "cluster_name",
+      "label": "集群名",
+      "default": "rmq-cluster",
+      "required": true
+    },
+    {
+      "name": "broker_name",
+      "label": "Broker 组名（主备同组同名）",
+      "default": "broker-a",
+      "required": true
+    },
+    {
+      "name": "broker_port",
+      "label": "Broker 端口",
+      "default": "10911",
+      "required": true
+    }
+  ],
+  "host_vars": [
+    {
+      "name": "ns_port",
+      "label": "NameServer 端口",
+      "default": "9876",
+      "required": true
+    },
+    {
+      "name": "home_dir",
+      "label": "服务主目录",
+      "default": "/data/rocketmq",
+      "required": true
+    }
+  ]
+}

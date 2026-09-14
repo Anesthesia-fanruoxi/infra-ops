@@ -1,0 +1,72 @@
+{
+  "key": "powerjob",
+  "name": "PowerJob",
+  "description": "一次成型部署 PowerJob 调度集群。指定一台引导节点，首节点自动部署 MySQL 并初始化 powerjob 库，其余节点各起一个 powerjob-server（对等集群，worker 连任一节点即可）；host 网络，控制台 7700 直通宿主机。",
+  "requires_docker": true,
+  "category": "service",
+  "ha_support": false,
+  "modes": [
+    {
+      "key": "cluster",
+      "label": "集群",
+      "description": "1 引导节点（含 MySQL）+ N server，全节点共享同一 MySQL（首站自动初始化表结构），worker 配置任一节点地址即可连接。",
+      "min_hosts": 1,
+      "host_hint": "至少 1 台；多节点请指定一台引导节点（首台自动部署共享 MySQL）",
+      "has_bootstrap": false,
+      "assign_master": true,
+      "default_home_dir": "/data/powerjob"
+    }
+  ],
+  "shared_vars": [
+    {
+      "name": "image",
+      "label": "PowerJob server 镜像",
+      "default": "powerjob/powerjob-server:latest",
+      "required": true
+    },
+    {
+      "name": "db_username",
+      "label": "数据库用户名",
+      "default": "powerjob",
+      "required": true
+    },
+    {
+      "name": "db_password",
+      "label": "数据库密码",
+      "default": "",
+      "required": true
+    },
+    {
+      "name": "db_host",
+      "label": "外部 MySQL 地址（host[:port]，留空自动在首节点部署）",
+      "default": "",
+      "required": false
+    },
+    {
+      "name": "mysql_image",
+      "label": "MySQL 镜像（自动部署时用）",
+      "default": "mysql:8.0",
+      "required": true
+    },
+    {
+      "name": "akka_port",
+      "label": "Akka 通信端口",
+      "default": "10086",
+      "required": true
+    }
+  ],
+  "host_vars": [
+    {
+      "name": "server_port",
+      "label": "控制台端口",
+      "default": "7700",
+      "required": true
+    },
+    {
+      "name": "home_dir",
+      "label": "服务主目录",
+      "default": "/data/powerjob",
+      "required": true
+    }
+  ]
+}

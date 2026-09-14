@@ -1,0 +1,68 @@
+[
+  {
+    "key": "reset",
+    "label": "清理旧环境与残留容器",
+    "target": "all",
+    "full_only": true
+  },
+  {
+    "key": "zookeeper",
+    "label": "启动 ZooKeeper 集群",
+    "target": "all",
+    "component": "zookeeper"
+  },
+  {
+    "key": "hdfs_boot",
+    "label": "初始化并启动 NameNode/JournalNode",
+    "target": "all",
+    "component": "hdfs"
+  },
+  {
+    "key": "hdfs_dn",
+    "label": "启动 DataNode",
+    "target": "all",
+    "component": "hdfs"
+  },
+  {
+    "key": "yarn",
+    "label": "启动 YARN",
+    "target": "all",
+    "component": "yarn"
+  },
+  {
+    "key": "spark",
+    "label": "启动 Spark",
+    "target": "all",
+    "component": "spark"
+  },
+  {
+    "key": "flink",
+    "label": "启动 Flink",
+    "target": "all",
+    "component": "flink"
+  },
+  {
+    "key": "hive",
+    "label": "启动 Hive",
+    "target": "all",
+    "component": "hive,metastore_db"
+  },
+  {
+    "key": "hbase",
+    "label": "启动 HBase",
+    "target": "all",
+    "component": "hbase"
+  },
+  {
+    "key": "trino",
+    "label": "启动 Trino",
+    "target": "all",
+    "component": "trino"
+  },
+  {
+    "key": "verify",
+    "label": "校验集群状态并初始化目录",
+    "target": "leader",
+    "always": true
+  }
+]

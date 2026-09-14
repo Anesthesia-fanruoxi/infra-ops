@@ -47,6 +47,25 @@ func (r *ESRepo) List(keyword string, page, pageSize int) ([]model.ESConnView, i
 	return items, total, rows.Err()
 }
 
+// ListAll 全部 ES 连接（后台视图同步遍历用，需解密密码故含密文）。
+func (r *ESRepo) ListAll() ([]model.ESConn, error) {
+	rows, err := store.DB.Query(
+		"SELECT id,name,url,insecure,auth_type,username,encrypted_secret,remark,created_at,updated_at FROM es_conns ORDER BY id ASC")
+	if err != nil {
+		return nil, fmt.Errorf("es list all: %w", err)
+	}
+	defer rows.Close()
+	var items []model.ESConn
+	for rows.Next() {
+		var c model.ESConn
+		if err := rows.Scan(&c.ID, &c.Name, &c.URL, &c.Insecure, &c.AuthType, &c.Username, &c.EncryptedSecret, &c.Remark, &c.CreatedAt, &c.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("es scan all: %w", err)
+		}
+		items = append(items, c)
+	}
+	return items, rows.Err()
+}
+
 // GetByID 按 ID 查询，含加密密文（仅供后端内部解密使用）。
 func (r *ESRepo) GetByID(id int64) (*model.ESConn, error) {
 	c := &model.ESConn{}

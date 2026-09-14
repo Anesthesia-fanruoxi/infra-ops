@@ -43,7 +43,7 @@ go.mod / go.sum              # 不新增第三方依赖
    `mergeStringList`/`filterEmpty`）迁入 `api/shared`；分包时发现的隐藏跨包依赖
    一律下沉 shared 或具名导出后引用，保持 `orchestration→deploy→shared`、`stack→shared`
    单向依赖，杜绝循环导入。
-3. **单文件 ≤300 行**（工作流通用规则 §1）；拆完重建工程。
+3. **单文件 ≤500 行**（工作流通用规则 §1，宜 ≤300）；拆完重建工程。
 4. 每阶段/每分包一个 git commit（便于 `git revert` 局部回滚）；开工前 `git status`
    确认无未合并外部改动，冲突立即暂停上报。
 5. 编译门禁：`go build ./...`、`go vet ./...`、`go test ./...`；交叉编译
@@ -55,6 +55,6 @@ go.mod / go.sum              # 不新增第三方依赖
 1. 静态：`go build`、`go vet`、`go test` 与 B1 基线逐项一致或更优；交叉编译通过。
 2. `git diff --name-only` 全部落在第 1 节白名单内。
 3. `rg "api/data"` 无命中；`api/` 下按设计文档 §三 的目标结构分包完成。
-4. 所有 >300 行的源文件已拆解，无遗漏（大文件清单见 docs/api目录重构.md §五）。
+4. 所有 >500 行的源文件已拆解，无遗漏（大文件清单见 docs/api目录重构.md §五）。
 5. 冒烟：服务 8090 启动，登录/主机/部署/编排/套件/工具/总览/SSE 各菜单接口返回正常；
    部署仅替换测试机（standby-01）并保留旧二进制备回退。

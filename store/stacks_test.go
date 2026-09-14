@@ -10,7 +10,7 @@ func TestRedisStackScriptsEmbed(t *testing.T) {
 	if s == nil {
 		t.Fatal("missing redis stack")
 	}
-	repl, err := s.LoadPhase("replication", "node")
+	repl, err := LoadStackPhase(s, "replication", "node")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -20,7 +20,7 @@ func TestRedisStackScriptsEmbed(t *testing.T) {
 	if !strings.Contains(repl, "replicaof {{__master_ip}}") {
 		t.Fatal("replica conf missing")
 	}
-	node, err := s.LoadPhase("cluster", "node")
+	node, err := LoadStackPhase(s, "cluster", "node")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -30,21 +30,21 @@ func TestRedisStackScriptsEmbed(t *testing.T) {
 	if !strings.Contains(node, "cluster-enabled yes") {
 		t.Fatal("cluster conf missing")
 	}
-	boot, err := s.LoadPhase("cluster", "bootstrap")
+	boot, err := LoadStackPhase(s, "cluster", "bootstrap")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(boot, "--cluster create") {
 		t.Fatal("bootstrap script missing create")
 	}
-	add, err := s.LoadPhase("cluster", "scale_out")
+	add, err := LoadStackPhase(s, "cluster", "scale_out")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(add, "--cluster add-node") {
 		t.Fatal("scale-out script missing add-node")
 	}
-	sent, err := s.LoadPhase("sentinel", "node")
+	sent, err := LoadStackPhase(s, "sentinel", "node")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +58,7 @@ func TestRedisStackScriptsEmbed(t *testing.T) {
 		t.Fatal("sentinel replica conf missing")
 	}
 	for _, name := range []string{"replication", "cluster", "sentinel"} {
-		node, err := s.LoadPhase(name, "node")
+		node, err := LoadStackPhase(s, name, "node")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -75,8 +75,8 @@ func TestAllBuiltinStacksWired(t *testing.T) {
 			t.Fatalf("duplicate stack key %s", bp.Key)
 		}
 		seen[bp.Key] = true
-		s := FindBuiltinStack(bp.Key)
-		if s == nil {
+		d := FindBuiltinStack(bp.Key)
+		if d == nil {
 			t.Fatalf("missing builtin %s", bp.Key)
 		}
 		if len(bp.Modes) == 0 {
@@ -87,7 +87,7 @@ func TestAllBuiltinStacksWired(t *testing.T) {
 		}
 		wantDocker, ok := map[string]bool{
 			"redis": true, "bigdata": true, "kafka": true, "elasticsearch": true,
-			"rabbitmq": true, "rocketmq": true, "nacos": true, "powerjob": true,
+			"rabbitmq": true, "rocketmq": true, "nacos": true, "powerjob": true, "elfk": true,
 		}[bp.Key]
 		if !ok {
 			t.Fatalf("%s missing requires_docker expectation (container vs host)", bp.Key)
@@ -96,7 +96,7 @@ func TestAllBuiltinStacksWired(t *testing.T) {
 			t.Fatalf("%s requires_docker=%v, want %v", bp.Key, bp.RequiresDocker, wantDocker)
 		}
 		for _, m := range bp.Modes {
-			script, err := s.LoadPhase(m.Key, "node")
+			script, err := LoadStackPhase(d, m.Key, "node")
 			if err != nil {
 				t.Fatalf("%s/%s node: %v", bp.Key, m.Key, err)
 			}
@@ -110,7 +110,7 @@ func TestAllBuiltinStacksWired(t *testing.T) {
 				t.Fatalf("%s/%s must chmod 644 mounted config for non-root image user", bp.Key, m.Key)
 			}
 			if m.HasBootstrap {
-				boot, err := s.LoadPhase(m.Key, "bootstrap")
+				boot, err := LoadStackPhase(d, m.Key, "bootstrap")
 				if err != nil {
 					t.Fatalf("%s/%s bootstrap: %v", bp.Key, m.Key, err)
 				}

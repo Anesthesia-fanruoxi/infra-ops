@@ -1,0 +1,120 @@
+{
+  "case": "rabbitmq_cluster",
+  "stack_key": "rabbitmq",
+  "mode": "cluster",
+  "op": "create",
+  "role_plan": {
+    "rev": 1,
+    "op": "create",
+    "generated_at": "",
+    "generated_by": "manual",
+    "ha": false,
+    "hosts": [
+      {
+        "host_id": 1001,
+        "host_name": "sn10-0-2-1",
+        "host_ip": "10.0.2.1",
+        "seq": 1,
+        "roles": [
+          {
+            "comp": "rabbitmq",
+            "role": "seed",
+            "label": "初始化节点",
+            "source": "manual"
+          }
+        ]
+      },
+      {
+        "host_id": 1002,
+        "host_name": "sn10-0-2-2",
+        "host_ip": "10.0.2.2",
+        "seq": 2,
+        "roles": [
+          {
+            "comp": "rabbitmq",
+            "role": "member",
+            "label": "集群成员",
+            "source": "auto",
+            "scope": "rest"
+          }
+        ]
+      },
+      {
+        "host_id": 1003,
+        "host_name": "sn10-0-2-3",
+        "host_ip": "10.0.2.3",
+        "seq": 3,
+        "roles": [
+          {
+            "comp": "rabbitmq",
+            "role": "member",
+            "label": "集群成员",
+            "source": "auto",
+            "scope": "rest"
+          }
+        ]
+      }
+    ],
+    "masters": null
+  },
+  "services": [
+    {
+      "host_id": 1001,
+      "service_name": "RabbitMQ",
+      "url": "http://10.0.2.1:15672",
+      "web": true,
+      "instance_id": 0
+    },
+    {
+      "host_id": 1002,
+      "service_name": "RabbitMQ",
+      "url": "http://10.0.2.2:15672",
+      "web": true,
+      "instance_id": 0
+    },
+    {
+      "host_id": 1003,
+      "service_name": "RabbitMQ",
+      "url": "http://10.0.2.3:15672",
+      "web": true,
+      "instance_id": 0
+    }
+  ],
+  "installs": [
+    {
+      "host_id": 1001,
+      "template_id": 0,
+      "template_name": "套件:rabbitmq/cluster",
+      "task_id": 0
+    },
+    {
+      "host_id": 1002,
+      "template_id": 0,
+      "template_name": "套件:rabbitmq/cluster",
+      "task_id": 0
+    },
+    {
+      "host_id": 1003,
+      "template_id": 0,
+      "template_name": "套件:rabbitmq/cluster",
+      "task_id": 0
+    }
+  ],
+  "endpoints": [
+    {
+      "name": "RabbitMQ",
+      "url": "tcp://10.0.2.1",
+      "role": "master"
+    },
+    {
+      "name": "RabbitMQ",
+      "url": "tcp://10.0.2.2",
+      "role": "worker"
+    },
+    {
+      "name": "RabbitMQ",
+      "url": "tcp://10.0.2.3",
+      "role": "worker"
+    }
+  ]
+}

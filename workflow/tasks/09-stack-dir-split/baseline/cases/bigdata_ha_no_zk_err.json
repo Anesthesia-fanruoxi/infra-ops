@@ -1,0 +1,10 @@
+{
+  "case": "bigdata_ha_no_zk_err",
+  "stack_key": "bigdata",
+  "mode": "cluster",
+  "op": "create",
+  "plan_error": "HA 模式依赖 ZooKeeper，请勾选 ZooKeeper",
+  "services": [],
+  "installs": [],
+  "endpoints": []
+}

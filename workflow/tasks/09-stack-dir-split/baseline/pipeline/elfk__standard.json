@@ -1,0 +1,39 @@
+[
+  {
+    "key": "reset",
+    "label": "清理旧环境与残留容器",
+    "target": "all",
+    "component": "elasticsearch,kibana,logstash,filebeat",
+    "full_only": true
+  },
+  {
+    "key": "es",
+    "label": "部署 Elasticsearch 节点",
+    "target": "all",
+    "component": "elasticsearch"
+  },
+  {
+    "key": "kibana",
+    "label": "部署 Kibana（引导机）",
+    "target": "all",
+    "component": "kibana"
+  },
+  {
+    "key": "logstash",
+    "label": "部署 Logstash（日志管道）",
+    "target": "all",
+    "component": "logstash"
+  },
+  {
+    "key": "filebeat",
+    "label": "部署 Filebeat 采集代理（全员）",
+    "target": "all",
+    "component": "filebeat"
+  },
+  {
+    "key": "verify",
+    "label": "校验 ELFK 链路",
+    "target": "leader",
+    "always": true
+  }
+]

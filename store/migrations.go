@@ -33,6 +33,35 @@ var migrations = []migration{
 	{23, migrateV23},
 	{24, migrateV24},
 	{25, migrateV25},
+	{26, migrateV26},
+}
+
+// migrateV26 数据视图（es_views）：字段表本地持久化 + 异步同步，字段表随时可由 ES 重算故存单 JSON 快照。
+func migrateV26(db *sql.DB) error {
+	stmts := []string{
+		`CREATE TABLE IF NOT EXISTS es_views (
+			id            INTEGER PRIMARY KEY AUTOINCREMENT,
+			conn_id       INTEGER NOT NULL REFERENCES es_conns(id) ON DELETE CASCADE,
+			name          TEXT NOT NULL,
+			index_pattern TEXT NOT NULL,
+			time_field    TEXT NOT NULL DEFAULT '',
+			fields_json   TEXT NOT NULL DEFAULT '[]',
+			stats_json    TEXT NOT NULL DEFAULT '{}',
+			sync_status   TEXT NOT NULL DEFAULT 'idle'
+			              CHECK (sync_status IN ('idle','syncing','failed')),
+			sync_error    TEXT NOT NULL DEFAULT '',
+			synced_at     TEXT,
+			created_at    TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+			updated_at    TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+		)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_es_views_conn_name ON es_views(conn_id, name)`,
+	}
+	for _, s := range stmts {
+		if _, err := db.Exec(s); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // migrateV25 部署模板-tags：类型标签列（如 ["时序","监控"]），卡片小徽标展示，
@@ -42,7 +71,7 @@ func migrateV25(db *sql.DB) error {
 }
 
 // migrateV24 套件-RolePlan：stack_instances 增 role_plan_json 列，
-// 存部署前物化的角色计划（docs/role-plan-design.md §4.2），只保留最近一份。
+// 存部署前物化的角色计划（docs/角色物化设计.md §4.2），只保留最近一份。
 func migrateV24(db *sql.DB) error {
 	return addColumnIfMissing(db, "stack_instances", "role_plan_json", `TEXT NOT NULL DEFAULT ''`)
 }

@@ -1,6 +1,6 @@
 # 任务 06 · Elasticsearch 套件冷热温双模式 — frontend.md（前端执行）
 
-> 设计依据：`docs/es-suite-cold-warm-hot.md` §2/§3/§5/§8（模式选择、角色分配、参数、结果展示）。
+> 设计依据：`docs/ES套件冷热温架构设计.md` §2/§3/§5/§8（模式选择、角色分配、参数、结果展示）。
 > 范围：`template/static/pages/stacks-forms.js`、`stacks.js`、`style.css`。
 > 「集群」模式交互必须与现状零差异（回归红线）。
 

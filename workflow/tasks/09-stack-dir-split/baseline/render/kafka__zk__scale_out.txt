@@ -1,0 +1,1 @@
+NO_SCRIPT: 套件 kafka 模式 zk 没有 scale_out 脚本

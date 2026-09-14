@@ -1,0 +1,287 @@
+{
+  "case": "elfk_standard",
+  "stack_key": "elfk",
+  "mode": "standard",
+  "op": "create",
+  "role_plan": {
+    "rev": 1,
+    "op": "create",
+    "generated_at": "",
+    "generated_by": "manual",
+    "ha": false,
+    "hosts": [
+      {
+        "host_id": 1801,
+        "host_name": "sn10-0-7-1",
+        "host_ip": "10.0.7.1",
+        "seq": 1,
+        "roles": [
+          {
+            "comp": "elfk",
+            "role": "es_boot",
+            "label": "ES 引导主节点（master, data）",
+            "source": "manual"
+          },
+          {
+            "comp": "elfk",
+            "role": "kibana",
+            "label": "Kibana（可视化）",
+            "source": "auto",
+            "scope": "aux"
+          },
+          {
+            "comp": "elfk",
+            "role": "filebeat",
+            "label": "Filebeat 采集代理",
+            "source": "auto",
+            "scope": "all"
+          }
+        ]
+      },
+      {
+        "host_id": 1802,
+        "host_name": "sn10-0-7-2",
+        "host_ip": "10.0.7.2",
+        "seq": 2,
+        "roles": [
+          {
+            "comp": "elfk",
+            "role": "es_data",
+            "label": "ES 数据节点（data）",
+            "source": "auto",
+            "scope": "rest"
+          },
+          {
+            "comp": "elfk",
+            "role": "logstash",
+            "label": "Logstash（日志管道）",
+            "source": "auto",
+            "scope": "aux"
+          },
+          {
+            "comp": "elfk",
+            "role": "filebeat",
+            "label": "Filebeat 采集代理",
+            "source": "auto",
+            "scope": "all"
+          }
+        ]
+      },
+      {
+        "host_id": 1803,
+        "host_name": "sn10-0-7-3",
+        "host_ip": "10.0.7.3",
+        "seq": 3,
+        "roles": [
+          {
+            "comp": "elfk",
+            "role": "es_data",
+            "label": "ES 数据节点（data）",
+            "source": "auto",
+            "scope": "rest"
+          },
+          {
+            "comp": "elfk",
+            "role": "filebeat",
+            "label": "Filebeat 采集代理",
+            "source": "auto",
+            "scope": "all"
+          }
+        ]
+      },
+      {
+        "host_id": 1804,
+        "host_name": "sn10-0-7-4",
+        "host_ip": "10.0.7.4",
+        "seq": 4,
+        "roles": [
+          {
+            "comp": "elfk",
+            "role": "es_data",
+            "label": "ES 数据节点（data）",
+            "source": "auto",
+            "scope": "rest"
+          },
+          {
+            "comp": "elfk",
+            "role": "filebeat",
+            "label": "Filebeat 采集代理",
+            "source": "auto",
+            "scope": "all"
+          }
+        ]
+      },
+      {
+        "host_id": 1805,
+        "host_name": "sn10-0-7-5",
+        "host_ip": "10.0.7.5",
+        "seq": 5,
+        "roles": [
+          {
+            "comp": "elfk",
+            "role": "es_data",
+            "label": "ES 数据节点（data）",
+            "source": "auto",
+            "scope": "rest"
+          },
+          {
+            "comp": "elfk",
+            "role": "filebeat",
+            "label": "Filebeat 采集代理",
+            "source": "auto",
+            "scope": "all"
+          }
+        ]
+      }
+    ],
+    "masters": null,
+    "warnings": [
+      "Logstash 自动落点 10.0.7.2（可用参数 logstash_host 覆盖）"
+    ]
+  },
+  "services": [
+    {
+      "host_id": 1801,
+      "service_name": "Elasticsearch",
+      "url": "http://10.0.7.1:9200",
+      "web": true,
+      "instance_id": 0
+    },
+    {
+      "host_id": 1801,
+      "service_name": "Filebeat",
+      "url": "filebeat://10.0.7.1",
+      "web": false,
+      "instance_id": 0
+    },
+    {
+      "host_id": 1801,
+      "service_name": "Kibana",
+      "url": "http://10.0.7.1:5601",
+      "web": true,
+      "instance_id": 0
+    },
+    {
+      "host_id": 1802,
+      "service_name": "Elasticsearch",
+      "url": "http://10.0.7.2:9200",
+      "web": true,
+      "instance_id": 0
+    },
+    {
+      "host_id": 1802,
+      "service_name": "Filebeat",
+      "url": "filebeat://10.0.7.2",
+      "web": false,
+      "instance_id": 0
+    },
+    {
+      "host_id": 1802,
+      "service_name": "Logstash",
+      "url": "http://10.0.7.2:5044",
+      "web": false,
+      "instance_id": 0
+    },
+    {
+      "host_id": 1803,
+      "service_name": "Elasticsearch",
+      "url": "http://10.0.7.3:9200",
+      "web": true,
+      "instance_id": 0
+    },
+    {
+      "host_id": 1803,
+      "service_name": "Filebeat",
+      "url": "filebeat://10.0.7.3",
+      "web": false,
+      "instance_id": 0
+    },
+    {
+      "host_id": 1804,
+      "service_name": "Elasticsearch",
+      "url": "http://10.0.7.4:9200",
+      "web": true,
+      "instance_id": 0
+    },
+    {
+      "host_id": 1804,
+      "service_name": "Filebeat",
+      "url": "filebeat://10.0.7.4",
+      "web": false,
+      "instance_id": 0
+    },
+    {
+      "host_id": 1805,
+      "service_name": "Elasticsearch",
+      "url": "http://10.0.7.5:9200",
+      "web": true,
+      "instance_id": 0
+    },
+    {
+      "host_id": 1805,
+      "service_name": "Filebeat",
+      "url": "filebeat://10.0.7.5",
+      "web": false,
+      "instance_id": 0
+    }
+  ],
+  "installs": [
+    {
+      "host_id": 1801,
+      "template_id": 0,
+      "template_name": "套件:elfk/standard",
+      "task_id": 0
+    },
+    {
+      "host_id": 1802,
+      "template_id": 0,
+      "template_name": "套件:elfk/standard",
+      "task_id": 0
+    },
+    {
+      "host_id": 1803,
+      "template_id": 0,
+      "template_name": "套件:elfk/standard",
+      "task_id": 0
+    },
+    {
+      "host_id": 1804,
+      "template_id": 0,
+      "template_name": "套件:elfk/standard",
+      "task_id": 0
+    },
+    {
+      "host_id": 1805,
+      "template_id": 0,
+      "template_name": "套件:elfk/standard",
+      "task_id": 0
+    }
+  ],
+  "endpoints": [
+    {
+      "name": "ELFK 日志套件",
+      "url": "tcp://10.0.7.1",
+      "role": "master"
+    },
+    {
+      "name": "ELFK 日志套件",
+      "url": "tcp://10.0.7.2",
+      "role": "worker"
+    },
+    {
+      "name": "ELFK 日志套件",
+      "url": "tcp://10.0.7.3",
+      "role": "worker"
+    },
+    {
+      "name": "ELFK 日志套件",
+      "url": "tcp://10.0.7.4",
+      "role": "worker"
+    },
+    {
+      "name": "ELFK 日志套件",
+      "url": "tcp://10.0.7.5",
+      "role": "worker"
+    }
+  ]
+}

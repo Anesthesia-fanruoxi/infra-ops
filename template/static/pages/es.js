@@ -1,5 +1,13 @@
+// ES 控制台主页面（F1 瘦身）：连接管理 + 集群概览/节点 tab + tab 壳。
+// 索引 / 数据视图(Discover) / 生命周期 / 索引模板拆分到 es_index / es_views / es_lifecycle / es_templates。
 window.ESPage = {
   props: ['page', 'user', 'versionData'],
+  components: {
+    'es-index-tab': window.EsIndexTab,
+    'es-views-tab': window.EsViewsTab,
+    'es-lifecycle-tab': window.EsLifecycleTab,
+    'es-templates-tab': window.EsTemplatesTab
+  },
   template: `
 <div>
   <!-- 视图一：连接列表 -->
@@ -9,7 +17,7 @@ window.ESPage = {
         <div class="tool-intro-copy">
           <span class="tool-eyebrow">ELASTICSEARCH</span>
           <h1>Elasticsearch</h1>
-          <p>后端代理访问 REST API · 密码加密托管 · 集群概览 / 索引 / 查询</p>
+          <p>数据视图 · KQL 检索 · 生命周期 / 索引模板 · 密码加密托管</p>
         </div>
         <div class="tool-intro-stats">
           <div class="tool-mini-stat"><span>连接</span><strong>{{total}}</strong></div>
@@ -32,7 +40,6 @@ window.ESPage = {
         </div>
       </div>
 
-      <!-- 表格视图 -->
       <div v-if="viewMode==='table'">
         <el-table class="hosts-table" :data="conns" style="width:100%" v-loading="loadingConn">
           <el-table-column label="连接" min-width="230">
@@ -68,7 +75,6 @@ window.ESPage = {
         <div class="tool-empty-table" v-if="!loadingConn && !conns.length"><empty-state text="暂无连接，点击右上角「新增连接」开始" /></div>
       </div>
 
-      <!-- 卡片视图 -->
       <div v-else class="hosts-card-grid tool-card-grid" v-loading="loadingConn">
         <article v-for="row in conns" :key="row.id" class="tool-card tool-card--es">
           <header class="tool-card-head">
@@ -147,7 +153,7 @@ window.ESPage = {
         </div>
       </div>
 
-      <el-tabs v-model="activeTab" class="reg-es-tabs" @tab-change="onTabChange">
+      <el-tabs v-model="activeTab" class="reg-es-tabs">
         <!-- 概览 -->
         <el-tab-pane label="集群概览" name="overview">
           <div v-loading="loadingOverview">
@@ -192,90 +198,23 @@ window.ESPage = {
           </el-table>
         </el-tab-pane>
 
-        <!-- 索引 -->
-        <el-tab-pane label="索引" name="indices">
-          <div class="reg-statbar es-statbar">
-            <div class="reg-stat"><span class="reg-stat-num mono">{{indices.length}}</span><span class="reg-stat-label">索引总数</span></div>
-            <div class="reg-stat"><span class="reg-stat-num mono" :class="{muted:idxKw&&!filteredIndices.length}">{{filteredIndices.length}}</span><span class="reg-stat-label">当前过滤</span></div>
-            <div class="reg-stat"><span class="reg-stat-num mono">{{idxSummary.docs>=0?idxSummary.docs:'-'}}</span><span class="reg-stat-label">文档总数</span></div>
-          </div>
-          <div class="es-toolbar">
-            <el-input v-model="idxKw" placeholder="过滤索引..." clearable prefix-icon="Search" style="width:220px" @input="applyIdxFilter" />
-            <el-button type="primary" style="margin-left:auto" @click="openCreate">新建索引</el-button>
-          </div>
-          <el-table class="hosts-table" :data="filteredIndices" style="width:100%" size="small" v-loading="loadingIndices">
-            <el-table-column label="索引" min-width="200">
-              <template #default="{row}"><span class="mono">{{row.index}}</span></template>
-            </el-table-column>
-            <el-table-column label="健康" width="90">
-              <template #default="{row}">
-                <span class="es-health"><span class="health-dot" :style="{background:healthColor(row.health)}"></span><span>{{healthLabel(row.health)}}</span></span>
-              </template>
-            </el-table-column>
-            <el-table-column label="状态" width="80"><template #default="{row}"><span class="mono">{{row.status}}</span></template></el-table-column>
-            <el-table-column label="主分片" width="76"><template #default="{row}"><span class="mono">{{row.pri}}</span></template></el-table-column>
-            <el-table-column label="副本" width="60"><template #default="{row}"><span class="mono">{{row.rep}}</span></template></el-table-column>
-            <el-table-column label="文档数" width="96"><template #default="{row}"><span class="mono">{{row.docs_count}}</span></template></el-table-column>
-            <el-table-column label="存储大小" width="110"><template #default="{row}"><span class="mono">{{row.store_size}}</span></template></el-table-column>
-            <el-table-column label="" fixed="right" width="130">
-              <template #default="{row}">
-                <div class="ops-cell">
-                  <el-button size="small" text type="primary" :disabled="!!row._deleting" @click="searchThisIndex(row.index)">查文档</el-button>
-                  <el-button size="small" text type="danger" @click="delIndex(row)">删除</el-button>
-                </div>
-              </template>
-            </el-table-column>
-          </el-table>
+        <el-tab-pane label="索引" name="indices" lazy>
+          <es-index-tab :conn="current" />
         </el-tab-pane>
 
-        <!-- 文档查询 -->
-        <el-tab-pane label="文档查询" name="search">
-          <div class="es-toolbar" style="flex-wrap:wrap;gap:10px">
-            <span style="font-size:12.5px;color:var(--text-sub)">索引</span>
-            <el-select v-model="selIndex" filterable placeholder="选择索引" style="width:260px">
-              <el-option v-for="i in allIndexNames" :key="i" :label="i" :value="i" />
-            </el-select>
-            <span style="font-size:12.5px;color:var(--text-sub)">每页</span>
-            <el-select v-model="size" style="width:90px">
-              <el-option v-for="n in [10,20,50,100]" :key="n" :label="n+' 条'" :value="n" />
-            </el-select>
-            <el-button type="primary" style="margin-left:auto" :loading="searching" @click="search(0)">执行查询</el-button>
-          </div>
-          <div class="es-sub-head">查询 DSL（JSON 对象）</div>
-          <el-input v-model="dsl" type="textarea" :rows="5" class="es-dsl" spellcheck="false" style="font-family:var(--font-mono)" />
-          <div class="es-result-bar" v-if="result">
-            <span>命中 <b>{{result.total}}</b> 条 · 耗时 {{result.took}}ms</span>
-            <el-pagination v-model:current-page="page" :page-size="size" :total="result.total" layout="prev, pager, next" :pager-count="5" small style="margin-left:auto" @current-change="search(page-1)" />
-          </div>
-          <div class="es-hits" v-loading="searching" v-if="result">
-            <div class="es-hit" v-for="(h, i) in result.hits" :key="i">
-              <div class="es-hit-head">
-                <span class="action-badge host">{{h.index}}</span>
-                <span class="mono es-hit-id">{{h.id}}</span>
-                <span class="mono es-score">_score: {{h.score===null?'—':h.score}}</span>
-              </div>
-              <pre class="es-source">{{fmtSource(h.source)}}</pre>
-            </div>
-          </div>
+        <el-tab-pane label="数据视图" name="views" lazy>
+          <es-views-tab :conn="current" />
+        </el-tab-pane>
+
+        <el-tab-pane label="生命周期" name="lifecycle" lazy>
+          <es-lifecycle-tab :conn="current" />
+        </el-tab-pane>
+
+        <el-tab-pane label="索引模板" name="templates" lazy>
+          <es-templates-tab :conn="current" />
         </el-tab-pane>
       </el-tabs>
     </div>
-
-    <!-- 新建/删除索引 -->
-    <el-dialog v-model="createDialog" title="新建索引" width="480px" append-to-body>
-      <el-form label-position="top">
-        <el-form-item label="索引名称" required>
-          <el-input v-model="createForm.index" placeholder="小写，不含空格" style="font-family:var(--font-mono)" />
-        </el-form-item>
-        <el-form-item label="主分片数">
-          <el-input-number v-model="createForm.shards" :min="1" :max="100" />
-        </el-form-item>
-        <el-form-item label="副本数">
-          <el-input-number v-model="createForm.replicas" :min="0" :max="10" />
-        </el-form-item>
-      </el-form>
-      <template #footer><el-button @click="createDialog=false">取消</el-button><el-button type="primary" :loading="creating" @click="doCreateIndex">创建</el-button></template>
-    </el-dialog>
   </template>
 </div>`,
   data() {
@@ -286,20 +225,11 @@ window.ESPage = {
       current: null,
       activeTab: 'overview',
       overview: null, loadingOverview: false,
-      nodes: [], loadingNodes: false,
-      indices: [], filteredIndices: [], idxKw: '', loadingIndices: false,
-      createDialog: false, createForm: { index: '', shards: 1, replicas: 0 }, creating: false,
-      selIndex: '', size: 20, dsl: '{\n  "match_all": {}\n}', result: null, searching: false, page: 1
+      nodes: [], loadingNodes: false
     }
   },
   computed: {
-    onlineCount() { return this.conns.filter(c => c._st === 1).length },
-    allIndexNames() { return this.indices.map(i => i.index) },
-    idxSummary() {
-      let docs = 0
-      for (const i of this.filteredIndices) { const n = parseInt(i.docs_count, 10); if (!isNaN(n)) docs += n }
-      return { docs }
-    }
+    onlineCount() { return this.conns.filter(c => c._st === 1).length }
   },
   watch: { viewMode(v) { localStorage.setItem('es-view-mode', v) } },
   mounted() { this.loadConns() },
@@ -308,7 +238,6 @@ window.ESPage = {
       this.loadingConn = true
       try { const r = await api.get('/es', { params: { page: this.pg, page_size: 20 } }); if (r.code === 0) { this.conns = r.data?.list || []; this.total = r.data?.total || 0; this.pingAll() } } catch (e) { /* */ } finally { this.loadingConn = false }
     },
-    // 对每个连接做轻量探测，得到在线/不可用/未验证状态
     async pingAll() {
       this.pinging = true
       this.conns.forEach(row => { row._st = undefined })
@@ -344,15 +273,11 @@ window.ESPage = {
     enter(row) {
       this.current = row
       this.activeTab = 'overview'
-      this.overview = null; this.nodes = []; this.indices = []; this.result = null
+      this.overview = null; this.nodes = []
       this.loadOverview(); this.loadNodes()
     },
-    exit() { this.current = null; this.result = null },
-    reloadAll() { this.loadOverview(); this.loadNodes(); this.loadIndices() },
-    onTabChange(name) {
-      if (name === 'overview' && !this.overview && !this.loadingOverview) { this.loadOverview(); this.loadNodes() }
-      else if (name !== 'overview' && !this.indices.length && !this.loadingIndices) this.loadIndices()
-    },
+    exit() { this.current = null },
+    reloadAll() { this.loadOverview(); this.loadNodes() },
     async loadOverview() {
       this.loadingOverview = true
       try { const r = await api.get('/es/' + this.current.id + '/overview'); if (r.code === 0) this.overview = r.data } catch (e) { /* */ } finally { this.loadingOverview = false }
@@ -361,48 +286,11 @@ window.ESPage = {
       this.loadingNodes = true
       try { const r = await api.get('/es/' + this.current.id + '/nodes'); if (r.code === 0) this.nodes = r.data?.list || [] } catch (e) { /* */ } finally { this.loadingNodes = false }
     },
-    async loadIndices() {
-      this.loadingIndices = true
-      try { const r = await api.get('/es/' + this.current.id + '/indices'); if (r.code === 0) { this.indices = r.data?.list || []; this.applyIdxFilter() } } catch (e) { /* */ } finally { this.loadingIndices = false }
-    },
-    applyIdxFilter() {
-      const k = this.idxKw.trim().toLowerCase()
-      this.filteredIndices = k ? this.indices.filter(i => i.index.toLowerCase().includes(k)) : this.indices.slice()
-    },
-    openCreate() { this.createForm = { index: '', shards: 1, replicas: 0 }; this.createDialog = true },
-    async doCreateIndex() {
-      if (!this.createForm.index) { this.$message.warning('请输入索引名称'); return }
-      this.creating = true
-      try {
-        const r = await api.post('/es/' + this.current.id + '/index', this.createForm)
-        if (r.code === 0) { this.createDialog = false; this.$message.success('索引创建成功'); this.loadIndices() }
-      } catch (e) { /* */ } finally { this.creating = false }
-    },
-    delIndex(row) {
-      this.$confirm('确认删除索引「' + row.index + '」？' + row.docs_count + ' 个文档将一并删除，此操作不可恢复！', '删除索引', { type: 'warning' }).then(() => {
-        this.$confirm('再次确认：删除索引 ' + row.index + ' 会永久丢失全部数据。', '二次确认', { type: 'warning' }).then(async () => {
-          row._deleting = true
-          try { const r = await api.delete('/es/' + this.current.id + '/index/' + encodeURIComponent(row.index)); if (r.code === 0) { this.$message.success('索引已删除'); this.loadIndices() } } catch (e) { /* */ } finally { row._deleting = false }
-        }).catch(() => {})
-      }).catch(() => {})
-    },
-    searchThisIndex(name) { this.selIndex = name; this.activeTab = 'search'; this.page = 1; this.search(0) },
-    async search(from) {
-      if (!this.selIndex) { this.$message.warning('请先选择索引'); return }
-      let query
-      try { query = JSON.parse(this.dsl) } catch (e) { this.$message.error('DSL 不是合法 JSON：' + e.message); return }
-      this.searching = true
-      try {
-        const r = await api.post('/es/' + this.current.id + '/search', { index: this.selIndex, from: from != null ? from : 0, size: this.size, query })
-        if (r.code === 0) { this.result = r.data; this.page = (r.data.from || 0) / this.size + 1 }
-      } catch (e) { /* */ } finally { this.searching = false }
-    },
     roleShort(r) {
       const map = { master: '主', data: '数据', ingest: '摄取', coordinating_only: '协调', ml: 'ML', voting_only: '投票', warm: 'warm', cold: 'cold', hot: 'hot', frozen: 'frozen' }
       return map[r] || r
     },
     statusLabel(s) { return s === 'green' ? '健康' : s === 'yellow' ? '警告' : s === 'red' ? '危险' : '—' },
-    healthLabel(h) { return h === 'green' ? '健康' : h === 'yellow' ? '警告' : h === 'red' ? '危险' : h || '-' },
     healthType(s) { return s === 'green' ? 'success' : s === 'yellow' ? 'warning' : 'danger' },
     healthColor(s) { return s === 'green' ? 'var(--ok)' : s === 'yellow' ? 'var(--warn)' : 'var(--danger)' },
     usageColor(p) { return p >= 85 ? 'var(--danger)' : p >= 70 ? 'var(--warn)' : 'var(--ok)' },
@@ -412,7 +300,6 @@ window.ESPage = {
       if (n < 1048576) return (n / 1024).toFixed(1) + ' KB'
       if (n < 1073741824) return (n / 1048576).toFixed(1) + ' MB'
       return (n / 1073741824).toFixed(2) + ' GB'
-    },
-    fmtSource(src) { return JSON.stringify(src, null, 2) }
+    }
   }
 }

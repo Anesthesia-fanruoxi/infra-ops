@@ -1,0 +1,177 @@
+{
+  "case": "elasticsearch_cwh",
+  "stack_key": "elasticsearch",
+  "mode": "cold_warm_hot",
+  "op": "create",
+  "role_plan": {
+    "rev": 1,
+    "op": "create",
+    "generated_at": "",
+    "generated_by": "manual",
+    "ha": false,
+    "hosts": [
+      {
+        "host_id": 1701,
+        "host_name": "sn10-0-6-1",
+        "host_ip": "10.0.6.1",
+        "seq": 1,
+        "roles": [
+          {
+            "comp": "elasticsearch",
+            "role": "boot_master",
+            "label": "引导主节点（master, data）",
+            "source": "manual"
+          }
+        ]
+      },
+      {
+        "host_id": 1702,
+        "host_name": "sn10-0-6-2",
+        "host_ip": "10.0.6.2",
+        "seq": 2,
+        "roles": [
+          {
+            "comp": "elasticsearch",
+            "role": "data",
+            "label": "数据节点（data）",
+            "source": "auto",
+            "scope": "rest"
+          }
+        ]
+      },
+      {
+        "host_id": 1703,
+        "host_name": "sn10-0-6-3",
+        "host_ip": "10.0.6.3",
+        "seq": 3,
+        "roles": [
+          {
+            "comp": "elasticsearch",
+            "role": "data",
+            "label": "数据节点（data）",
+            "source": "auto",
+            "scope": "rest"
+          }
+        ]
+      },
+      {
+        "host_id": 1704,
+        "host_name": "sn10-0-6-4",
+        "host_ip": "10.0.6.4",
+        "seq": 4,
+        "roles": [
+          {
+            "comp": "elasticsearch",
+            "role": "data",
+            "label": "数据节点（data）",
+            "source": "auto",
+            "scope": "rest"
+          }
+        ]
+      }
+    ],
+    "masters": null
+  },
+  "services": [
+    {
+      "host_id": 1701,
+      "service_name": "Elasticsearch-master",
+      "url": "http://10.0.6.1:9200",
+      "web": true,
+      "instance_id": 0
+    },
+    {
+      "host_id": 1701,
+      "service_name": "Elasticsearch-数据-hot",
+      "url": "http://10.0.6.1:9200",
+      "web": true,
+      "instance_id": 0
+    },
+    {
+      "host_id": 1702,
+      "service_name": "Elasticsearch-数据-hot",
+      "url": "http://10.0.6.2:9200",
+      "web": true,
+      "instance_id": 0
+    },
+    {
+      "host_id": 1703,
+      "service_name": "Elasticsearch-数据-warm",
+      "url": "http://10.0.6.3:9200",
+      "web": true,
+      "instance_id": 0
+    },
+    {
+      "host_id": 1704,
+      "service_name": "Elasticsearch-协调",
+      "url": "http://10.0.6.4:9200",
+      "web": true,
+      "instance_id": 0
+    },
+    {
+      "host_id": 1704,
+      "service_name": "Elasticsearch-数据-cold",
+      "url": "http://10.0.6.4:9200",
+      "web": true,
+      "instance_id": 0
+    }
+  ],
+  "installs": [
+    {
+      "host_id": 1701,
+      "template_id": 0,
+      "template_name": "套件:elasticsearch/cold_warm_hot",
+      "task_id": 0
+    },
+    {
+      "host_id": 1702,
+      "template_id": 0,
+      "template_name": "套件:elasticsearch/cold_warm_hot",
+      "task_id": 0
+    },
+    {
+      "host_id": 1703,
+      "template_id": 0,
+      "template_name": "套件:elasticsearch/cold_warm_hot",
+      "task_id": 0
+    },
+    {
+      "host_id": 1704,
+      "template_id": 0,
+      "template_name": "套件:elasticsearch/cold_warm_hot",
+      "task_id": 0
+    }
+  ],
+  "endpoints": [
+    {
+      "name": "Elasticsearch-master",
+      "url": "http://10.0.6.1:9200",
+      "role": "master"
+    },
+    {
+      "name": "Elasticsearch-数据-hot",
+      "url": "http://10.0.6.1:9200",
+      "role": "data_hot"
+    },
+    {
+      "name": "Elasticsearch-数据-hot",
+      "url": "http://10.0.6.2:9200",
+      "role": "data_hot"
+    },
+    {
+      "name": "Elasticsearch-数据-warm",
+      "url": "http://10.0.6.3:9200",
+      "role": "data_warm"
+    },
+    {
+      "name": "Elasticsearch-数据-cold",
+      "url": "http://10.0.6.4:9200",
+      "role": "data_cold"
+    },
+    {
+      "name": "Elasticsearch-协调",
+      "url": "http://10.0.6.4:9200",
+      "role": "coordinator"
+    }
+  ]
+}

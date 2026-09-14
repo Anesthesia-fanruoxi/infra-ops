@@ -1,0 +1,120 @@
+{
+  "case": "redis_replication",
+  "stack_key": "redis",
+  "mode": "replication",
+  "op": "create",
+  "role_plan": {
+    "rev": 1,
+    "op": "create",
+    "generated_at": "",
+    "generated_by": "manual",
+    "ha": false,
+    "hosts": [
+      {
+        "host_id": 101,
+        "host_name": "sn10-0-0-1",
+        "host_ip": "10.0.0.1",
+        "seq": 1,
+        "roles": [
+          {
+            "comp": "redis",
+            "role": "master",
+            "label": "Redis Master",
+            "source": "manual"
+          }
+        ]
+      },
+      {
+        "host_id": 102,
+        "host_name": "sn10-0-0-2",
+        "host_ip": "10.0.0.2",
+        "seq": 2,
+        "roles": [
+          {
+            "comp": "redis",
+            "role": "replica",
+            "label": "Redis Replica",
+            "source": "auto",
+            "scope": "rest"
+          }
+        ]
+      },
+      {
+        "host_id": 103,
+        "host_name": "sn10-0-0-3",
+        "host_ip": "10.0.0.3",
+        "seq": 3,
+        "roles": [
+          {
+            "comp": "redis",
+            "role": "replica",
+            "label": "Redis Replica",
+            "source": "auto",
+            "scope": "rest"
+          }
+        ]
+      }
+    ],
+    "masters": null
+  },
+  "services": [
+    {
+      "host_id": 101,
+      "service_name": "Redis 主",
+      "url": "redis://10.0.0.1:6379",
+      "web": false,
+      "instance_id": 0
+    },
+    {
+      "host_id": 102,
+      "service_name": "Redis 从",
+      "url": "redis://10.0.0.2:6379",
+      "web": false,
+      "instance_id": 0
+    },
+    {
+      "host_id": 103,
+      "service_name": "Redis 从",
+      "url": "redis://10.0.0.3:6379",
+      "web": false,
+      "instance_id": 0
+    }
+  ],
+  "installs": [
+    {
+      "host_id": 101,
+      "template_id": 0,
+      "template_name": "套件:Redis/replication",
+      "task_id": 0
+    },
+    {
+      "host_id": 102,
+      "template_id": 0,
+      "template_name": "套件:Redis/replication",
+      "task_id": 0
+    },
+    {
+      "host_id": 103,
+      "template_id": 0,
+      "template_name": "套件:Redis/replication",
+      "task_id": 0
+    }
+  ],
+  "endpoints": [
+    {
+      "name": "Redis 主",
+      "url": "redis://10.0.0.1:6379",
+      "role": "master"
+    },
+    {
+      "name": "Redis 从",
+      "url": "redis://10.0.0.2:6379",
+      "role": "worker"
+    },
+    {
+      "name": "Redis 从",
+      "url": "redis://10.0.0.3:6379",
+      "role": "worker"
+    }
+  ]
+}

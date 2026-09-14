@@ -1,0 +1,4 @@
+/* Redis 套件样式（设计文档 §4.2 / §5.4：前缀 .stk-redis-*）。
+   迁自 style.css 的 .stack-replicas 规则。 */
+
+.stk-redis-replicas { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }

@@ -1,0 +1,153 @@
+{
+  "case": "redis_replication_scale_out",
+  "stack_key": "redis",
+  "mode": "replication",
+  "op": "scale_out",
+  "role_plan": {
+    "rev": 1,
+    "op": "scale_out",
+    "generated_at": "",
+    "generated_by": "manual",
+    "ha": false,
+    "hosts": [
+      {
+        "host_id": 501,
+        "host_name": "sn10-0-0-1",
+        "host_ip": "10.0.0.1",
+        "seq": 1,
+        "roles": [
+          {
+            "comp": "redis",
+            "role": "master",
+            "label": "Redis Master",
+            "source": "manual"
+          }
+        ]
+      },
+      {
+        "host_id": 502,
+        "host_name": "sn10-0-0-2",
+        "host_ip": "10.0.0.2",
+        "seq": 2,
+        "roles": [
+          {
+            "comp": "redis",
+            "role": "replica",
+            "label": "Redis Replica",
+            "source": "auto",
+            "scope": "rest"
+          }
+        ]
+      },
+      {
+        "host_id": 503,
+        "host_name": "sn10-0-0-3",
+        "host_ip": "10.0.0.3",
+        "seq": 3,
+        "roles": [
+          {
+            "comp": "redis",
+            "role": "replica",
+            "label": "Redis Replica",
+            "source": "auto",
+            "scope": "rest"
+          }
+        ]
+      },
+      {
+        "host_id": 504,
+        "host_name": "sn10-0-0-4",
+        "host_ip": "10.0.0.4",
+        "seq": 4,
+        "roles": [
+          {
+            "comp": "redis",
+            "role": "replica",
+            "label": "Redis Replica",
+            "source": "auto",
+            "scope": "rest"
+          }
+        ]
+      }
+    ],
+    "masters": null
+  },
+  "services": [
+    {
+      "host_id": 501,
+      "service_name": "Redis 主",
+      "url": "redis://10.0.0.1:6379",
+      "web": false,
+      "instance_id": 0
+    },
+    {
+      "host_id": 502,
+      "service_name": "Redis 从",
+      "url": "redis://10.0.0.2:6379",
+      "web": false,
+      "instance_id": 0
+    },
+    {
+      "host_id": 503,
+      "service_name": "Redis 从",
+      "url": "redis://10.0.0.3:6379",
+      "web": false,
+      "instance_id": 0
+    },
+    {
+      "host_id": 504,
+      "service_name": "Redis 从",
+      "url": "redis://10.0.0.4:6379",
+      "web": false,
+      "instance_id": 0
+    }
+  ],
+  "installs": [
+    {
+      "host_id": 501,
+      "template_id": 0,
+      "template_name": "套件:Redis/replication",
+      "task_id": 0
+    },
+    {
+      "host_id": 502,
+      "template_id": 0,
+      "template_name": "套件:Redis/replication",
+      "task_id": 0
+    },
+    {
+      "host_id": 503,
+      "template_id": 0,
+      "template_name": "套件:Redis/replication",
+      "task_id": 0
+    },
+    {
+      "host_id": 504,
+      "template_id": 0,
+      "template_name": "套件:Redis/replication",
+      "task_id": 0
+    }
+  ],
+  "endpoints": [
+    {
+      "name": "Redis 主",
+      "url": "redis://10.0.0.1:6379",
+      "role": "master"
+    },
+    {
+      "name": "Redis 从",
+      "url": "redis://10.0.0.2:6379",
+      "role": "worker"
+    },
+    {
+      "name": "Redis 从",
+      "url": "redis://10.0.0.3:6379",
+      "role": "worker"
+    },
+    {
+      "name": "Redis 从",
+      "url": "redis://10.0.0.4:6379",
+      "role": "worker"
+    }
+  ]
+}

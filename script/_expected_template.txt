@@ -1,0 +1,588 @@
+
+<div class="deploy-page stk-page">
+  <section class="deploy-hero">
+    <div class="deploy-hero-grid"></div>
+    <div class="deploy-hero-glow"></div>
+    <div class="deploy-hero-content">
+      <div class="deploy-hero-row">
+        <div>
+          <span class="deploy-eyebrow">STACK DEPLOY</span>
+          <h1>套件部署</h1>
+          <p>集群实例长期保留 · 扩容、缩容、加装、卸载都记在实例里</p>
+        </div>
+        <div class="deploy-hero-actions">
+          <el-tag v-if="runningCount" type="warning" size="large" class="deploy-running-tag" style="margin-right:10px">
+            <span class="dot running"></span>{{runningCount}} 个集群变更中
+          </el-tag>
+          <el-button size="large" @click="loadInstances"><el-icon style="margin-right:6px"><Refresh /></el-icon>刷新</el-button>
+          <el-button type="primary" size="large" class="deploy-new-btn" @click="openWizard">
+            <el-icon style="margin-right:6px"><Plus /></el-icon>新建集群
+          </el-button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <div class="stk-stk-inst-grid" v-loading="instancesLoading">
+    <div v-for="it in instances" :key="it.id" class="stk-stk-inst-card" :class="'stk-stk-inst-card--'+it.status" @click="openInstance(it)">
+      <div class="stk-stk-inst-top">
+        <div class="stk-stk-inst-avatar" :class="stackAvatar(it).c">{{stackAvatar(it).t}}</div>
+        <div class="stk-stk-inst-title">
+          <div class="stk-stk-inst-name">{{it.name}}<span v-if="instIsHa(it)" class="stk-ha-badge" style="margin-left:6px;position:relative;top:-1px">HA</span></div>
+          <div class="stk-stk-inst-meta">{{it.stack_name}} · {{modeLabel(it.mode, it.stack_key)}}</div>
+        </div>
+        <div class="stk-stk-inst-side">
+          <span class="stk-runtime" :class="isContainerStack(it) ? 'is-container' : 'is-host'">{{runtimeLabel(it)}}</span>
+          <span class="stk-stk-inst-status" :class="'is-'+it.status"><i class="dot"></i>{{instStatusLabel(it.status)}}</span>
+        </div>
+      </div>
+      <div class="stk-stk-inst-tags">
+        <template v-if="instTierStyle(it)">
+          <span v-for="t in instTierStyle(it).items" :key="t" :class="instTierStyle(it).cls">{{t}}</span>
+        </template>
+        <el-tag v-else v-for="c in instDisplayComps(it)" :key="c" size="small" effect="plain" round>{{compLabel(it.stack_key, c)}}</el-tag>
+      </div>
+      <div class="stk-stk-inst-foot">
+        <span class="stk-stk-inst-hosts"><el-icon :size="14"><Monitor /></el-icon>{{it.host_count || 0}} 台主机</span>
+        <div class="stk-stk-inst-ops" @click.stop>
+          <!-- 安装中：按钮全部置灰，禁止任何操作 -->
+          <template v-if="busyInst(it)">
+            <el-button size="small" type="primary" disabled>重新安装</el-button>
+            <el-button size="small" type="danger" plain disabled>卸载</el-button>
+            <el-button size="small" text disabled>重命名</el-button>
+          </template>
+          <template v-else>
+            <!-- 安装失败 / 已卸载：可重新安装 -->
+            <el-button v-if="instFailed(it) || instUninstalled(it)" size="small" type="primary" @click="reinstallInstance(it)">重新安装</el-button>
+            <!-- 安装失败 / 安装成功：可卸载 -->
+            <el-button v-if="instFailed(it) || instReady(it)" size="small" type="danger" plain @click="uninstallInstance(it)">卸载</el-button>
+            <el-button size="small" text @click="renameInstance(it)">重命名</el-button>
+            <!-- 仅已卸载可删除 -->
+            <el-button v-if="instUninstalled(it)" size="small" text type="danger" @click="deleteInstance(it)">删除</el-button>
+          </template>
+        </div>
+      </div>
+    </div>
+    <div v-if="!instancesLoading && !instances.length" class="stk-stk-inst-empty">
+      <el-icon :size="30" style="opacity:.45;margin-bottom:8px"><Box /></el-icon>
+      <div>还没有集群实例，点击右上角新建</div>
+    </div>
+  </div>
+
+  <el-dialog v-model="wizardVisible" :title="wizardTitle" width="85%" top="6vh" class="stk-wizard-dialog" :close-on-click-modal="false" @closed="resetWizard">
+    <el-steps :active="wizardStepIndex" finish-status="success" align-center style="margin-bottom:20px">
+      <el-step v-if="wizardOp==='create' || wizardOp==='add_component' || wizardOp==='remove_component'" :title="wizardFirstStepTitle" />
+      <el-step v-if="wizardOp!=='remove_component'" :title="wizardOp==='scale_in' ? '选择移除主机' : '选择主机'" />
+      <el-step v-if="wizardOp!=='scale_in' && wizardOp!=='remove_component'" title="填写参数" />
+    </el-steps>
+
+    <div v-show="step===1">
+      <div v-if="wizardOp==='add_component' || wizardOp==='remove_component'">
+        <component v-if="opFormComp" :is="opFormComp" :ctx="selfCtx" />
+      </div>
+      <div v-else>
+      <div v-for="g in stackGroups" :key="g.key" class="stk-cat">
+        <div class="stk-cat-head">
+          <span class="stk-cat-title">{{g.label}}</span>
+          <span class="stk-cat-hint">{{g.hint}}</span>
+        </div>
+        <div class="stk-card-grid">
+          <button v-for="s in g.stacks" :key="s.key" type="button" class="stk-card" :class="{'stk-card--sel': selectedKey===s.key}" @click="selectStack(s)">
+            <div class="stk-card-head">
+              <div class="stk-card-ava" :class="stackAvatar(s).c">{{stackAvatar(s).t}}</div>
+              <div class="stk-card-name">{{s.name}}</div>
+              <span class="stk-runtime" :class="s.requires_docker ? 'is-container' : 'is-host'">{{runtimeLabel(s)}}</span>
+              <el-switch v-if="s.ha_support && wizardOp==='create'" size="small" :model-value="sharedParams.ha==='true'" :disabled="selectedKey!==s.key" :inline-prompt="true" active-text="HA" inactive-text="" @click.stop.prevent @change="e => onHaToggle(e)"></el-switch>
+            </div>
+            <div class="stk-card-modes">
+              <el-tag v-for="m in s.modes" :key="m.key" size="small" :type="mode===m.key ? 'primary' : 'info'" effect="plain">{{m.label}}</el-tag>
+            </div>
+            <div class="stk-card-desc">{{s.description}}</div>
+          </button>
+        </div>
+      </div>
+      <div v-if="!stacks.length && !stacksLoading" class="deploy-placeholder">暂无可用套件</div>
+      <div v-if="selectedStack" class="stk-mode-box">
+        <component v-if="step1FormComp" :is="step1FormComp" :ctx="selfCtx" />
+        <template v-else>
+          <div class="deploy-host-vars-title">部署模式</div>
+          <div class="stk-mode-grid">
+            <label v-for="m in selectedStack.modes" :key="m.key" class="stk-mode" :class="{'stk-mode--sel': mode===m.key}">
+              <el-radio :model-value="mode" :label="m.key" @change="onModeChange(m.key)">{{m.label}}</el-radio>
+              <p>{{m.description}}</p>
+              <span class="faint">{{m.host_hint}}</span>
+            </label>
+          </div>
+        </template>
+        <p class="stk-hint" v-if="selectedStack">{{selectedStack.requires_docker ? '该套件以 Docker 容器运行，部署前会检查并按需安装 Docker。' : '该套件直接安装在主机上，不使用容器，也不会检查 Docker。'}}</p>
+        <p class="stk-hint stk-ha-hint" v-if="selectedStack?.ha_support && sharedParams.ha==='true'">本次安装所有支持 HA 的组件将双实例部署，依赖 ZooKeeper 已自动勾选，最低需 3 台主机。</p>
+        <p class="stk-hint" v-for="h in step1Hints" :key="h">{{h}}</p>
+      </div>
+      </div>
+    </div>
+
+    <div v-show="step===2">
+      <!-- 大数据等角色规划套件：表格勾选成员 → 按组件指定主角色 -->
+      <template v-if="useRolePlan">
+        <div class="deploy-host-toolbar">
+          <el-input v-model="hostFilter" placeholder="搜索主机名 / IP / 标签" clearable size="small" style="width:220px" />
+          <el-select v-model="hostSort.field" size="small" style="width:100px" :teleported="false"><el-option label="按主机名" value="name" /><el-option label="按 IP" value="ip" /></el-select>
+          <el-button size="small" @click="toggleHostSortOrder">{{hostSort.order==='asc' ? '↑ 升序' : '↓ 降序'}}</el-button>
+          <el-button size="small" @click="toggleSelectAll">{{ selectedHosts.length === filteredHosts.length && filteredHosts.length ? '取消全选' : '全选' }}</el-button>
+          <span class="deploy-sel-count">已选 {{selectedHosts.length}} / {{filteredHosts.length}} 台 · {{hostHint}}</span>
+        </div>
+        <el-table
+          ref="roleHostTable"
+          :data="filteredHosts"
+          size="small"
+          max-height="320"
+          v-loading="hostsLoading"
+          class="stk-role-host-table"
+          row-key="id"
+          @selection-change="onRoleHostSelection"
+          empty-text="无匹配主机"
+        >
+          <el-table-column type="selection" width="48" :reserve-selection="true" />
+          <el-table-column prop="name" label="主机名" min-width="140" />
+          <el-table-column label="IP" min-width="130">
+            <template #default="{row}"><span class="mono">{{row.ip}}</span></template>
+          </el-table-column>
+          <el-table-column label="标签" width="100">
+            <template #default="{row}"><span class="tag-badge other" style="font-size:10px">{{row.tag || 'other'}}</span></template>
+          </el-table-column>
+          <el-table-column label="状态" width="90">
+            <template #default="{row}">
+              <span class="status-badge" :class="row.status"><span class="dot"></span>{{row.status==='online'?'在线':row.status==='offline'?'离线':'未验证'}}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="已指定角色" min-width="180">
+            <template #default="{row}">
+              <span class="faint">{{hostRolePlanSummary(row) || '—'}}</span>
+            </template>
+          </el-table-column>
+        </el-table>
+        <component v-if="step===2 && step2FormComp" :is="step2FormComp" :ctx="selfCtx" />
+      </template>
+
+      <!-- Redis 等仍用主从/引导节点单选 -->
+      <template v-else>
+        <component v-if="step===2 && step2FormComp" :is="step2FormComp" :ctx="selfCtx" />
+        <!-- 扩缩容边界（全部套件，拍板 ②）：落点角色冻结，扩缩容只操作数据/工作节点 -->
+        <div v-if="wizardOp==='scale_out'" class="stk-freeze-hint">
+          主节点 / 引导节点已随集群部署冻结，扩容不改变主节点布局；新机自动承担从属 / 成员等全员角色。
+        </div>
+        <div v-if="wizardOp==='scale_in'" class="stk-freeze-hint">
+          缩容仅限数据 / 工作节点：承载落点角色的成员已标红置灰，不可移除（如需调整主节点布局请重装）。
+        </div>
+        <div class="deploy-host-toolbar">
+          <el-input v-model="hostFilter" placeholder="搜索主机名 / IP / 标签" clearable size="small" style="width:220px" />
+          <el-select v-model="hostSort.field" size="small" style="width:100px" :teleported="false"><el-option label="按主机名" value="name" /><el-option label="按 IP" value="ip" /></el-select>
+          <el-button size="small" @click="toggleHostSortOrder">{{hostSort.order==='asc' ? '↑ 升序' : '↓ 降序'}}</el-button>
+          <el-button size="small" @click="toggleSelectAll">{{ selectedHosts.length === filteredHosts.length ? '取消全选' : '全选' }}</el-button>
+          <span class="deploy-sel-count">已选 {{selectedHosts.length}} 台 · {{hostHint}}</span>
+        </div>
+        <div class="deploy-host-list deploy-host-list--dialog" v-loading="hostsLoading">
+          <label v-for="h in filteredHosts" :key="h.id" class="deploy-host-item" :class="{'deploy-host-item--sel': selectedHostIds.has(h.id), 'deploy-host-item--locked': !!scaleInProtected[h.ip]}">
+            <el-checkbox :model-value="selectedHostIds.has(h.id)" :disabled="!!scaleInProtected[h.ip]" @change="toggleHost(h.id)" />
+            <span class="deploy-host-name">{{h.name}}</span>
+            <span class="mono deploy-host-ip">{{h.ip}}</span>
+            <span class="tag-badge other" style="font-size:10px">{{h.tag || 'other'}}</span>
+            <span class="status-badge" :class="h.status"><span class="dot"></span>{{h.status==='online'?'在线':h.status==='offline'?'离线':'未验证'}}</span>
+            <el-tag v-if="scaleInProtected[h.ip]" size="small" type="danger" effect="plain" style="margin-left:auto">{{scaleInProtected[h.ip]}} · 不可缩容</el-tag>
+            <el-radio v-if="needMaster && selectedHostIds.has(h.id)" :model-value="masterHostId" :label="h.id" @change="masterHostId=h.id" style="margin-left:auto">主节点</el-radio>
+          </label>
+          <div v-if="!filteredHosts.length && !hostsLoading" class="deploy-placeholder">无匹配主机</div>
+        </div>
+      </template>
+    </div>
+
+    <div v-show="step===3">
+      <div class="deploy-host-vars-head" v-if="wizardOp==='create'">
+        <span class="deploy-host-vars-title">集群名称</span>
+      </div>
+      <div class="deploy-host-var-fields stk-shared-fields" v-if="wizardOp==='create'" style="margin-bottom:12px">
+        <div class="deploy-host-var-field">
+          <label>名称</label>
+          <el-input size="small" v-model="clusterName" :placeholder="defaultClusterName" />
+        </div>
+      </div>
+      <div class="deploy-host-vars-head">
+        <span class="deploy-host-vars-title">集群共享参数</span>
+      </div>
+      <div class="deploy-host-var-fields stk-shared-fields">
+        <div class="deploy-host-var-field" v-for="v in visibleSharedVars" :key="v.name">
+          <label>{{v.label}}<b v-if="v.required">*</b></label>
+          <el-switch v-if="v.type==='bool'" :model-value="sharedParams[v.name]==='true'" @change="e => onBoolVar(v.name, e)"></el-switch>
+          <el-input v-else size="small" v-model="sharedParams[v.name]" :placeholder="v.default || ''" :show-password="v.name==='password'" />
+        </div>
+      </div>
+      <div class="deploy-host-vars-head" style="margin:16px 0 10px">
+        <span class="deploy-host-vars-title">每台主机 <span class="deploy-var-hint">留空则使用默认值</span></span>
+        <el-button size="small" :disabled="selectedHosts.length < 2" @click="copyFirstToAll">复制首台到其他</el-button>
+      </div>
+      <div class="deploy-host-vars-list">
+        <div class="deploy-host-var-row" v-for="h in selectedHosts" :key="h.id">
+          <div class="deploy-host-var-rowhead">
+            <span class="deploy-host-name">{{h.name}}</span>
+            <span class="mono deploy-host-ip">{{h.ip}}</span>
+            <el-tag v-if="useRolePlan" size="small" type="info">{{hostRolePlanSummary(h) || '工作节点'}}</el-tag>
+            <el-tag v-else-if="needMaster" size="small" :type="h.id===masterHostId ? 'danger' : 'info'">{{hostRoleTag(h)}}</el-tag>
+          </div>
+          <div class="deploy-host-var-fields">
+            <div class="deploy-host-var-field" v-for="v in hostVars" :key="v.name">
+              <label>{{v.label}}</label>
+              <el-input size="small" :model-value="hostParamValue(h.id, v)" @input="val => onHostParam(h.id, v.name, val)" :placeholder="hostVarPlaceholder(v)" />
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <template #footer>
+      <div class="deploy-wizard-footer">
+        <span class="deploy-action-hint-inline">{{wizardHint}}</span>
+        <div>
+          <el-button @click="wizardVisible=false">取消</el-button>
+          <el-button v-if="step>1 && wizardOp!=='scale_out' && wizardOp!=='scale_in'" @click="step--">上一步</el-button>
+          <el-button v-if="step===1 && wizardOp!=='remove_component'" type="primary" :disabled="!canStep2" @click="goStep(2)">下一步</el-button>
+          <el-button v-if="step===1 && wizardOp==='remove_component'" type="danger" :loading="deploying" :disabled="!canStep2" @click="confirmRemoveComp">确认卸载组件</el-button>
+          <el-button v-if="step===2 && wizardOp!=='scale_in'" type="primary" :disabled="!canStep3" @click="goStep(3)">下一步</el-button>
+          <el-button v-if="step===2 && wizardOp==='scale_in'" type="danger" :loading="deploying" :disabled="!canStep3" @click="confirmScaleIn">确认缩容</el-button>
+          <el-button v-if="step===3" type="primary" :loading="deploying" :disabled="!canRun" @click="startPreflight">开始部署</el-button>
+        </div>
+      </div>
+    </template>
+  </el-dialog>
+
+  <el-dialog v-model="preflightVisible" title="Docker 前置检查" width="560px" :close-on-click-modal="false">
+    <p class="stk-preflight-lead">已安装 Docker 的主机将<strong>跳过安装</strong>，即使版本不一致也不改动配置、安装目录或 daemon.json。未安装的主机会调用「安装 Docker」模板。</p>
+    <div v-if="preflight.unreachable && preflight.unreachable.length" class="stk-preflight-block stk-preflight-block--fail">
+      <div class="stk-preflight-title">无法探测（请检查 SSH）</div>
+      <div v-for="h in preflight.unreachable" :key="h.host_id">{{h.name}} {{h.ip}} · {{h.error}}</div>
+    </div>
+    <div v-if="preflight.will_install && preflight.will_install.length" class="stk-preflight-block">
+      <div class="stk-preflight-title">将安装 Docker（{{preflight.will_install.length}}）</div>
+      <div v-for="h in preflight.will_install" :key="h.host_id">{{h.name}} <span class="mono">{{h.ip}}</span></div>
+    </div>
+    <div v-if="preflight.will_skip && preflight.will_skip.length" class="stk-preflight-block stk-preflight-block--ok">
+      <div class="stk-preflight-title">已有 Docker，跳过且不改动（{{preflight.will_skip.length}}）</div>
+      <div v-for="h in preflight.will_skip" :key="h.host_id">{{h.name}} <span class="mono">{{h.ip}}</span></div>
+    </div>
+    <!-- 部署前角色预览（全部套件）：与部署前置一同确认落点，未通过不能确认部署 -->
+    <div v-if="needOpPlan" class="stk-plan-preview" style="margin-top:12px">
+      <div class="stk-plan-preview-head">
+        <span>角色计划预览 · 确认落点后开始部署</span>
+        <span v-if="opPlan" class="faint">{{opPlan.generated_by === 'manual' ? '含手动指定' : '自动分配'}}</span>
+        <el-button v-if="opPlanErr" size="small" text type="primary" @click="refreshOpPlan">重试</el-button>
+      </div>
+      <div v-if="opPlanErr" class="stk-plan-preview-warn"><div>{{opPlanErr}}</div></div>
+      <div v-else-if="opPlan" class="stk-plan-preview-grid">
+        <div v-for="h in opPlan.hosts" :key="h.host_ip" class="stk-plan-preview-row">
+          <span class="mono stk-plan-preview-ip">{{h.host_ip}}</span>
+          <div class="stk-plan-preview-chips">
+            <span v-for="(r, i) in h.roles" :key="i" class="stk-plan-chip" :class="[r.source==='manual' ? 'is-manual' : 'is-auto', roleTextClass(r)]" :title="r.source==='manual' ? '手动指定' : '自动分配'">{{r.label}}</span>
+            <span v-if="!(h.roles||[]).length" class="faint">—</span>
+          </div>
+        </div>
+      </div>
+      <div v-else class="faint" style="font-size:12px;padding-top:6px">正在生成角色计划预览…</div>
+      <div class="stk-legend"><span class="stk-legend-item"><i class="dot is-manual"></i>手动</span><span class="stk-legend-item"><i class="dot is-auto"></i>自动</span><span class="stk-legend-sep"></span><span class="stk-legend-item rt-primary">主/Active</span><span class="stk-legend-item rt-standby">备/Standby</span><span class="stk-legend-item rt-quorum">仲裁</span><span class="stk-legend-item rt-worker">工作/成员</span><span class="stk-legend-item rt-aux">辅助</span></div>
+      <div v-if="opPlan && (opPlan.warnings||[]).length" class="stk-plan-preview-warn">
+        <div v-for="(w, i) in opPlan.warnings" :key="i">{{w}}</div>
+      </div>
+    </div>
+    <template #footer>
+      <el-button @click="preflightVisible=false">取消</el-button>
+      <el-button type="primary" :loading="deploying" :disabled="!preflightReady" @click="confirmRun">确认部署</el-button>
+    </template>
+  </el-dialog>
+
+  <el-drawer v-model="instDrawerVisible" :title="instDetail?.name || '集群'" size="42%" class="deploy-drawer">
+    <div v-if="instDetail" class="deploy-drawer-meta">
+      <span class="deploy-drawer-meta-tpl">{{instDetail.stack_name}} · {{modeLabel(instDetail.mode, instDetail.stack_key)}}</span>
+      <span class="stk-runtime" :class="isContainerStack(instDetail) ? 'is-container' : 'is-host'">{{runtimeLabel(instDetail)}}</span>
+      <el-tag :type="instStatusType(instDetail.status)" size="small">{{instStatusLabel(instDetail.status)}}</el-tag>
+    </div>
+    <div class="stk-stk-inst-tags" style="margin:8px 0 14px">
+      <el-tag v-for="c in instDisplayComps(instDetail)" :key="c" size="small">{{compLabel(instDetail.stack_key, c)}}</el-tag>
+    </div>
+    <div class="stk-stk-inst-ops stk-drawer-ops" style="margin-bottom:16px" v-if="instDetail">
+      <el-button v-if="canReinstall(instDetail)" size="small" type="primary" @click="reinstallInstance(instDetail)">重新安装</el-button>
+      <el-button size="small" type="primary" plain :loading="verifying" :disabled="instDetail.status==='uninstalled'" @click="openVerifyDialog(instDetail)">探活</el-button>
+      <el-button v-if="caDownloadAvailable" size="small" type="primary" plain @click="downloadCa">下载 CA 证书</el-button>
+      <el-button size="small" :disabled="busyInst(instDetail) || instDetail.status==='uninstalled'" @click="openScaleOut(instDetail)">扩容</el-button>
+      <el-button size="small" :disabled="busyInst(instDetail) || instDetail.status==='uninstalled' || activeInstHosts(instDetail).length<2" @click="openScaleIn(instDetail)">缩容</el-button>
+      <el-button v-if="isPlatformStack(instDetail)" size="small" :disabled="busyInst(instDetail) || instDetail.status==='uninstalled'" :title="unusedCompsOf(instDetail).length ? '加装尚未安装的组件' : '所有组件均已安装'" @click="openAddComp(instDetail)">加装组件</el-button>
+      <el-button v-if="isPlatformStack(instDetail)" size="small" :disabled="busyInst(instDetail) || instDetail.status==='uninstalled'" :title="removableCompsOf(instDetail).length ? '按组件卸载' : '没有可单独卸载的组件'" @click="openRemoveComp(instDetail)">卸载组件</el-button>
+      <el-button v-if="instDetail.status==='failed' || instDetail.status==='partial'" size="small" type="warning" plain :disabled="busyInst(instDetail)" @click="purgeInstance(instDetail)">清理残留</el-button>
+    </div>
+    <div class="drawer-sec-title"><span>成员节点</span><span class="stk-inst-mem-count">{{(instDetail.hosts||[]).filter(x => x.status!=='removed').length}} 台</span></div>
+    <div class="stk-inst-mem-grid">
+      <div class="stk-inst-mem-card" v-for="h in (instDetail.hosts||[]).filter(x => x.status!=='removed')" :key="h.id" :class="h.role === 'master' ? 'is-master' : ''">
+        <div class="stk-inst-mem-top">
+          <span class="stk-inst-mem-name" :title="h.host_name">{{h.host_name}}</span>
+          <el-tag size="small" :type="h.role === 'master' ? 'primary' : 'info'" effect="light">{{roleLabel(h.role)}}</el-tag>
+        </div>
+        <div class="mono stk-inst-mem-ip">{{h.host_ip}}</div>
+        <div class="stk-inst-mem-tags">
+          <template v-for="tag in memTags(h)" :key="tag"><span class="stk-inst-mem-tag">{{tag}}</span></template>
+          <span v-if="!memTags(h).length" class="stk-inst-mem-tag is-idle">工作正常</span>
+        </div>
+      </div>
+      <div v-if="!(instDetail.hosts||[]).filter(x => x.status!=='removed').length" class="faint stk-inst-mem-empty">暂无成员</div>
+    </div>
+    <!-- 角色计划（全部套件）：部署前物化的落点契约，部署/探活/扩缩容共读（docs/角色物化设计.md） -->
+    <template v-if="instDetail.id">
+      <div class="drawer-sec-title stk-inst-runs-title">
+        <span>角色计划</span>
+        <span class="stk-inst-mem-count">
+          <el-button v-if="instPlan" size="small" text type="primary" @click="replanInst">重新规划</el-button>
+          <span v-else class="faint">加载中…</span>
+        </span>
+      </div>
+      <div v-if="instPlan" class="stk-inst-plan-box">
+        <div class="stk-inst-plan-meta">rev {{instPlan.rev}} · {{instPlan.ha ? 'HA' : '单机'}} · <span class="mono">{{instPlan.generated_at}}</span></div>
+        <div v-for="h in instPlan.hosts" :key="h.host_ip" class="stk-inst-plan-row">
+          <span class="mono stk-inst-plan-ip">{{h.host_ip}}</span>
+          <div class="stk-inst-plan-chips">
+            <span v-for="(r, i) in h.roles" :key="i" class="stk-inst-plan-chip" :class="[r.source==='manual' ? 'is-manual' : 'is-auto', roleTextClass(r)]" :title="r.source==='manual' ? '手动指定' : '自动分配'">{{r.label}}</span>
+            <span v-if="!(h.roles||[]).length" class="faint">—</span>
+          </div>
+        </div>
+        <div class="stk-legend" style="margin-top:2px"><span class="stk-legend-item"><i class="dot is-manual"></i>手动</span><span class="stk-legend-item"><i class="dot is-auto"></i>自动</span><span class="stk-legend-sep"></span><span class="stk-legend-item rt-primary">主/Active</span><span class="stk-legend-item rt-standby">备/Standby</span><span class="stk-legend-item rt-quorum">仲裁</span><span class="stk-legend-item rt-worker">工作/成员</span><span class="stk-legend-item rt-aux">辅助</span></div>
+      </div>
+    </template>
+    <div class="drawer-sec-title stk-inst-runs-title"><span>流程记录</span><span class="stk-inst-mem-count">{{instRuns.length}} 条</span></div>
+    <div class="stk-inst-runs-wrap">
+      <el-table :data="instRuns" size="small" height="100%" class="stk-inst-runs-table" empty-text="暂无流程记录" @row-click="openDrawer">
+        <el-table-column label="ID" width="72" align="center"><template #default="{row}"><span class="mono">#{{row.id}}</span></template></el-table-column>
+        <el-table-column label="操作" width="76"><template #default="{row}"><span class="stk-inst-op">{{opLabel(row.op)}}</span></template></el-table-column>
+        <el-table-column label="状态" width="120" align="center"><template #default="{row}"><span class="stk-inst-status" :class="row.status"><i class="dot"></i>{{taskStatusLabel(row.status)}}</span></template></el-table-column>
+        <el-table-column label="时间"><template #default="{row}"><span class="mono faint">{{formatTime(row.created_at)}}</span></template></el-table-column>
+      </el-table>
+    </div>
+  </el-drawer>
+
+  <el-dialog v-model="verifyVisible" :title="'集群探活 · ' + (verifyTarget?.name || '')" width="65%" top="6vh" class="stk-verify-dialog" :close-on-click-modal="false">
+    <div v-loading="verifying" class="stk-verify-body">
+      <!-- 摘要横幅 -->
+      <div class="stk-vf-banner" :class="verifyResult?.ok ? 'is-ok' : 'is-fail'">
+        <div class="stk-vf-banner-icon">
+          <svg v-if="verifyResult?.ok" viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+          <svg v-else viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        </div>
+        <div class="stk-vf-banner-text">
+          <div class="stk-vf-banner-summary">{{verifyResult?.summary || '正在探活…'}}</div>
+          <div class="stk-vf-banner-meta">
+            <span v-if="verifyResult?.checked_at" class="mono">{{verifyResult.checked_at}}</span>
+            <span v-if="verifyResult?.hint" class="stk-vf-banner-hint">{{verifyResult.hint}}</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 组件标签：bigdata 多组件探活 -->
+      <div v-if="verifyTabbed" class="stk-vf-tabs">
+        <div class="stk-vf-tab" :class="{ active: verifyActiveTab === 'all' }" @click="verifyActiveTab = 'all'">查看所有</div>
+        <div class="stk-vf-tab" v-for="c in verifyComponents" :key="c.key" :class="{ active: verifyActiveTab === c.key }" @click="verifyActiveTab = c.key">{{c.label}}</div>
+      </div>
+
+      <!-- 组件视角：选中具体组件（仅 bigdata） -->
+      <template v-if="verifyTabbed && verifyActiveTab !== 'all'">
+        <div class="stk-vf-section">
+          <div class="stk-vf-section-title">接入地址 · {{currentVerifyCompLabel}}</div>
+          <div class="stk-vf-ep-grid">
+            <div class="stk-vf-ep-host-card" v-for="hg in verifyCompEndpointsByHost" :key="hg.host_ip">
+              <div class="stk-vf-ep-host-header">
+                <span class="mono stk-vf-ep-host-ip">{{hg.host_ip}}</span>
+              </div>
+              <div class="stk-vf-ep-host-eps">
+                <div class="stk-vf-ep-mini" v-for="ep in hg.endpoints" :key="ep.url">
+                  <span class="stk-vf-ep-badge" :class="epProtocolClass(ep.url)">{{epProtocolLabel(ep.url)}}</span>
+                  <span class="mono stk-vf-ep-mini-url">{{ep.url}}</span>
+                  <span class="stk-vf-ep-copy" @click="copyText(ep.url)" title="复制">
+                    <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                  </span>
+                </div>
+              </div>
+            </div>
+            <div v-if="!verifyCompEndpointsByHost.length" class="stk-vf-empty">该组件暂无接入地址</div>
+          </div>
+        </div>
+
+        <div class="stk-vf-section">
+          <div class="stk-vf-section-title">{{currentVerifyCompLabel}} 节点状态 <span class="stk-vf-section-count">{{verifyCompHostRows.length}} 台</span></div>
+          <el-table :data="verifyCompHostRows" size="small" empty-text="该组件暂无节点结果" class="stk-vf-node-table" :show-overflow-tooltip="false">
+            <el-table-column prop="ip" label="IP" min-width="130" :show-overflow-tooltip="false">
+              <template #default="{row}"><span class="mono">{{row.ip}}</span></template>
+            </el-table-column>
+            <el-table-column prop="host_name" label="主机名" min-width="120" :show-overflow-tooltip="false" />
+            <el-table-column prop="ok" label="状态" width="70" align="center" :show-overflow-tooltip="false">
+              <template #default="{row}">
+                <span class="stk-vf-table-dot" :class="row.ok ? 'ok' : 'fail'"></span>
+              </template>
+            </el-table-column>
+            <el-table-column prop="role" label="角色" width="90" :show-overflow-tooltip="false">
+              <template #default="{row}">
+                <span class="stk-vf-role-badge" :class="row.role === 'master' ? 'is-master' : 'is-replica'">{{row.role}}</span>
+              </template>
+            </el-table-column>
+            <el-table-column prop="instances" :label="verifyCompCountLabel" min-width="200" :show-overflow-tooltip="false">
+              <template #default="{row}">
+                <el-tooltip v-if="row.instList && row.instList.length" placement="top" :show-after="120" raw-content :content="tipHtml(row.instList)">
+                  <span class="stk-vf-cell-text mono">{{row.instances}}</span>
+                </el-tooltip>
+                <span v-else class="stk-vf-cell-text mono" :class="{'stk-vf-cell-muted': !row.instances || row.instances === '无'}">{{row.instances}}</span>
+              </template>
+            </el-table-column>
+            <el-table-column prop="version" label="版本" width="90" :show-overflow-tooltip="false" />
+            <el-table-column prop="uptime" label="运行时间" min-width="140" :show-overflow-tooltip="false">
+              <template #default="{row}">
+                <el-tooltip v-if="row.uptime && row.uptime !== '-'" placement="top" :show-after="120" raw-content :content="tipHtml(row.uptimeList)">
+                  <span class="stk-vf-cell-text">{{row.uptime}}</span>
+                </el-tooltip>
+                <span v-else class="stk-vf-cell-text stk-vf-cell-muted">—</span>
+              </template>
+            </el-table-column>
+          </el-table>
+        </div>
+      </template>
+
+      <!-- 整体视角：常规集群 或 bigdata「查看所有」 -->
+      <template v-else>
+        <!-- 接入地址 -->
+        <div class="stk-vf-section">
+          <div class="stk-vf-section-title">接入地址</div>
+          <div class="stk-vf-ep-grid">
+            <div class="stk-vf-ep-host-card" v-for="hg in verifyEndpointsByHost" :key="hg.host_ip">
+              <div class="stk-vf-ep-host-header">
+                <template v-if="verifyHostRole(hg)">
+                  <span class="stk-vf-ep-host-role is-es">{{verifyHostRole(hg)}}</span>
+                </template>
+                <template v-else>
+                  <span class="stk-vf-ep-host-role" :class="hg.role === 'master' ? 'is-master' : 'is-replica'">{{hg.role === 'master' ? '主' : '从'}}</span>
+                </template>
+                <span class="mono stk-vf-ep-host-ip">{{hg.host_ip}}</span>
+              </div>
+              <div class="stk-vf-ep-host-eps">
+                <div class="stk-vf-ep-mini" v-for="ep in hg.endpoints" :key="ep.url">
+                  <span class="stk-vf-ep-badge" :class="epProtocolClass(ep.url)">{{epProtocolLabel(ep.url)}}</span>
+                  <span class="mono stk-vf-ep-mini-url">{{ep.url}}</span>
+                  <span class="stk-vf-ep-copy" @click="copyText(ep.url)" title="复制">
+                    <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                  </span>
+                </div>
+              </div>
+            </div>
+            <div v-if="!verifyEndpointsByHost.length" class="stk-vf-empty">暂无接入地址</div>
+          </div>
+        </div>
+
+        <!-- 节点状态 -->
+        <div class="stk-vf-section">
+          <div class="stk-vf-section-title">节点状态 <span class="stk-vf-section-count">{{verifyHostRows.length}} 台</span></div>
+          <el-table :data="verifyHostRows" size="small" empty-text="暂无节点结果" class="stk-vf-node-table" :show-overflow-tooltip="false">
+            <el-table-column prop="ip" label="IP" min-width="130" :show-overflow-tooltip="false">
+              <template #default="{row}"><span class="mono">{{row.ip}}</span></template>
+            </el-table-column>
+            <el-table-column prop="host_name" label="主机名" min-width="120" :show-overflow-tooltip="false" />
+            <el-table-column prop="status" label="状态" width="70" align="center" :show-overflow-tooltip="false">
+              <template #default="{row}">
+                <span class="stk-vf-table-dot" :class="row.ok ? 'ok' : 'fail'"></span>
+              </template>
+            </el-table-column>
+            <el-table-column prop="role" label="角色" width="90" :show-overflow-tooltip="false">
+              <template #default="{row}">
+                <span class="stk-vf-role-badge" :class="row.role === 'master' ? 'is-master' : 'is-replica'">{{row.role}}</span>
+              </template>
+            </el-table-column>
+            <el-table-column prop="replication" :label="verifyCountLabel" min-width="200" :show-overflow-tooltip="false">
+              <template #default="{row}">
+                <el-tooltip v-if="row.instList && row.instList.length" placement="top" :show-after="120" raw-content :content="tipHtml(row.instList)">
+                  <span class="stk-vf-cell-text mono"><span class="stk-vf-cell-count">{{row.instList.length}}</span>{{row.replication}}</span>
+                </el-tooltip>
+                <span v-else class="stk-vf-cell-text mono" :class="{'stk-vf-cell-muted': !row.replication || row.replication === '—'}">{{row.replication || '—'}}</span>
+              </template>
+            </el-table-column>
+            <el-table-column prop="version" label="版本" width="90" :show-overflow-tooltip="false" />
+            <el-table-column prop="uptime" label="运行时间" min-width="140" :show-overflow-tooltip="false">
+              <template #default="{row}">
+                <el-tooltip v-if="row.uptime && row.uptime !== '-'" placement="top" :show-after="120" raw-content :content="tipHtml(row.uptimeList)">
+                  <span class="stk-vf-cell-text">{{row.uptime}}</span>
+                </el-tooltip>
+                <span v-else class="stk-vf-cell-text stk-vf-cell-muted">—</span>
+              </template>
+            </el-table-column>
+          </el-table>
+        </div>
+      </template>
+
+      <!-- 访问密码 -->
+      <div class="stk-vf-section" v-if="verifyPassword">
+        <div class="stk-vf-section-title">访问密码</div>
+        <div class="stk-vf-pass-row">
+          <span class="stk-vf-pass-dots">●●●●●●●●●●●●</span>
+          <span class="stk-vf-pass-label">已配置</span>
+          <div class="stk-vf-pass-copy" @click="copyText(verifyPassword)" title="复制密码">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+          </div>
+        </div>
+      </div>
+
+      <!-- 提示信息 -->
+      <div class="stk-vf-notes" v-if="verifyResult?.notes?.length">
+        <div class="stk-vf-note-item" v-for="(n,i) in verifyResult.notes" :key="i">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;margin-top:2px"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+          <span>{{n}}</span>
+        </div>
+      </div>
+      <!-- 客户端接入提示 -->
+      <div class="stk-vf-client-hint" v-if="verifyResult?.client_hint">
+        <div class="stk-vf-client-hint-label">客户端接入</div>
+        <pre class="stk-vf-client-hint-code">{{verifyResult.client_hint}}</pre>
+      </div>
+    </div>
+    <template #footer>
+      <el-button @click="verifyVisible=false">关闭</el-button>
+      <el-button type="primary" :loading="verifying" :disabled="!verifyTarget || verifyTarget.status==='uninstalled'" @click="runVerify">重新探活</el-button>
+    </template>
+  </el-dialog>
+
+  <el-drawer v-model="drawerVisible" :title="'套件运行 #' + (recordMeta?.id || '')" size="48%" class="deploy-drawer"
+    :close-on-click-modal="!logDrawerLocked" :close-on-press-escape="!logDrawerLocked" :show-close="!logDrawerLocked"
+    :before-close="onLogDrawerBeforeClose" @closed="closeDrawer">
+    <div v-if="recordMeta" class="deploy-drawer-meta">
+      <span class="deploy-drawer-meta-tpl">{{recordMeta.stack_name}} · {{modeLabel(recordMeta.mode)}}</span>
+      <el-tag :type="taskTagType(recordMeta.status)" size="small">{{taskStatusLabel(recordMeta.status)}}</el-tag>
+      <span v-if="recordMeta.created_at" class="mono faint deploy-drawer-meta-time">{{formatTime(recordMeta.created_at)}}</span>
+    </div>
+    <div v-if="recordHosts.length" class="deploy-drawer-hostlist">
+      <div class="deploy-drawer-host" v-for="h in recordHosts" :key="h.id">
+        <span class="status-badge" :class="hostStatusCls(h.status)"><span class="dot"></span>{{hostStatusText(h.status)}}</span>
+        <span class="deploy-host-name">{{h.host_name}}</span>
+        <span class="mono deploy-host-ip">{{h.host_ip}}</span>
+        <el-tag size="small" type="info">{{roleLabel(h.role)}}</el-tag>
+        <span class="stk-phase-pills">
+          <el-tag v-if="showPrereqPill" size="small" :type="phaseTag(h.prereq_status)">Docker {{phaseText(h.prereq_status)}}</el-tag>
+          <el-tag size="small" :type="phaseTag(h.node_status)">节点 {{phaseText(h.node_status)}}</el-tag>
+          <el-tag v-if="showBootstrapPill" size="small" :type="phaseTag(h.bootstrap_status)">初始化 {{phaseText(h.bootstrap_status)}}</el-tag>
+        </span>
+      </div>
+    </div>
+    <div class="drawer-sec deploy-log-sec">
+      <div class="drawer-sec-title">运行日志</div>
+      <div class="orch-log-head">
+        <span class="faint deploy-log-count">{{recordLogs.length}} 行</span>
+        <el-input v-model="logFilter" placeholder="过滤：IP / 阶段 / 内容" clearable size="small" style="width:220px" />
+      </div>
+      <div class="deploy-log-box" ref="stackLogBox" @scroll="onLogScroll">
+        <div v-if="!filteredLogs.length" class="deploy-log-empty">暂无日志</div>
+        <div v-for="l in filteredLogs" :key="l.id" class="deploy-log-row">
+          <span class="deploy-log-time">{{logTime(l.ts)}}</span>
+          <span class="deploy-log-ip">{{l.ip || '-'}}</span>
+          <span class="stk-log-phase">{{phaseName(l.phase)}}</span>
+          <span class="deploy-log-text">{{l.text}}</span>
+        </div>
+      </div>
+    </div>
+  </el-drawer>
+</div>

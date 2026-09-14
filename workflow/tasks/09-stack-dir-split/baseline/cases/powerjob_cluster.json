@@ -1,0 +1,87 @@
+{
+  "case": "powerjob_cluster",
+  "stack_key": "powerjob",
+  "mode": "cluster",
+  "op": "create",
+  "role_plan": {
+    "rev": 1,
+    "op": "create",
+    "generated_at": "",
+    "generated_by": "manual",
+    "ha": false,
+    "hosts": [
+      {
+        "host_id": 1401,
+        "host_name": "sn10-0-5-1",
+        "host_ip": "10.0.5.1",
+        "seq": 1,
+        "roles": [
+          {
+            "comp": "powerjob",
+            "role": "boot",
+            "label": "引导节点（MySQL + Server）",
+            "source": "manual"
+          }
+        ]
+      },
+      {
+        "host_id": 1402,
+        "host_name": "sn10-0-5-2",
+        "host_ip": "10.0.5.2",
+        "seq": 2,
+        "roles": [
+          {
+            "comp": "powerjob",
+            "role": "server",
+            "label": "Server 成员",
+            "source": "auto",
+            "scope": "rest"
+          }
+        ]
+      }
+    ],
+    "masters": null
+  },
+  "services": [
+    {
+      "host_id": 1401,
+      "service_name": "PowerJob 主节点",
+      "url": "http://10.0.5.1",
+      "web": false,
+      "instance_id": 0
+    },
+    {
+      "host_id": 1402,
+      "service_name": "PowerJob 工作节点",
+      "url": "http://10.0.5.2",
+      "web": false,
+      "instance_id": 0
+    }
+  ],
+  "installs": [
+    {
+      "host_id": 1401,
+      "template_id": 0,
+      "template_name": "套件:powerjob/cluster",
+      "task_id": 0
+    },
+    {
+      "host_id": 1402,
+      "template_id": 0,
+      "template_name": "套件:powerjob/cluster",
+      "task_id": 0
+    }
+  ],
+  "endpoints": [
+    {
+      "name": "PowerJob",
+      "url": "tcp://10.0.5.1",
+      "role": "master"
+    },
+    {
+      "name": "PowerJob",
+      "url": "tcp://10.0.5.2",
+      "role": "worker"
+    }
+  ]
+}

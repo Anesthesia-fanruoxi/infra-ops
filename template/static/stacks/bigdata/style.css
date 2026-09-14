@@ -1,0 +1,98 @@
+/* 大数据底座套件样式（设计文档 §4.2 / §5.4：前缀 .stk-bd-*）。
+   迁自 style.css 的 .stack-comp-* / .stack-ha-* / .stack-role-plan|grid|item|label 规则。 */
+
+.stk-bd-comp-sec-title { justify-content: space-between; margin-top: 18px; }
+
+.stk-bd-role-plan { margin-bottom: 12px; margin-top: 16px; }
+
+.stk-bd-role-grid { display: flex; flex-wrap: wrap; gap: 10px 20px; margin-top: 8px; }
+
+.stk-bd-role-item { display: flex; align-items: center; gap: 8px; flex: 1 1 300px; min-width: 280px; }
+
+.stk-bd-role-label { font-size: 12px; color: #909399; white-space: nowrap; }
+
+/* 大数据 HA · 分组角色矩阵（卡片小方块，一行多组件） */
+.stk-bd-ha-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(226px, 1fr)); gap: 10px; margin-top: 10px; }
+
+.stk-bd-ha-card {
+  border: 1px solid var(--border); border-radius: 10px; background: var(--bg-card);
+  overflow: hidden; transition: border-color .15s, box-shadow .15s;
+}
+
+.stk-bd-ha-card:hover { border-color: #cbd9f7; box-shadow: 0 3px 12px rgba(47,107,255,.08); }
+
+.stk-bd-ha-card.is-conflict { border-color: var(--el-color-danger, #f56c6c); }
+
+.stk-bd-ha-head {
+  display: flex; align-items: center; gap: 6px; padding: 7px 10px;
+  background: var(--bg-level2, rgba(0,0,0,.03)); border-bottom: 1px solid var(--border);
+}
+
+.stk-bd-ha-name { font-size: 12.5px; font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.stk-bd-ha-badge {
+  font-size: 10px; line-height: 1; padding: 3px 6px; border-radius: 4px;
+  background: var(--stk-bd-ha-bg, #f0f4ff); color: var(--stk-bd-ha-color, #3b82f6); font-weight: 600; flex-shrink: 0;
+}
+
+.stk-bd-ha-conflict-tag {
+  font-size: 10px; padding: 2px 6px; border-radius: 4px; color: #fff; background: var(--el-color-danger, #f56c6c); flex-shrink: 0;
+}
+
+.stk-bd-ha-rows { padding: 3px 10px 9px; }
+
+.stk-bd-ha-row { display: flex; flex-direction: column; gap: 4px; padding: 5px 0; }
+
+.stk-bd-ha-row + .stk-bd-ha-row { border-top: 1px dashed var(--border); }
+
+.stk-bd-ha-row.role-conflict .stk-bd-ha-role,
+.stk-bd-ha-row.role-conflict .el-select { color: var(--el-color-danger, #f56c6c); }
+
+.stk-bd-ha-role { font-size: 11px; color: #8a94a6; font-weight: 600; white-space: nowrap; }
+
+.stk-bd-ha-row.role-conflict .stk-bd-ha-role { font-weight: 600; }
+
+.stk-bd-ha-select { width: 100%; }
+
+.stk-bd-ha-conflict { margin-top: 10px; font-size: 12px; color: var(--el-color-danger, #f56c6c); }
+
+.stk-bd-comp-select { margin-bottom: 8px; }
+
+.stk-bd-comp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; margin-top: 8px; }
+
+.stk-bd-comp-card {
+  display: flex; align-items: flex-start; gap: 10px; padding: 12px;
+  border: 1px solid var(--border); border-radius: 10px; cursor: pointer; background: var(--bg-card);
+}
+
+.stk-bd-comp-card.is-on { border-color: var(--brand); background: var(--brand-soft); }
+
+.stk-bd-comp-card.is-req { position: relative; background: var(--danger-soft, #fff5f5); border-color: #f3c6c6; }
+
+.stk-bd-comp-card.is-req::before { content: ''; position: absolute; left: 0; top: 12px; bottom: 12px; width: 3px; border-radius: 2px; background: var(--el-color-danger, #f56c6c); }
+
+.stk-bd-comp-body { flex: 1; min-width: 0; }
+
+.stk-bd-comp-name { font-size: 13px; font-weight: 600; }
+
+.stk-bd-comp-desc { margin-top: 4px; font-size: 12px; color: var(--text-sub); line-height: 1.4; }
+
+/* 加装/卸载组件面板：明确区分已安装与未安装 */
+.stk-bd-comp-ophead { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+
+.stk-bd-comp-opsum { font-size: 12px; color: var(--text-sub); }
+
+.stk-bd-comp-lock { margin-left: 6px; font-size: 12px; font-weight: 500; color: var(--text-sub); }
+
+.stk-bd-comp-card.is-missing { border-style: dashed; }
+
+.stk-bd-comp-card.is-locked { cursor: not-allowed; }
+
+.stk-bd-comp-card.is-locked .stk-bd-comp-name { color: var(--text-sub); }
+
+.stk-bd-comp-card.is-locked.is-missing { opacity: .55; }
+
+/* 已安装且不可勾选（加装模式）：置灰回填，与「可勾选」态视觉区分 */
+.stk-bd-comp-card.is-locked.is-installed { background: var(--bg-faint); border-color: var(--border); opacity: .8; }
+
+.stk-bd-comp-empty { margin-top: 10px; padding: 10px 12px; border-radius: 8px; background: var(--bg-faint); font-size: 13px; color: var(--text-sub); }

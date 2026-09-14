@@ -1,0 +1,177 @@
+{
+  "case": "redis_sentinel",
+  "stack_key": "redis",
+  "mode": "sentinel",
+  "op": "create",
+  "role_plan": {
+    "rev": 1,
+    "op": "create",
+    "generated_at": "",
+    "generated_by": "manual",
+    "ha": false,
+    "hosts": [
+      {
+        "host_id": 201,
+        "host_name": "sn10-0-0-1",
+        "host_ip": "10.0.0.1",
+        "seq": 1,
+        "roles": [
+          {
+            "comp": "redis",
+            "role": "master",
+            "label": "Redis Master",
+            "source": "manual"
+          },
+          {
+            "comp": "redis",
+            "role": "sentinel",
+            "label": "Sentinel",
+            "source": "auto",
+            "scope": "all"
+          }
+        ]
+      },
+      {
+        "host_id": 202,
+        "host_name": "sn10-0-0-2",
+        "host_ip": "10.0.0.2",
+        "seq": 2,
+        "roles": [
+          {
+            "comp": "redis",
+            "role": "replica",
+            "label": "Redis Replica",
+            "source": "auto",
+            "scope": "rest"
+          },
+          {
+            "comp": "redis",
+            "role": "sentinel",
+            "label": "Sentinel",
+            "source": "auto",
+            "scope": "all"
+          }
+        ]
+      },
+      {
+        "host_id": 203,
+        "host_name": "sn10-0-0-3",
+        "host_ip": "10.0.0.3",
+        "seq": 3,
+        "roles": [
+          {
+            "comp": "redis",
+            "role": "replica",
+            "label": "Redis Replica",
+            "source": "auto",
+            "scope": "rest"
+          },
+          {
+            "comp": "redis",
+            "role": "sentinel",
+            "label": "Sentinel",
+            "source": "auto",
+            "scope": "all"
+          }
+        ]
+      }
+    ],
+    "masters": null
+  },
+  "services": [
+    {
+      "host_id": 201,
+      "service_name": "Redis Sentinel",
+      "url": "redis-sentinel://10.0.0.1:26379",
+      "web": false,
+      "instance_id": 0
+    },
+    {
+      "host_id": 201,
+      "service_name": "Redis 主",
+      "url": "redis://10.0.0.1:6379",
+      "web": false,
+      "instance_id": 0
+    },
+    {
+      "host_id": 202,
+      "service_name": "Redis Sentinel",
+      "url": "redis-sentinel://10.0.0.2:26379",
+      "web": false,
+      "instance_id": 0
+    },
+    {
+      "host_id": 202,
+      "service_name": "Redis 从",
+      "url": "redis://10.0.0.2:6379",
+      "web": false,
+      "instance_id": 0
+    },
+    {
+      "host_id": 203,
+      "service_name": "Redis Sentinel",
+      "url": "redis-sentinel://10.0.0.3:26379",
+      "web": false,
+      "instance_id": 0
+    },
+    {
+      "host_id": 203,
+      "service_name": "Redis 从",
+      "url": "redis://10.0.0.3:6379",
+      "web": false,
+      "instance_id": 0
+    }
+  ],
+  "installs": [
+    {
+      "host_id": 201,
+      "template_id": 0,
+      "template_name": "套件:Redis/sentinel",
+      "task_id": 0
+    },
+    {
+      "host_id": 202,
+      "template_id": 0,
+      "template_name": "套件:Redis/sentinel",
+      "task_id": 0
+    },
+    {
+      "host_id": 203,
+      "template_id": 0,
+      "template_name": "套件:Redis/sentinel",
+      "task_id": 0
+    }
+  ],
+  "endpoints": [
+    {
+      "name": "Redis 主",
+      "url": "redis://10.0.0.1:6379",
+      "role": "master"
+    },
+    {
+      "name": "Sentinel",
+      "url": "redis-sentinel://10.0.0.1:26379",
+      "role": "master"
+    },
+    {
+      "name": "Redis 从",
+      "url": "redis://10.0.0.2:6379",
+      "role": "worker"
+    },
+    {
+      "name": "Sentinel",
+      "url": "redis-sentinel://10.0.0.2:26379",
+      "role": "worker"
+    },
+    {
+      "name": "Redis 从",
+      "url": "redis://10.0.0.3:6379",
+      "role": "worker"
+    },
+    {
+      "name": "Sentinel",
+      "url": "redis-sentinel://10.0.0.3:26379",
+      "role": "worker"
+    }
+  ]
+}

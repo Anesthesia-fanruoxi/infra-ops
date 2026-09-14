@@ -1,0 +1,749 @@
+{
+  "case": "bigdata_ha",
+  "stack_key": "bigdata",
+  "mode": "cluster",
+  "op": "create",
+  "role_plan": {
+    "rev": 1,
+    "op": "create",
+    "generated_at": "",
+    "generated_by": "auto",
+    "ha": true,
+    "hosts": [
+      {
+        "host_id": 2101,
+        "host_name": "sn10-0-8-1",
+        "host_ip": "10.0.8.1",
+        "seq": 1,
+        "roles": [
+          {
+            "comp": "zookeeper",
+            "role": "zk",
+            "label": "ZooKeeper",
+            "source": "auto"
+          },
+          {
+            "comp": "hdfs",
+            "role": "nn1",
+            "label": "NameNode (Active)",
+            "source": "auto"
+          },
+          {
+            "comp": "hdfs",
+            "role": "jn",
+            "label": "JournalNode",
+            "source": "auto"
+          },
+          {
+            "comp": "hdfs",
+            "role": "zkfc",
+            "label": "ZKFC",
+            "source": "auto",
+            "scope": "all"
+          },
+          {
+            "comp": "hdfs",
+            "role": "dn",
+            "label": "DataNode",
+            "source": "auto",
+            "scope": "all"
+          },
+          {
+            "comp": "yarn",
+            "role": "rm1",
+            "label": "ResourceManager (Active)",
+            "source": "auto"
+          },
+          {
+            "comp": "yarn",
+            "role": "nm",
+            "label": "NodeManager",
+            "source": "auto",
+            "scope": "all"
+          },
+          {
+            "comp": "spark",
+            "role": "spark_m1",
+            "label": "Spark Master",
+            "source": "auto"
+          },
+          {
+            "comp": "spark",
+            "role": "spark_worker",
+            "label": "Spark Worker",
+            "source": "auto",
+            "scope": "all"
+          },
+          {
+            "comp": "flink",
+            "role": "jm1",
+            "label": "JobManager (Active)",
+            "source": "auto"
+          },
+          {
+            "comp": "flink",
+            "role": "flink_tm",
+            "label": "TaskManager",
+            "source": "auto",
+            "scope": "all"
+          },
+          {
+            "comp": "hbase",
+            "role": "hm1",
+            "label": "HMaster (Active)",
+            "source": "auto"
+          },
+          {
+            "comp": "hbase",
+            "role": "rs",
+            "label": "RegionServer",
+            "source": "auto",
+            "scope": "all"
+          },
+          {
+            "comp": "hive",
+            "role": "ms1",
+            "label": "Metastore",
+            "source": "auto"
+          },
+          {
+            "comp": "hive",
+            "role": "hs2a",
+            "label": "HiveServer2",
+            "source": "auto"
+          },
+          {
+            "comp": "hive",
+            "role": "db",
+            "label": "MetaDB (MySQL)",
+            "source": "auto"
+          },
+          {
+            "comp": "trino",
+            "role": "coordinator",
+            "label": "Trino Coordinator",
+            "source": "auto"
+          },
+          {
+            "comp": "trino",
+            "role": "trino_worker",
+            "label": "Trino Worker",
+            "source": "auto",
+            "scope": "all"
+          }
+        ]
+      },
+      {
+        "host_id": 2102,
+        "host_name": "sn10-0-8-2",
+        "host_ip": "10.0.8.2",
+        "seq": 2,
+        "roles": [
+          {
+            "comp": "zookeeper",
+            "role": "zk",
+            "label": "ZooKeeper",
+            "source": "auto"
+          },
+          {
+            "comp": "hdfs",
+            "role": "nn2",
+            "label": "NameNode (Standby)",
+            "source": "auto"
+          },
+          {
+            "comp": "hdfs",
+            "role": "jn",
+            "label": "JournalNode",
+            "source": "auto"
+          },
+          {
+            "comp": "hdfs",
+            "role": "zkfc",
+            "label": "ZKFC",
+            "source": "auto",
+            "scope": "all"
+          },
+          {
+            "comp": "hdfs",
+            "role": "dn",
+            "label": "DataNode",
+            "source": "auto",
+            "scope": "all"
+          },
+          {
+            "comp": "yarn",
+            "role": "rm2",
+            "label": "ResourceManager (Standby)",
+            "source": "auto"
+          },
+          {
+            "comp": "yarn",
+            "role": "nm",
+            "label": "NodeManager",
+            "source": "auto",
+            "scope": "all"
+          },
+          {
+            "comp": "spark",
+            "role": "spark_m2",
+            "label": "Spark Master (Standby)",
+            "source": "auto"
+          },
+          {
+            "comp": "spark",
+            "role": "spark_worker",
+            "label": "Spark Worker",
+            "source": "auto",
+            "scope": "all"
+          },
+          {
+            "comp": "flink",
+            "role": "jm2",
+            "label": "JobManager (Standby)",
+            "source": "auto"
+          },
+          {
+            "comp": "flink",
+            "role": "flink_tm",
+            "label": "TaskManager",
+            "source": "auto",
+            "scope": "all"
+          },
+          {
+            "comp": "hbase",
+            "role": "hm2",
+            "label": "HMaster (Backup)",
+            "source": "auto"
+          },
+          {
+            "comp": "hbase",
+            "role": "rs",
+            "label": "RegionServer",
+            "source": "auto",
+            "scope": "all"
+          },
+          {
+            "comp": "hive",
+            "role": "ms2",
+            "label": "Metastore (Standby)",
+            "source": "auto"
+          },
+          {
+            "comp": "hive",
+            "role": "hs2b",
+            "label": "HiveServer2 (Standby)",
+            "source": "auto"
+          },
+          {
+            "comp": "trino",
+            "role": "trino_worker",
+            "label": "Trino Worker",
+            "source": "auto",
+            "scope": "all"
+          }
+        ]
+      },
+      {
+        "host_id": 2103,
+        "host_name": "sn10-0-8-3",
+        "host_ip": "10.0.8.3",
+        "seq": 3,
+        "roles": [
+          {
+            "comp": "zookeeper",
+            "role": "zk",
+            "label": "ZooKeeper",
+            "source": "auto"
+          },
+          {
+            "comp": "hdfs",
+            "role": "jn",
+            "label": "JournalNode",
+            "source": "auto"
+          },
+          {
+            "comp": "hdfs",
+            "role": "dn",
+            "label": "DataNode",
+            "source": "auto",
+            "scope": "all"
+          },
+          {
+            "comp": "yarn",
+            "role": "nm",
+            "label": "NodeManager",
+            "source": "auto",
+            "scope": "all"
+          },
+          {
+            "comp": "spark",
+            "role": "spark_worker",
+            "label": "Spark Worker",
+            "source": "auto",
+            "scope": "all"
+          },
+          {
+            "comp": "flink",
+            "role": "flink_tm",
+            "label": "TaskManager",
+            "source": "auto",
+            "scope": "all"
+          },
+          {
+            "comp": "hbase",
+            "role": "rs",
+            "label": "RegionServer",
+            "source": "auto",
+            "scope": "all"
+          },
+          {
+            "comp": "trino",
+            "role": "trino_worker",
+            "label": "Trino Worker",
+            "source": "auto",
+            "scope": "all"
+          }
+        ]
+      }
+    ],
+    "masters": {
+      "flink": "10.0.8.1",
+      "flink_jm2": "10.0.8.2",
+      "hbase": "10.0.8.1",
+      "hbase_hm2": "10.0.8.2",
+      "hdfs": "10.0.8.1",
+      "hdfs_jns": "10.0.8.1,10.0.8.2,10.0.8.3",
+      "hdfs_nn2": "10.0.8.2",
+      "hive": "10.0.8.1",
+      "hive_db": "10.0.8.1",
+      "hive_hs2b": "10.0.8.2",
+      "hive_ms2": "10.0.8.2",
+      "spark": "10.0.8.1",
+      "spark_m2": "10.0.8.2",
+      "yarn": "10.0.8.1",
+      "yarn_rm2": "10.0.8.2",
+      "zookeeper_ips": "10.0.8.1,10.0.8.2,10.0.8.3"
+    },
+    "injected": {
+      "__flink_jm2_ip": "10.0.8.2",
+      "__ha_core_props": "  \u003cproperty\u003e\n    \u003cname\u003eha.zookeeper.quorum\u003c/name\u003e\n    \u003cvalue\u003e10.0.8.1,10.0.8.2,10.0.8.3\u003c/value\u003e\n  \u003c/property\u003e\n  \u003cproperty\u003e\n    \u003cname\u003edfs.nameservices\u003c/name\u003e\n    \u003cvalue\u003ens1\u003c/value\u003e\n  \u003c/property\u003e\n  \u003cproperty\u003e\n    \u003cname\u003edfs.ha.namenodes.ns1\u003c/name\u003e\n    \u003cvalue\u003enn1,nn2\u003c/value\u003e\n  \u003c/property\u003e\n  \u003cproperty\u003e\n    \u003cname\u003edfs.client.failover.proxy.provider.ns1\u003c/name\u003e\n    \u003cvalue\u003eorg.apache.hadoop.hdfs.server.namenode.ha.ConfiguredFailoverProxyProvider\u003c/value\u003e\n  \u003c/property\u003e\n",
+      "__ha_hdfs_props": "  \u003cproperty\u003e\n    \u003cname\u003edfs.namenode.shared.edits.dir\u003c/name\u003e\n    \u003cvalue\u003eqjournal://10.0.8.1:8485;10.0.8.2:8485;10.0.8.3:8485/ns1\u003c/value\u003e\n  \u003c/property\u003e\n  \u003cproperty\u003e\n    \u003cname\u003edfs.journalnode.edits.dir\u003c/name\u003e\n    \u003cvalue\u003e/hadoop/dfs/journal\u003c/value\u003e\n  \u003c/property\u003e\n  \u003cproperty\u003e\n    \u003cname\u003edfs.namenode.rpc-address.ns1.nn1\u003c/name\u003e\n    \u003cvalue\u003e10.0.8.1:9000\u003c/value\u003e\n  \u003c/property\u003e\n  \u003cproperty\u003e\n    \u003cname\u003edfs.namenode.rpc-address.ns1.nn2\u003c/name\u003e\n    \u003cvalue\u003e10.0.8.2:9000\u003c/value\u003e\n  \u003c/property\u003e\n  \u003cproperty\u003e\n    \u003cname\u003edfs.namenode.http-address.ns1.nn1\u003c/name\u003e\n    \u003cvalue\u003e10.0.8.1:9870\u003c/value\u003e\n  \u003c/property\u003e\n  \u003cproperty\u003e\n    \u003cname\u003edfs.namenode.http-address.ns1.nn2\u003c/name\u003e\n    \u003cvalue\u003e10.0.8.2:9870\u003c/value\u003e\n  \u003c/property\u003e\n  \u003cproperty\u003e\n    \u003cname\u003edfs.ha.automatic-failover.enabled\u003c/name\u003e\n    \u003cvalue\u003etrue\u003c/value\u003e\n  \u003c/property\u003e\n  \u003cproperty\u003e\n    \u003cname\u003edfs.ha.fencing.methods\u003c/name\u003e\n    \u003cvalue\u003eshell(/bin/true)\u003c/value\u003e\n  \u003c/property\u003e\n  \u003cproperty\u003e\n    \u003cname\u003edfs.namenode.datanode.registration.ip-hostname-check\u003c/name\u003e\n    \u003cvalue\u003efalse\u003c/value\u003e\n  \u003c/property\u003e\n",
+      "__ha_hive_jdo": "  \u003cproperty\u003e\n    \u003cname\u003ejavax.jdo.option.ConnectionURL\u003c/name\u003e\n    \u003cvalue\u003ejdbc:mysql://10.0.8.1:3306/metastore?useSSL=false\u0026amp;allowPublicKeyRetrieval=true\u0026amp;characterEncoding=UTF-8\u003c/value\u003e\n  \u003c/property\u003e\n  \u003cproperty\u003e\n    \u003cname\u003ejavax.jdo.option.ConnectionDriverName\u003c/name\u003e\n    \u003cvalue\u003ecom.mysql.cj.jdbc.Driver\u003c/value\u003e\n  \u003c/property\u003e\n  \u003cproperty\u003e\n    \u003cname\u003ejavax.jdo.option.ConnectionUserName\u003c/name\u003e\n    \u003cvalue\u003eroot\u003c/value\u003e\n  \u003c/property\u003e\n  \u003cproperty\u003e\n    \u003cname\u003ejavax.jdo.option.ConnectionPassword\u003c/name\u003e\n    \u003cvalue\u003eHiveDb@123\u003c/value\u003e\n  \u003c/property\u003e\n",
+      "__ha_hive_ms": "thrift://10.0.8.1:9083,thrift://10.0.8.2:9083",
+      "__ha_hive_zk": "  \u003cproperty\u003e\n    \u003cname\u003ehive.server2.support.dynamic.service.discovery\u003c/name\u003e\n    \u003cvalue\u003etrue\u003c/value\u003e\n  \u003c/property\u003e\n  \u003cproperty\u003e\n    \u003cname\u003ehive.zookeeper.quorum\u003c/name\u003e\n    \u003cvalue\u003e10.0.8.1,10.0.8.2,10.0.8.3\u003c/value\u003e\n  \u003c/property\u003e\n  \u003cproperty\u003e\n    \u003cname\u003ehive.zookeeper.namespace\u003c/name\u003e\n    \u003cvalue\u003ehiveserver2\u003c/value\u003e\n  \u003c/property\u003e\n",
+      "__ha_yarn_props": "  \u003cproperty\u003e\n    \u003cname\u003eyarn.resourcemanager.ha.enabled\u003c/name\u003e\n    \u003cvalue\u003etrue\u003c/value\u003e\n  \u003c/property\u003e\n  \u003cproperty\u003e\n    \u003cname\u003eyarn.resourcemanager.ha.rm-ids\u003c/name\u003e\n    \u003cvalue\u003erm1,rm2\u003c/value\u003e\n  \u003c/property\u003e\n  \u003cproperty\u003e\n    \u003cname\u003eyarn.resourcemanager.hostname.rm1\u003c/name\u003e\n    \u003cvalue\u003e10.0.8.1\u003c/value\u003e\n  \u003c/property\u003e\n  \u003cproperty\u003e\n    \u003cname\u003eyarn.resourcemanager.hostname.rm2\u003c/name\u003e\n    \u003cvalue\u003e10.0.8.2\u003c/value\u003e\n  \u003c/property\u003e\n  \u003cproperty\u003e\n    \u003cname\u003eyarn.resourcemanager.webapp.address.rm1\u003c/name\u003e\n    \u003cvalue\u003e10.0.8.1:8088\u003c/value\u003e\n  \u003c/property\u003e\n  \u003cproperty\u003e\n    \u003cname\u003eyarn.resourcemanager.webapp.address.rm2\u003c/name\u003e\n    \u003cvalue\u003e10.0.8.2:8088\u003c/value\u003e\n  \u003c/property\u003e\n  \u003cproperty\u003e\n    \u003cname\u003eyarn.resourcemanager.cluster-id\u003c/name\u003e\n    \u003cvalue\u003ebigdata-yarn\u003c/value\u003e\n  \u003c/property\u003e\n  \u003cproperty\u003e\n    \u003cname\u003eyarn.resourcemanager.zk-address\u003c/name\u003e\n    \u003cvalue\u003e10.0.8.1,10.0.8.2,10.0.8.3\u003c/value\u003e\n  \u003c/property\u003e\n  \u003cproperty\u003e\n    \u003cname\u003eyarn.resourcemanager.recovery.enabled\u003c/name\u003e\n    \u003cvalue\u003etrue\u003c/value\u003e\n  \u003c/property\u003e\n  \u003cproperty\u003e\n    \u003cname\u003eyarn.resourcemanager.store.class\u003c/name\u003e\n    \u003cvalue\u003eorg.apache.hadoop.yarn.server.resourcemanager.recovery.ZKRMStateStore\u003c/value\u003e\n  \u003c/property\u003e\n  \u003cproperty\u003e\n    \u003cname\u003eyarn.resourcemanager.ha.automatic-failover.enabled\u003c/name\u003e\n    \u003cvalue\u003etrue\u003c/value\u003e\n  \u003c/property\u003e\n  \u003cproperty\u003e\n    \u003cname\u003eyarn.client.failover-proxy-provider\u003c/name\u003e\n    \u003cvalue\u003eorg.apache.hadoop.yarn.client.ConfiguredRMFailoverProxyProvider\u003c/value\u003e\n  \u003c/property\u003e\n",
+      "__hdfs_entry": "hdfs://ns1",
+      "__hive_db_ip": "10.0.8.1",
+      "__hive_ms_uris": "thrift://10.0.8.1:9083,thrift://10.0.8.2:9083",
+      "__hmaster2_ip": "10.0.8.2",
+      "__hs2_ips": "10.0.8.1,10.0.8.2",
+      "__jn_ips": "10.0.8.1,10.0.8.2,10.0.8.3",
+      "__master_flink": "10.0.8.1",
+      "__master_hbase": "10.0.8.1",
+      "__master_hdfs": "10.0.8.1",
+      "__master_hive": "10.0.8.1",
+      "__master_spark": "10.0.8.1",
+      "__master_trino": "10.0.8.1",
+      "__master_yarn": "10.0.8.1",
+      "__ms_ips": "10.0.8.1,10.0.8.2",
+      "__nn1_ip": "10.0.8.1",
+      "__nn2_ip": "10.0.8.2",
+      "__rm1_ip": "10.0.8.1",
+      "__rm2_ip": "10.0.8.2",
+      "__spark_m2_ip": "10.0.8.2",
+      "__zk_ips": "10.0.8.1,10.0.8.2,10.0.8.3"
+    },
+    "warnings": [
+      "NameNode (Standby) 由自动分配落到 10.0.8.2",
+      "ResourceManager (Standby) 由自动分配落到 10.0.8.2",
+      "Spark Master (Standby) 由自动分配落到 10.0.8.2",
+      "Flink JobManager (Standby) 由自动分配落到 10.0.8.2",
+      "HBase HMaster (Backup) 由自动分配落到 10.0.8.2",
+      "Hive Metastore (Standby) 由自动分配落到 10.0.8.2",
+      "HiveServer2 (Standby) 由自动分配落到 10.0.8.2",
+      "JournalNode 由自动分配落到前 3 台（10.0.8.1, 10.0.8.2, 10.0.8.3）",
+      "ZooKeeper 由自动分配落到前 3 台（10.0.8.1,10.0.8.2,10.0.8.3）"
+    ]
+  },
+  "services": [
+    {
+      "host_id": 2101,
+      "service_name": "Flink JobManager",
+      "url": "http://10.0.8.1:8081",
+      "web": true,
+      "instance_id": 0
+    },
+    {
+      "host_id": 2101,
+      "service_name": "HBase Master",
+      "url": "http://10.0.8.1:16010",
+      "web": true,
+      "instance_id": 0
+    },
+    {
+      "host_id": 2101,
+      "service_name": "HDFS NameNode",
+      "url": "http://10.0.8.1:9870",
+      "web": true,
+      "instance_id": 0
+    },
+    {
+      "host_id": 2101,
+      "service_name": "Hive MetaDB (MySQL)",
+      "url": "mysql://10.0.8.1:3306",
+      "web": false,
+      "instance_id": 0
+    },
+    {
+      "host_id": 2101,
+      "service_name": "Hive Metastore",
+      "url": "thrift://10.0.8.1:9083",
+      "web": false,
+      "instance_id": 0
+    },
+    {
+      "host_id": 2101,
+      "service_name": "HiveServer2",
+      "url": "jdbc:hive2://10.0.8.1:10000",
+      "web": false,
+      "instance_id": 0
+    },
+    {
+      "host_id": 2101,
+      "service_name": "Spark Master",
+      "url": "http://10.0.8.1:8080",
+      "web": true,
+      "instance_id": 0
+    },
+    {
+      "host_id": 2101,
+      "service_name": "Trino Worker",
+      "url": "http://10.0.8.1:8080",
+      "web": true,
+      "instance_id": 0
+    },
+    {
+      "host_id": 2101,
+      "service_name": "YARN ResourceManager",
+      "url": "http://10.0.8.1:8088",
+      "web": true,
+      "instance_id": 0
+    },
+    {
+      "host_id": 2101,
+      "service_name": "ZooKeeper",
+      "url": "zookeeper://10.0.8.1:2181",
+      "web": false,
+      "instance_id": 0
+    },
+    {
+      "host_id": 2102,
+      "service_name": "Flink JobManager (Standby)",
+      "url": "http://10.0.8.2:8081",
+      "web": true,
+      "instance_id": 0
+    },
+    {
+      "host_id": 2102,
+      "service_name": "HBase HMaster (backup)",
+      "url": "http://10.0.8.2:16010",
+      "web": true,
+      "instance_id": 0
+    },
+    {
+      "host_id": 2102,
+      "service_name": "HDFS NameNode (Standby)",
+      "url": "http://10.0.8.2:9870",
+      "web": true,
+      "instance_id": 0
+    },
+    {
+      "host_id": 2102,
+      "service_name": "Hive Metastore (Standby)",
+      "url": "thrift://10.0.8.2:9083",
+      "web": false,
+      "instance_id": 0
+    },
+    {
+      "host_id": 2102,
+      "service_name": "HiveServer2 (Standby)",
+      "url": "jdbc:hive2://10.0.8.2:10000",
+      "web": false,
+      "instance_id": 0
+    },
+    {
+      "host_id": 2102,
+      "service_name": "Spark Master (Standby)",
+      "url": "http://10.0.8.2:8080",
+      "web": true,
+      "instance_id": 0
+    },
+    {
+      "host_id": 2102,
+      "service_name": "Trino Worker",
+      "url": "http://10.0.8.2:8080",
+      "web": true,
+      "instance_id": 0
+    },
+    {
+      "host_id": 2102,
+      "service_name": "YARN ResourceManager (Standby)",
+      "url": "http://10.0.8.2:8088",
+      "web": true,
+      "instance_id": 0
+    },
+    {
+      "host_id": 2102,
+      "service_name": "ZooKeeper",
+      "url": "zookeeper://10.0.8.2:2181",
+      "web": false,
+      "instance_id": 0
+    },
+    {
+      "host_id": 2103,
+      "service_name": "Flink TaskManager",
+      "url": "http://10.0.8.3:8081",
+      "web": false,
+      "instance_id": 0
+    },
+    {
+      "host_id": 2103,
+      "service_name": "HBase RegionServer",
+      "url": "http://10.0.8.3:16030",
+      "web": true,
+      "instance_id": 0
+    },
+    {
+      "host_id": 2103,
+      "service_name": "HDFS JournalNode",
+      "url": "http://10.0.8.3:8484",
+      "web": true,
+      "instance_id": 0
+    },
+    {
+      "host_id": 2103,
+      "service_name": "Spark Worker",
+      "url": "http://10.0.8.3:8081",
+      "web": true,
+      "instance_id": 0
+    },
+    {
+      "host_id": 2103,
+      "service_name": "Trino Worker",
+      "url": "http://10.0.8.3:8080",
+      "web": true,
+      "instance_id": 0
+    },
+    {
+      "host_id": 2103,
+      "service_name": "YARN NodeManager",
+      "url": "http://10.0.8.3:8042",
+      "web": true,
+      "instance_id": 0
+    },
+    {
+      "host_id": 2103,
+      "service_name": "ZooKeeper",
+      "url": "zookeeper://10.0.8.3:2181",
+      "web": false,
+      "instance_id": 0
+    }
+  ],
+  "installs": [
+    {
+      "host_id": 2101,
+      "template_id": 0,
+      "template_name": "套件:bigdata/cluster(hdfs,yarn,zookeeper,spark,flink,hbase,hive,metastore_db,trino)",
+      "task_id": 0
+    },
+    {
+      "host_id": 2102,
+      "template_id": 0,
+      "template_name": "套件:bigdata/cluster(hdfs,yarn,zookeeper,spark,flink,hbase,hive,metastore_db,trino)",
+      "task_id": 0
+    },
+    {
+      "host_id": 2103,
+      "template_id": 0,
+      "template_name": "套件:bigdata/cluster(hdfs,yarn,zookeeper,spark,flink,hbase,hive,metastore_db,trino)",
+      "task_id": 0
+    }
+  ],
+  "endpoints": [
+    {
+      "name": "HDFS NameNode",
+      "component": "hdfs",
+      "url": "http://10.0.8.1:9870",
+      "role": "master"
+    },
+    {
+      "name": "HDFS JournalNode",
+      "component": "hdfs",
+      "url": "http://10.0.8.1:8485",
+      "role": "master"
+    },
+    {
+      "name": "HDFS DataNode",
+      "component": "hdfs",
+      "url": "http://10.0.8.1:9864",
+      "role": "master"
+    },
+    {
+      "name": "YARN RM",
+      "component": "yarn",
+      "url": "http://10.0.8.1:8088",
+      "role": "master"
+    },
+    {
+      "name": "ZooKeeper",
+      "component": "zookeeper",
+      "url": "zookeeper://10.0.8.1:2181",
+      "role": "master"
+    },
+    {
+      "name": "Spark Master",
+      "component": "spark",
+      "url": "http://10.0.8.1:8080",
+      "role": "master"
+    },
+    {
+      "name": "Flink JM",
+      "component": "flink",
+      "url": "http://10.0.8.1:8081",
+      "role": "master"
+    },
+    {
+      "name": "HBase Master",
+      "component": "hbase",
+      "url": "http://10.0.8.1:16010",
+      "role": "master"
+    },
+    {
+      "name": "Hive Metastore",
+      "component": "hive",
+      "url": "thrift://10.0.8.1:9083",
+      "role": "master"
+    },
+    {
+      "name": "HiveServer2",
+      "component": "hive",
+      "url": "jdbc:hive2://10.0.8.1:10000",
+      "role": "master"
+    },
+    {
+      "name": "Trino Coord",
+      "component": "trino",
+      "url": "http://10.0.8.1:8083",
+      "role": "master"
+    },
+    {
+      "name": "HDFS NameNode-2",
+      "component": "hdfs",
+      "url": "http://10.0.8.2:9870",
+      "role": "worker"
+    },
+    {
+      "name": "HDFS JournalNode",
+      "component": "hdfs",
+      "url": "http://10.0.8.2:8485",
+      "role": "worker"
+    },
+    {
+      "name": "HDFS DataNode",
+      "component": "hdfs",
+      "url": "http://10.0.8.2:9864",
+      "role": "worker"
+    },
+    {
+      "name": "YARN RM-2",
+      "component": "yarn",
+      "url": "http://10.0.8.2:8088",
+      "role": "worker"
+    },
+    {
+      "name": "ZooKeeper",
+      "component": "zookeeper",
+      "url": "zookeeper://10.0.8.2:2181",
+      "role": "worker"
+    },
+    {
+      "name": "Spark Master-2",
+      "component": "spark",
+      "url": "http://10.0.8.2:8081",
+      "role": "worker"
+    },
+    {
+      "name": "Flink JM-2",
+      "component": "flink",
+      "url": "http://10.0.8.2:8081",
+      "role": "worker"
+    },
+    {
+      "name": "HBase Backup Master",
+      "component": "hbase",
+      "url": "http://10.0.8.2:16010",
+      "role": "worker"
+    },
+    {
+      "name": "Hive Metastore-2",
+      "component": "hive",
+      "url": "thrift://10.0.8.2:9083",
+      "role": "worker"
+    },
+    {
+      "name": "HiveServer2-2",
+      "component": "hive",
+      "url": "jdbc:hive2://10.0.8.2:10000",
+      "role": "worker"
+    },
+    {
+      "name": "Trino Worker",
+      "component": "trino",
+      "url": "http://10.0.8.2:8083",
+      "role": "worker"
+    },
+    {
+      "name": "HDFS JournalNode",
+      "component": "hdfs",
+      "url": "http://10.0.8.3:8485",
+      "role": "worker"
+    },
+    {
+      "name": "HDFS DataNode",
+      "component": "hdfs",
+      "url": "http://10.0.8.3:9864",
+      "role": "worker"
+    },
+    {
+      "name": "YARN NM",
+      "component": "yarn",
+      "url": "http://10.0.8.3:8042",
+      "role": "worker"
+    },
+    {
+      "name": "ZooKeeper",
+      "component": "zookeeper",
+      "url": "zookeeper://10.0.8.3:2181",
+      "role": "worker"
+    },
+    {
+      "name": "Spark Worker",
+      "component": "spark",
+      "url": "http://10.0.8.3:8081",
+      "role": "worker"
+    },
+    {
+      "name": "HBase RS",
+      "component": "hbase",
+      "url": "http://10.0.8.3:16030",
+      "role": "worker"
+    },
+    {
+      "name": "Trino Worker",
+      "component": "trino",
+      "url": "http://10.0.8.3:8083",
+      "role": "worker"
+    }
+  ]
+}

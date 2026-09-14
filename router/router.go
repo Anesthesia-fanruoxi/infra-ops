@@ -12,7 +12,17 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"infra-ops/api"
+	"infra-ops/api/auth"
+	"infra-ops/api/credential"
+	"infra-ops/api/deploy"
+	"infra-ops/api/host"
+	"infra-ops/api/orchestration"
+	"infra-ops/api/overview"
+	"infra-ops/api/sse"
+	"infra-ops/api/stack"
+	esapi "infra-ops/api/tool/es"
+	regapi "infra-ops/api/tool/registry"
+	sftpapi "infra-ops/api/tool/sftp"
 	"infra-ops/common/crypto"
 	"infra-ops/common/eventbus"
 	"infra-ops/common/middleware"
@@ -55,7 +65,7 @@ func Setup(staticFS fs.FS, deps Deps) *gin.Engine {
 	})
 
 	// 认证（login/logout 无需鉴权）
-	authHandler := api.NewAuthHandler(deps.Settings, deps.Sessions, auditRepo)
+	authHandler := auth.NewHandler(deps.Settings, deps.Sessions, auditRepo)
 	auth := r.Group("/api/auth")
 	{
 		auth.POST("/login", authHandler.Login)
@@ -72,7 +82,7 @@ func Setup(staticFS fs.FS, deps Deps) *gin.Engine {
 
 	// 凭据管理
 	credRepo := repo.NewCredentialRepo()
-	credHandler := api.NewCredentialHandler(credRepo, deps.CryptoService, deps.Bus)
+	credHandler := credential.NewHandler(credRepo, deps.CryptoService, deps.Bus)
 	cred := protected.Group("/credentials")
 	{
 		cred.GET("", credHandler.List)
@@ -83,7 +93,7 @@ func Setup(staticFS fs.FS, deps Deps) *gin.Engine {
 
 	// 主机管理
 	hostRepo := repo.NewHostRepo()
-	hostHandler := api.NewHostHandler(api.HostDeps{
+	hostHandler := host.NewHandler(host.Deps{
 		HostRepo:  hostRepo,
 		CredRepo:  credRepo,
 		CryptoS:   deps.CryptoService,
@@ -103,16 +113,16 @@ func Setup(staticFS fs.FS, deps Deps) *gin.Engine {
 		hosts.POST("/:id/test", hostHandler.Test)
 		hosts.GET("/:id/installs", hostHandler.Installs)
 		hosts.GET("/:id/clusters", hostHandler.Clusters)
-		hosts.GET("/:id/services", api.NewServiceHandler(hostHandler.TplRepo()).HostList)
+		hosts.GET("/:id/services", overview.NewServiceHandler(hostHandler.TplRepo()).HostList)
 	}
 
 	// 服务清单：总览聚合入口
-	protected.GET("/services", api.NewServiceHandler(hostHandler.TplRepo()).List)
+	protected.GET("/services", overview.NewServiceHandler(hostHandler.TplRepo()).List)
 
 	// 部署中心
 	deployRepo := repo.NewDeployRepo()
 	scheduleRepo := repo.NewDeployScheduleRepo()
-	deployTplHandler := api.NewDeployTemplateHandler(deployRepo, scheduleRepo)
+	deployTplHandler := deploy.NewDeployTemplateHandler(deployRepo, scheduleRepo)
 	tpl := protected.Group("/deploy/templates")
 	{
 		tpl.GET("", deployTplHandler.List)
@@ -120,10 +130,10 @@ func Setup(staticFS fs.FS, deps Deps) *gin.Engine {
 		tpl.PUT("/:id", deployTplHandler.Update)
 		tpl.DELETE("/:id", deployTplHandler.Delete)
 	}
-	deployTaskHandler := api.NewDeployHandler(deployRepo, scheduleRepo, hostRepo, credRepo,
+	deployTaskHandler := deploy.NewDeployHandler(deployRepo, scheduleRepo, hostRepo, credRepo,
 		deps.CryptoService, deps.SSHClient, deps.Bus, auditRepo, deps.DeployConcurrency)
 	deployTaskHandler.StartScheduler()
-	deploySchedHandler := api.NewDeployScheduleHandler(scheduleRepo, deployRepo, deployTaskHandler)
+	deploySchedHandler := deploy.NewDeployScheduleHandler(scheduleRepo, deployRepo, deployTaskHandler)
 	protected.POST("/deploy/run", deployTaskHandler.Run)
 	protected.GET("/deploy/tasks", deployTaskHandler.Tasks)
 	protected.GET("/deploy/tasks/:id", deployTaskHandler.TaskDetail)
@@ -140,7 +150,7 @@ func Setup(staticFS fs.FS, deps Deps) *gin.Engine {
 	// 任务编排
 	orchRepo := repo.NewOrchestrationRepo()
 	orchLogRepo := repo.NewOrchestrationLogRepo()
-	orchHandler := api.NewOrchHandler(orchRepo, deployRepo, hostRepo, credRepo,
+	orchHandler := orchestration.NewOrchHandler(orchRepo, deployRepo, hostRepo, credRepo,
 		deps.CryptoService, deps.SSHClient, deps.Bus, auditRepo, orchLogRepo)
 	orch := protected.Group("/orchestrations")
 	{
@@ -154,7 +164,7 @@ func Setup(staticFS fs.FS, deps Deps) *gin.Engine {
 	protected.GET("/orchestration/runs/:id", orchHandler.RunsDetail)
 
 	// 套件部署
-	stackHandler := api.NewStackHandler(repo.NewStackRepo(), deployRepo, hostRepo, credRepo,
+	stackHandler := stack.NewStackHandler(repo.NewStackRepo(), deployRepo, hostRepo, credRepo,
 		deps.CryptoService, deps.SSHClient, deps.Bus, auditRepo, deps.DeployConcurrency)
 	stacks := protected.Group("/stacks")
 	{
@@ -176,7 +186,7 @@ func Setup(staticFS fs.FS, deps Deps) *gin.Engine {
 		stacks.POST("/instances/:id/verify", stackHandler.VerifyInstance)
 		stacks.GET("/instances/:id/ca", stackHandler.CaCert)
 		stacks.GET("/instances/:id/runs", stackHandler.InstanceRuns)
-		// 角色计划（docs/role-plan-design.md §4.5）
+		// 角色计划（docs/角色物化设计.md §4.5）
 		stacks.POST("/plan/preview", stackHandler.PlanPreview)
 		stacks.GET("/instances/:id/plan", stackHandler.GetPlan)
 		stacks.POST("/instances/:id/replan", stackHandler.ReplanPlan)
@@ -184,7 +194,7 @@ func Setup(staticFS fs.FS, deps Deps) *gin.Engine {
 
 	// 工具-镜像仓库（Docker Registry）
 	regRepo := repo.NewRegistryRepo()
-	regHandler := api.NewRegistryHandler(regRepo, deps.CryptoService)
+	regHandler := regapi.NewHandler(regRepo, deps.CryptoService)
 	reg := protected.Group("/registry")
 	{
 		reg.GET("", regHandler.List)
@@ -200,7 +210,8 @@ func Setup(staticFS fs.FS, deps Deps) *gin.Engine {
 
 	// 工具-Elasticsearch 连接与浏览
 	esRepo := repo.NewESRepo()
-	esHandler := api.NewESHandler(esRepo, deps.CryptoService)
+	esViewRepo := repo.NewESViewRepo()
+	esHandler := esapi.NewHandler(esRepo, deps.CryptoService).WithViewRepo(esViewRepo).WithAuditRepo(auditRepo)
 	es := protected.Group("/es")
 	{
 		es.GET("", esHandler.List)
@@ -211,14 +222,47 @@ func Setup(staticFS fs.FS, deps Deps) *gin.Engine {
 		es.GET("/:id/overview", esHandler.Overview)
 		es.GET("/:id/nodes", esHandler.Nodes)
 		es.GET("/:id/indices", esHandler.Indices)
+		es.GET("/:id/indices/:index/mapping", esHandler.IndexMapping)
 		es.POST("/:id/index", esHandler.CreateIndex)
 		es.DELETE("/:id/index/:index", esHandler.DeleteIndex)
-		es.POST("/:id/search", esHandler.Search)
+		// 检索（语义已变更：view_id + kql，内存分页；§14.4/§14.5）
+		es.POST("/:id/search", esHandler.SearchKQL)
+		es.POST("/:id/search/page", esHandler.SearchPage)
+		es.POST("/:id/kql/validate", esHandler.ValidateKQL)
+		// 数据视图
+		es.POST("/:id/index-pattern/probe", esHandler.Probe)
+		es.GET("/:id/views", esHandler.ListViews)
+		es.POST("/:id/views", esHandler.CreateView)
+		es.GET("/:id/views/:vid", esHandler.GetView)
+		es.PUT("/:id/views/:vid", esHandler.UpdateView)
+		es.DELETE("/:id/views/:vid", esHandler.DeleteView)
+		es.POST("/:id/views/:vid/refresh", esHandler.RefreshView)
+		// 分析（去重计数 / 图状）
+		es.POST("/:id/analyze/distinct", esHandler.AnalyzeDistinct)
+		es.POST("/:id/analyze/chart", esHandler.AnalyzeChart)
+		// 生命周期（W1–W4）
+		es.GET("/:id/ilm/policies", esHandler.ListILMPolicies)
+		es.GET("/:id/ilm/policies/:name", esHandler.GetILMPolicy)
+		es.PUT("/:id/ilm/policies/:name", esHandler.PutILMPolicy)
+		es.DELETE("/:id/ilm/policies/:name", esHandler.DeleteILMPolicy)
+		es.GET("/:id/ilm/explain", esHandler.ExplainILM)
+		es.POST("/:id/ilm/retry", esHandler.RetryILM)
+		es.GET("/:id/data-streams", esHandler.ListDataStreams)
+		es.PUT("/:id/data-streams/:name/lifecycle", esHandler.PutDataStreamLifecycle)
+		// 索引模板 / 组件模板（W5–W8 + 模拟）
+		es.GET("/:id/index-templates", esHandler.ListIndexTemplates)
+		es.GET("/:id/index-templates/:name", esHandler.GetIndexTemplate)
+		es.PUT("/:id/index-templates/:name", esHandler.PutIndexTemplate)
+		es.DELETE("/:id/index-templates/:name", esHandler.DeleteIndexTemplate)
+		es.POST("/:id/index-templates/_simulate", esHandler.SimulateIndexTemplate)
+		es.GET("/:id/component-templates", esHandler.ListComponentTemplates)
+		es.PUT("/:id/component-templates/:name", esHandler.PutComponentTemplate)
+		es.DELETE("/:id/component-templates/:name", esHandler.DeleteComponentTemplate)
 	}
 
 	// 工具-SFTP 连接、浏览与文件传输
 	sftpRepo := repo.NewSFTPRepo()
-	sftpHandler := api.NewSFTPHandler(sftpRepo, deps.CryptoService)
+	sftpHandler := sftpapi.NewHandler(sftpRepo, deps.CryptoService)
 	sftp := protected.Group("/sftp")
 	{
 		sftp.GET("", sftpHandler.List)
@@ -235,11 +279,11 @@ func Setup(staticFS fs.FS, deps Deps) *gin.Engine {
 	}
 
 	// 总览 & 审计日志（审计日志统一走 /api/sse/audits 单一查询流）
-	miscHandler := api.NewMiscHandler(hostRepo, auditRepo)
+	miscHandler := overview.NewHandler(hostRepo, auditRepo)
 	protected.GET("/overview", miscHandler.Overview)
 
 	// SSE 推送
-	sseHandler := api.NewSSEHandler(deps.Bus, hostRepo, credRepo, auditRepo)
+	sseHandler := sse.NewHandler(deps.Bus, hostRepo, credRepo, auditRepo)
 	protected.GET("/sse/overview", sseHandler.Overview)
 	protected.GET("/sse/hosts", sseHandler.HostStatus)
 	protected.GET("/sse/audits", sseHandler.Audits)

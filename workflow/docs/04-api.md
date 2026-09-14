@@ -180,3 +180,52 @@ type=private_key 时服务端解析公钥指纹存入 fingerprint 用于展示�
 `host.delete`、`host.test`、`host.batch_create`、`credential.create`、
 `credential.update`、`credential.delete`。
 detail 记录关键字段快照（脱敏后），由中间件在写响应成功后统一落库。
+
+## 14. 工具-Elasticsearch 控制台（任务 08）
+
+设计依据：docs/ES控制台设计.md（v1.4）。全部挂既有 /api/v1/es/:id 分组；
+检索/分析为只读语义；W1–W8 为登记的写操作（名称白名单 / 内置只读 4013 / 二次确认回显 / 落审计）。
+既有 POST /es/:id/index 与 DELETE /es/:id/index/:index 原样保留（§14.9）。
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | /es/:id/index-pattern/probe | 探测 index pattern（不落库） |
+| GET/POST | /es/:id/views | 视图列表 / 创建（创建即同步字段） |
+| GET/PUT/DELETE | /es/:id/views/:vid | 视图详情（含字段表）/ 更新 / 删除 |
+| POST | /es/:id/views/:vid/refresh | 手动刷新单视图（同步、立即落库） |
+| POST | /es/:id/kql/validate | KQL 只校验不执行（恒 200，ok:false 带位置） |
+| POST | /es/:id/search | 检索：view_id+kql+start+end，一次拉满 1000 条入内存，回 result_id |
+| POST | /es/:id/search/page | 内存分页（不访问 ES；4011 失效 / 4005 越界） |
+| POST | /es/:id/analyze/distinct | 去重计数（cardinality+terms，全量匹配集） |
+| POST | /es/:id/analyze/chart | 图状分析（dim1/dim2/metric） |
+| GET/PUT/DELETE | /es/:id/ilm/policies(/:name) | ILM 策略列表/详情/覆盖(W1)/删除(W2) |
+| GET | /es/:id/ilm/explain?pattern= | 索引 ILM 状态（接受 pattern） |
+| POST | /es/:id/ilm/retry | 重试卡住步骤（W3，仅具体索引名） |
+| GET | /es/:id/data-streams | 数据流列表 |
+| PUT | /es/:id/data-streams/:name/lifecycle | 设置 DLM 保留期（W4） |
+| GET/PUT/DELETE | /es/:id/index-templates(/:name) | 索引模板（W5/W6） |
+| POST | /es/:id/index-templates/_simulate | 模板模拟预览（只读） |
+| GET/PUT/DELETE | /es/:id/component-templates(/:name) | 组件模板（W7/W8） |
+
+### ES 控制台错误码 4001–4015
+
+| code | 含义 | HTTP |
+|------|------|------|
+| 4001 | KQL 语法错误（message 含位置，data 可带 pos/len） | 400 |
+| 4002 | KQL 语义错误（字段不存在 / 算子与字段类型不匹配） | 400 |
+| 4003 | 视图不存在 / 索引不存在 | 400 |
+| 4004 | 未探测到可用时间字段，或视图字段表为空需先刷新 | 400 |
+| 4005 | 翻页越界：from+size 超出已缓存结果窗口（1000 条） | 400 |
+| 4006 | 索引匹配未命中任何索引或数据流 | 400 |
+| 4007 | 视图名称在同一 ES 连接内重复 | 409 |
+| 4008 | 视图正在同步中，无法重复刷新 | 409 |
+| 4009 | 时间字段在匹配集合部分成员中缺失或类型不一致 | 400 |
+| 4010 | 时间参数非法（唯一接受体 YYYY-MM-DD HH:mm:ss 字符串，UTC+8） | 400 |
+| 4011 | 结果集缓存失效（result_id 不匹配） | 409 |
+| 4012 | 分析参数非法（不可聚合 / 类型不符 / 桶数超限） | 400 |
+| 4013 | 目标为 ES 内置（managed）策略或模板，只读 | 403 |
+| 4014 | 生命周期策略仍被索引引用，ES 拒绝删除（回显原始报错） | 409 |
+| 4015 | 资源名称非法（空 / 含 * , ? / 以 _ 或 . 开头） | 400 |
+
+时间语义：界面展示、界面输入、请求体三处均为字符串 YYYY-MM-DD HH:mm:ss（UTC+8），
+后端统一转毫秒（api/tool/es/timeparse.go 唯一入口），区间恒为下半开 [start, end)。

@@ -1,0 +1,78 @@
+{
+  "key": "nacos",
+  "name": "Nacos",
+  "description": "一次成型部署 Nacos 集群。指定一台引导节点，首节点自动部署 MySQL 并初始化 nacos 库，其余节点经 NACOS_SERVERS（全节点 ip:port）组集群；host 网络，控制台/gRPC 端口直通宿主机。",
+  "requires_docker": true,
+  "category": "service",
+  "ha_support": false,
+  "modes": [
+    {
+      "key": "cluster",
+      "label": "集群",
+      "description": "1 引导节点（含 MySQL）+ N 成员，全节点写同一 MySQL，NACOS_SERVERS 自动枚举全部节点，NACOS_AUTH_TOKEN 全节点一致。",
+      "min_hosts": 1,
+      "host_hint": "至少 1 台；多节点请指定一台引导节点（首台自动部署共享 MySQL）",
+      "has_bootstrap": false,
+      "assign_master": true,
+      "default_home_dir": "/data/nacos"
+    }
+  ],
+  "shared_vars": [
+    {
+      "name": "image",
+      "label": "Nacos 镜像",
+      "default": "nacos/nacos-server:v2.3.2",
+      "required": true
+    },
+    {
+      "name": "cluster_name",
+      "label": "集群名",
+      "default": "nacos-cluster",
+      "required": true
+    },
+    {
+      "name": "nacos_token",
+      "label": "Nacos Auth Token（≥32 字符，全节点一致）",
+      "default": "nacos-cluster-auth-token-0123456789abcdef",
+      "required": true
+    },
+    {
+      "name": "db_username",
+      "label": "数据库用户名",
+      "default": "nacos",
+      "required": true
+    },
+    {
+      "name": "db_password",
+      "label": "数据库密码",
+      "default": "",
+      "required": true
+    },
+    {
+      "name": "db_host",
+      "label": "外部 MySQL 地址（host[:port]，留空自动在首节点部署）",
+      "default": "",
+      "required": false
+    },
+    {
+      "name": "mysql_image",
+      "label": "MySQL 镜像（自动部署时用）",
+      "default": "mysql:8.0",
+      "required": true
+    }
+  ],
+  "host_vars": [
+    {
+      "name": "port",
+      "label": "Nacos HTTP 端口",
+      "default": "8848",
+      "required": true
+    },
+    {
+      "name": "home_dir",
+      "label": "服务主目录",
+      "default": "/data/nacos",
+      "required": true
+    }
+  ]
+}

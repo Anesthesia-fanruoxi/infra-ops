@@ -1,0 +1,1 @@
+NO_SCRIPT: 套件 powerjob 模式 cluster 没有 bootstrap 脚本

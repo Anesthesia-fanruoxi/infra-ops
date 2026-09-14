@@ -1,0 +1,1 @@
+NO_SCRIPT: 套件 elasticsearch 模式 cluster 没有 scale_out 脚本

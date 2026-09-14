@@ -1,6 +1,6 @@
 # 任务 05 · 大数据底座全组件高可用 — frontend.md（前端执行）
 
-> 设计依据：`docs/bigdata-ha-design.md` §三（前端修改逻辑）。
+> 设计依据：`docs/大数据底座高可用设计.md` §三（前端修改逻辑）。
 > 范围：`template/static/pages/stacks-forms.js`、`stacks.js`、`style.css`。
 > 非HA 模式交互必须与现状零差异（回归红线）。
 

@@ -40,3 +40,18 @@ func FilterEmpty(list []string) []string {
 	}
 	return out
 }
+
+// SplitLogLines 按行拆分脚本输出块：去除 \r，跳过空行。
+func SplitLogLines(chunk string) []string {
+	if chunk == "" {
+		return nil
+	}
+	out := []string{}
+	for _, line := range strings.Split(chunk, "\n") {
+		line = strings.TrimRight(line, "\r")
+		if line != "" {
+			out = append(out, line)
+		}
+	}
+	return out
+}

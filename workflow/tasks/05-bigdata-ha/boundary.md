@@ -16,8 +16,8 @@ template/static/pages/stacks-forms.js # 套件卡片开关/bool 渲染/显隐联
 template/static/style.css             # 仅追加/扩展相关样式（走 CSS 变量）
 store/stacks/bigdata/**               # node.sh、bootstrap.sh、configs/**（仅此套件）
 script/check_bigdata_tpl.py           # 渲染校验扩展
-docs/bigdata-stack.md                 # 用户侧使用文档
-docs/bigdata-ha-design.md             # 实施中同步修订设计文档
+docs/大数据底座套件设计.md                 # 用户侧使用文档
+docs/大数据底座高可用设计.md             # 实施中同步修订设计文档
 workflow/tasks/05-bigdata-ha/**       # 本任务执行文档进度记录
 workflow/workflow.md                  # 仅勾选本任务步骤 [x]
 ```

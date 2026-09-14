@@ -1,0 +1,96 @@
+{
+  "key": "elfk",
+  "name": "ELFK 日志套件",
+  "description": "一体化部署 Elasticsearch + Logstash + Filebeat + Kibana：ES 为 cluster 拓扑（1 引导主节点 + N 数据节点），Kibana 随引导机部署，Logstash 默认落第 2 台（可用 logstash_host 指定），Filebeat 部署在全部成员上采集容器与系统日志。",
+  "requires_docker": true,
+  "category": "platform",
+  "ha_support": false,
+  "modes": [
+    {
+      "key": "standard",
+      "label": "标准编排",
+      "description": "ES 引导主节点 + N 数据节点；Kibana 自动随引导机；Logstash 单点（默认第 2 台）；Filebeat 全员。",
+      "min_hosts": 3,
+      "host_hint": "至少 3 台（建议 5 台：1 引导 ES+Kibana、1 Logstash、其余 ES 数据节点），并指定一台引导主节点",
+      "has_bootstrap": false,
+      "assign_master": true,
+      "default_home_dir": "/data/elfk/es"
+    }
+  ],
+  "shared_vars": [
+    {
+      "name": "cluster_name",
+      "label": "ES 集群名",
+      "default": "elfk-cluster",
+      "required": true
+    },
+    {
+      "name": "image_es",
+      "label": "Elasticsearch 镜像",
+      "default": "elasticsearch:9.5.3",
+      "required": true
+    },
+    {
+      "name": "image_kibana",
+      "label": "Kibana 镜像",
+      "default": "kibana:9.5.3",
+      "required": true
+    },
+    {
+      "name": "image_logstash",
+      "label": "Logstash 镜像",
+      "default": "logstash:9.5.3",
+      "required": true
+    },
+    {
+      "name": "image_filebeat",
+      "label": "Filebeat 镜像",
+      "default": "filebeat:9.5.3",
+      "required": true
+    },
+    {
+      "name": "kibana_port",
+      "label": "Kibana 端口",
+      "default": "5601",
+      "required": true
+    },
+    {
+      "name": "transport_port",
+      "label": "ES Transport 端口",
+      "default": "9300",
+      "required": true
+    },
+    {
+      "name": "logstash_beats_port",
+      "label": "Logstash Beats 端口",
+      "default": "5044",
+      "required": true
+    },
+    {
+      "name": "logstash_host",
+      "label": "Logstash 所在主机 IP（留空自动落第 2 台）",
+      "default": "",
+      "required": false
+    },
+    {
+      "name": "es_heap",
+      "label": "ES JVM 堆",
+      "default": "-Xms1g -Xmx1g",
+      "required": true
+    }
+  ],
+  "host_vars": [
+    {
+      "name": "port",
+      "label": "ES HTTP 端口",
+      "default": "9200",
+      "required": true
+    },
+    {
+      "name": "home_dir",
+      "label": "ES 数据目录",
+      "default": "/data/elfk/es",
+      "required": true
+    }
+  ]
+}

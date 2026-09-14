@@ -1,0 +1,173 @@
+{
+  "case": "kafka_zk_ui",
+  "stack_key": "kafka",
+  "mode": "zk",
+  "op": "create",
+  "role_plan": {
+    "rev": 1,
+    "op": "create",
+    "generated_at": "",
+    "generated_by": "auto",
+    "ha": false,
+    "hosts": [
+      {
+        "host_id": 901,
+        "host_name": "sn10-0-1-1",
+        "host_ip": "10.0.1.1",
+        "seq": 1,
+        "roles": [
+          {
+            "comp": "kafka",
+            "role": "zk",
+            "label": "ZooKeeper",
+            "source": "auto",
+            "scope": "all"
+          },
+          {
+            "comp": "kafka",
+            "role": "broker",
+            "label": "Broker",
+            "source": "auto",
+            "scope": "all"
+          },
+          {
+            "comp": "kafka",
+            "role": "ui",
+            "label": "Kafka UI",
+            "source": "auto",
+            "scope": "aux"
+          }
+        ]
+      },
+      {
+        "host_id": 902,
+        "host_name": "sn10-0-1-2",
+        "host_ip": "10.0.1.2",
+        "seq": 2,
+        "roles": [
+          {
+            "comp": "kafka",
+            "role": "zk",
+            "label": "ZooKeeper",
+            "source": "auto",
+            "scope": "all"
+          },
+          {
+            "comp": "kafka",
+            "role": "broker",
+            "label": "Broker",
+            "source": "auto",
+            "scope": "all"
+          }
+        ]
+      },
+      {
+        "host_id": 903,
+        "host_name": "sn10-0-1-3",
+        "host_ip": "10.0.1.3",
+        "seq": 3,
+        "roles": [
+          {
+            "comp": "kafka",
+            "role": "zk",
+            "label": "ZooKeeper",
+            "source": "auto",
+            "scope": "all"
+          },
+          {
+            "comp": "kafka",
+            "role": "broker",
+            "label": "Broker",
+            "source": "auto",
+            "scope": "all"
+          }
+        ]
+      }
+    ],
+    "masters": null,
+    "warnings": [
+      "Kafka UI 部署在首台 10.0.1.1"
+    ]
+  },
+  "services": [
+    {
+      "host_id": 901,
+      "service_name": "Kafka Broker",
+      "url": "kafka://10.0.1.1:9092",
+      "web": false,
+      "instance_id": 0
+    },
+    {
+      "host_id": 901,
+      "service_name": "ZooKeeper",
+      "url": "zookeeper://10.0.1.1:2181",
+      "web": false,
+      "instance_id": 0
+    },
+    {
+      "host_id": 902,
+      "service_name": "Kafka Broker",
+      "url": "kafka://10.0.1.2:9092",
+      "web": false,
+      "instance_id": 0
+    },
+    {
+      "host_id": 902,
+      "service_name": "ZooKeeper",
+      "url": "zookeeper://10.0.1.2:2181",
+      "web": false,
+      "instance_id": 0
+    },
+    {
+      "host_id": 903,
+      "service_name": "Kafka Broker",
+      "url": "kafka://10.0.1.3:9092",
+      "web": false,
+      "instance_id": 0
+    },
+    {
+      "host_id": 903,
+      "service_name": "ZooKeeper",
+      "url": "zookeeper://10.0.1.3:2181",
+      "web": false,
+      "instance_id": 0
+    }
+  ],
+  "installs": [
+    {
+      "host_id": 901,
+      "template_id": 0,
+      "template_name": "套件:kafka/zk",
+      "task_id": 0
+    },
+    {
+      "host_id": 902,
+      "template_id": 0,
+      "template_name": "套件:kafka/zk",
+      "task_id": 0
+    },
+    {
+      "host_id": 903,
+      "template_id": 0,
+      "template_name": "套件:kafka/zk",
+      "task_id": 0
+    }
+  ],
+  "endpoints": [
+    {
+      "name": "Kafka",
+      "url": "tcp://10.0.1.1",
+      "role": "node"
+    },
+    {
+      "name": "Kafka",
+      "url": "tcp://10.0.1.2",
+      "role": "node"
+    },
+    {
+      "name": "Kafka",
+      "url": "tcp://10.0.1.3",
+      "role": "node"
+    }
+  ]
+}

@@ -1,0 +1,1 @@
+NO_SCRIPT: 套件 elfk 模式 standard 没有 scale_out 脚本

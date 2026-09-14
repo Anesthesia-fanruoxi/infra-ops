@@ -1,0 +1,124 @@
+{
+  "key": "kafka",
+  "name": "Kafka",
+  "description": "一次成型部署 Kafka 集群：KRaft 内置仲裁（免 ZooKeeper）或传统 ZooKeeper 模式。节点间经宿主机 IP 互通，advertised.listeners 自动指向本机；局域网明文监听，未启用 SASL。",
+  "requires_docker": true,
+  "category": "service",
+  "ha_support": false,
+  "modes": [
+    {
+      "key": "kraft",
+      "label": "KRaft 集群",
+      "description": "Kafka 3.x 内置仲裁，broker+controller 混部，每台一容器，免 ZooKeeper；首次启动自动 format 存储。",
+      "min_hosts": 1,
+      "host_hint": "生产建议 ≥3 台且为奇数（controller 仲裁）",
+      "has_bootstrap": false,
+      "assign_master": false,
+      "default_home_dir": "/data/kafka-kraft"
+    },
+    {
+      "key": "zk",
+      "label": "ZooKeeper 集群",
+      "description": "每台同时部署一个 ZooKeeper 节点组成 ensemble，外加 Kafka broker，共 2 容器。",
+      "min_hosts": 1,
+      "host_hint": "生产建议 3 或 5 台奇数（ZK 仲裁）",
+      "has_bootstrap": false,
+      "assign_master": false,
+      "default_home_dir": "/data/kafka-zk"
+    }
+  ],
+  "shared_vars": [
+    {
+      "name": "image",
+      "label": "Kafka 镜像",
+      "default": "apache/kafka:3.7.0",
+      "required": true
+    },
+    {
+      "name": "mem",
+      "label": "JVM 堆内存",
+      "default": "1g",
+      "required": true
+    },
+    {
+      "name": "controller_port",
+      "label": "Controller 端口",
+      "default": "9093",
+      "required": true,
+      "modes": [
+        "kraft"
+      ]
+    },
+    {
+      "name": "cluster_id",
+      "label": "集群 ID（留空自动生成）",
+      "default": "",
+      "required": false,
+      "modes": [
+        "kraft"
+      ]
+    },
+    {
+      "name": "zk_image",
+      "label": "ZooKeeper 镜像",
+      "default": "zookeeper:3.9",
+      "required": true,
+      "modes": [
+        "zk"
+      ]
+    },
+    {
+      "name": "zk_port",
+      "label": "ZK 客户端端口",
+      "default": "2181",
+      "required": true,
+      "modes": [
+        "zk"
+      ]
+    },
+    {
+      "name": "enable_ui",
+      "label": "附带部署 KafkaUI（yes/no）",
+      "default": "no",
+      "required": true
+    },
+    {
+      "name": "ui_image",
+      "label": "KafkaUI 镜像",
+      "default": "provectuslabs/kafka-ui:v0.7.2",
+      "required": true
+    },
+    {
+      "name": "ui_port",
+      "label": "KafkaUI 端口",
+      "default": "8080",
+      "required": true
+    }
+  ],
+  "host_vars": [
+    {
+      "name": "port",
+      "label": "Broker 端口",
+      "default": "9092",
+      "required": true
+    },
+    {
+      "name": "home_dir",
+      "label": "服务主目录",
+      "default": "/data/kafka-kraft",
+      "required": true,
+      "modes": [
+        "kraft"
+      ]
+    },
+    {
+      "name": "home_dir",
+      "label": "服务主目录",
+      "default": "/data/kafka-zk",
+      "required": true,
+      "modes": [
+        "zk"
+      ]
+    }
+  ]
+}

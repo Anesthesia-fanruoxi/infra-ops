@@ -1,0 +1,193 @@
+{
+  "key": "bigdata",
+  "name": "大数据底座",
+  "description": "组合套件：一组机器按主/从角色一次装齐。HDFS 存储（3.3.6）必选打底，ZooKeeper（3.9）/ YARN / Spark（3.5.1）/ Flink（1.19.1）/ Hive（4.0.0）/ HBase（2.5.10）/ Trino（435）按需勾选。镜像均内置 JRE/JDK（基线 Java 11），主机无需安装 JDK。",
+  "requires_docker": true,
+  "category": "platform",
+  "ha_support": true,
+  "modes": [
+    {
+      "key": "cluster",
+      "label": "组合部署",
+      "description": "HDFS 必选（1 NameNode + N DataNode）；可选 ZooKeeper、YARN、Spark、Flink、Hive、HBase、Trino，按组件指定主角色主机，一次部署成型。",
+      "min_hosts": 2,
+      "host_hint": "至少 2 台；勾选主机后按组件指定 NameNode / Master / JobManager 等主角色",
+      "has_bootstrap": true,
+      "assign_master": true,
+      "default_home_dir": "/data/bigdata"
+    }
+  ],
+  "shared_vars": [
+    {
+      "name": "components",
+      "label": "部署组件",
+      "default": "",
+      "required": true
+    },
+    {
+      "name": "ha",
+      "label": "高可用",
+      "default": "false",
+      "type": "bool",
+      "required": false
+    },
+    {
+      "name": "hdfs_nameservice",
+      "label": "HDFS HA · Nameservice ID",
+      "default": "ns1",
+      "required": false
+    },
+    {
+      "name": "jn_http_port",
+      "label": "JournalNode HTTP 端口",
+      "default": "8484",
+      "required": false
+    },
+    {
+      "name": "jn_rpc_port",
+      "label": "JournalNode RPC 端口",
+      "default": "8485",
+      "required": false
+    },
+    {
+      "name": "hive_db_image",
+      "label": "Hive HA · 元数据库镜像",
+      "default": "mysql:8.4",
+      "required": false
+    },
+    {
+      "name": "hive_db_password",
+      "label": "Hive HA · 元数据库密码",
+      "default": "",
+      "required": false
+    },
+    {
+      "name": "image_registry",
+      "label": "私有镜像仓库前缀（选填，填后自动应用到下列全部镜像）",
+      "default": "",
+      "required": false
+    },
+    {
+      "name": "image",
+      "label": "Hadoop 镜像",
+      "default": "apache/hadoop:3.3.6",
+      "required": true
+    },
+    {
+      "name": "nn_rpc_port",
+      "label": "NameNode RPC 端口",
+      "default": "9000",
+      "required": true
+    },
+    {
+      "name": "replication",
+      "label": "HDFS 副本数",
+      "default": "2",
+      "required": true
+    },
+    {
+      "name": "image_zookeeper",
+      "label": "ZooKeeper 镜像",
+      "default": "zookeeper:3.9",
+      "required": true
+    },
+    {
+      "name": "nm_mem",
+      "label": "YARN · 每 NodeManager 可用内存(MB)",
+      "default": "8192",
+      "required": true
+    },
+    {
+      "name": "nm_vcores",
+      "label": "YARN · 每 NodeManager 可用核数",
+      "default": "4",
+      "required": true
+    },
+    {
+      "name": "image_spark",
+      "label": "Spark 镜像",
+      "default": "apache/spark:3.5.1",
+      "required": true
+    },
+    {
+      "name": "master_port",
+      "label": "Spark · Master RPC 端口",
+      "default": "7077",
+      "required": true
+    },
+    {
+      "name": "webui_port",
+      "label": "Spark · Master WebUI 端口",
+      "default": "8080",
+      "required": true
+    },
+    {
+      "name": "worker_cores",
+      "label": "Spark · 每 Worker 核数",
+      "default": "4",
+      "required": true
+    },
+    {
+      "name": "worker_mem",
+      "label": "Spark · 每 Worker 内存",
+      "default": "8g",
+      "required": true
+    },
+    {
+      "name": "image_flink",
+      "label": "Flink 镜像",
+      "default": "flink:1.19.1",
+      "required": true
+    },
+    {
+      "name": "jm_rpc_port",
+      "label": "Flink · JobManager RPC 端口",
+      "default": "6123",
+      "required": true
+    },
+    {
+      "name": "tm_slots",
+      "label": "Flink · 每 TaskManager Slots",
+      "default": "4",
+      "required": true
+    },
+    {
+      "name": "image_hive",
+      "label": "Hive 镜像",
+      "default": "apache/hive:4.0.0",
+      "required": true
+    },
+    {
+      "name": "image_hbase",
+      "label": "HBase 镜像",
+      "default": "openeuler/hbase:latest",
+      "required": true
+    },
+    {
+      "name": "image_trino",
+      "label": "Trino 镜像",
+      "default": "trinodb/trino:435",
+      "required": true
+    },
+    {
+      "name": "trino_http_port",
+      "label": "Trino · HTTP 端口",
+      "default": "8083",
+      "required": true
+    },
+    {
+      "name": "trino_mem",
+      "label": "Trino · JVM 最大堆",
+      "default": "4G",
+      "required": true
+    }
+  ],
+  "host_vars": [
+    {
+      "name": "home_dir",
+      "label": "服务主目录",
+      "default": "/data/bigdata",
+      "required": true
+    }
+  ]
+}

@@ -1,0 +1,121 @@
+{
+  "case": "kafka_kraft",
+  "stack_key": "kafka",
+  "mode": "kraft",
+  "op": "create",
+  "role_plan": {
+    "rev": 1,
+    "op": "create",
+    "generated_at": "",
+    "generated_by": "auto",
+    "ha": false,
+    "hosts": [
+      {
+        "host_id": 801,
+        "host_name": "sn10-0-1-1",
+        "host_ip": "10.0.1.1",
+        "seq": 1,
+        "roles": [
+          {
+            "comp": "kafka",
+            "role": "broker",
+            "label": "Broker + Controller（KRaft 仲裁）",
+            "source": "auto",
+            "scope": "all"
+          }
+        ]
+      },
+      {
+        "host_id": 802,
+        "host_name": "sn10-0-1-2",
+        "host_ip": "10.0.1.2",
+        "seq": 2,
+        "roles": [
+          {
+            "comp": "kafka",
+            "role": "broker",
+            "label": "Broker + Controller（KRaft 仲裁）",
+            "source": "auto",
+            "scope": "all"
+          }
+        ]
+      },
+      {
+        "host_id": 803,
+        "host_name": "sn10-0-1-3",
+        "host_ip": "10.0.1.3",
+        "seq": 3,
+        "roles": [
+          {
+            "comp": "kafka",
+            "role": "broker",
+            "label": "Broker + Controller（KRaft 仲裁）",
+            "source": "auto",
+            "scope": "all"
+          }
+        ]
+      }
+    ],
+    "masters": null
+  },
+  "services": [
+    {
+      "host_id": 801,
+      "service_name": "Kafka Broker",
+      "url": "kafka://10.0.1.1:9092",
+      "web": false,
+      "instance_id": 0
+    },
+    {
+      "host_id": 802,
+      "service_name": "Kafka Broker",
+      "url": "kafka://10.0.1.2:9092",
+      "web": false,
+      "instance_id": 0
+    },
+    {
+      "host_id": 803,
+      "service_name": "Kafka Broker",
+      "url": "kafka://10.0.1.3:9092",
+      "web": false,
+      "instance_id": 0
+    }
+  ],
+  "installs": [
+    {
+      "host_id": 801,
+      "template_id": 0,
+      "template_name": "套件:kafka/kraft",
+      "task_id": 0
+    },
+    {
+      "host_id": 802,
+      "template_id": 0,
+      "template_name": "套件:kafka/kraft",
+      "task_id": 0
+    },
+    {
+      "host_id": 803,
+      "template_id": 0,
+      "template_name": "套件:kafka/kraft",
+      "task_id": 0
+    }
+  ],
+  "endpoints": [
+    {
+      "name": "Kafka",
+      "url": "tcp://10.0.1.1",
+      "role": "node"
+    },
+    {
+      "name": "Kafka",
+      "url": "tcp://10.0.1.2",
+      "role": "node"
+    },
+    {
+      "name": "Kafka",
+      "url": "tcp://10.0.1.3",
+      "role": "node"
+    }
+  ]
+}

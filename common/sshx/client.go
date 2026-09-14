@@ -19,10 +19,10 @@ type HostKeyStore interface {
 
 // Client SSH 连接客户端。
 type Client struct {
-	timeout   time.Duration
-	hkStore   HostKeyStore
-	insecure  bool
-	mu        sync.Mutex
+	timeout  time.Duration
+	hkStore  HostKeyStore
+	insecure bool
+	mu       sync.Mutex
 }
 
 // NewClient 创建 SSH 客户端。
@@ -38,8 +38,8 @@ func NewClient(timeoutSec int, hkStore HostKeyStore, insecure bool) *Client {
 type DialConfig struct {
 	Addr       string // ip:port
 	Username   string
-	Password   string   // 密码认证
-	PrivateKey []byte   // 密钥认证（PEM 原文）
+	Password   string // 密码认证
+	PrivateKey []byte // 密钥认证（PEM 原文）
 }
 
 // Dial 建立 SSH 连接，返回 *ssh.Client（调用方负责 Close）。

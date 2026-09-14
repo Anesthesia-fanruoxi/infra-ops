@@ -2,6 +2,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
@@ -11,6 +12,7 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
+	esapi "infra-ops/api/tool/es"
 	icrypto "infra-ops/common/crypto"
 	"infra-ops/common/eventbus"
 	"infra-ops/common/middleware"
@@ -115,6 +117,9 @@ func main() {
 
 	// 部署日志保留清理：启动时立即执行一次，此后每 24h 一轮
 	go runRetentionLoop(settingsRepo)
+
+	// ES 数据视图异步同步：延迟 10s 先跑一次，此后每 4h 一轮
+	go esapi.NewViewSyncManager(cryptoSvc, repo.NewESRepo(), repo.NewESViewRepo()).Run(context.Background())
 
 	// 启动 HTTP 服务
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)

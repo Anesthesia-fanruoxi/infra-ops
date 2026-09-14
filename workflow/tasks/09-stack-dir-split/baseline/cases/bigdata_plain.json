@@ -1,0 +1,339 @@
+{
+  "case": "bigdata_plain",
+  "stack_key": "bigdata",
+  "mode": "cluster",
+  "op": "create",
+  "role_plan": {
+    "rev": 1,
+    "op": "create",
+    "generated_at": "",
+    "generated_by": "auto",
+    "ha": false,
+    "hosts": [
+      {
+        "host_id": 2001,
+        "host_name": "sn10-0-8-1",
+        "host_ip": "10.0.8.1",
+        "seq": 1,
+        "roles": [
+          {
+            "comp": "zookeeper",
+            "role": "zk",
+            "label": "ZooKeeper",
+            "source": "auto"
+          },
+          {
+            "comp": "hdfs",
+            "role": "nn1",
+            "label": "NameNode (Active)",
+            "source": "auto"
+          },
+          {
+            "comp": "hdfs",
+            "role": "jn",
+            "label": "JournalNode",
+            "source": "auto"
+          },
+          {
+            "comp": "hdfs",
+            "role": "dn",
+            "label": "DataNode",
+            "source": "auto",
+            "scope": "all"
+          },
+          {
+            "comp": "yarn",
+            "role": "rm1",
+            "label": "ResourceManager (Active)",
+            "source": "auto"
+          },
+          {
+            "comp": "yarn",
+            "role": "nm",
+            "label": "NodeManager",
+            "source": "auto",
+            "scope": "all"
+          }
+        ]
+      },
+      {
+        "host_id": 2002,
+        "host_name": "sn10-0-8-2",
+        "host_ip": "10.0.8.2",
+        "seq": 2,
+        "roles": [
+          {
+            "comp": "zookeeper",
+            "role": "zk",
+            "label": "ZooKeeper",
+            "source": "auto"
+          },
+          {
+            "comp": "hdfs",
+            "role": "jn",
+            "label": "JournalNode",
+            "source": "auto"
+          },
+          {
+            "comp": "hdfs",
+            "role": "dn",
+            "label": "DataNode",
+            "source": "auto",
+            "scope": "all"
+          },
+          {
+            "comp": "yarn",
+            "role": "nm",
+            "label": "NodeManager",
+            "source": "auto",
+            "scope": "all"
+          }
+        ]
+      },
+      {
+        "host_id": 2003,
+        "host_name": "sn10-0-8-3",
+        "host_ip": "10.0.8.3",
+        "seq": 3,
+        "roles": [
+          {
+            "comp": "zookeeper",
+            "role": "zk",
+            "label": "ZooKeeper",
+            "source": "auto"
+          },
+          {
+            "comp": "hdfs",
+            "role": "jn",
+            "label": "JournalNode",
+            "source": "auto"
+          },
+          {
+            "comp": "hdfs",
+            "role": "dn",
+            "label": "DataNode",
+            "source": "auto",
+            "scope": "all"
+          },
+          {
+            "comp": "yarn",
+            "role": "nm",
+            "label": "NodeManager",
+            "source": "auto",
+            "scope": "all"
+          }
+        ]
+      }
+    ],
+    "masters": {
+      "flink": "10.0.8.1",
+      "flink_jm2": "",
+      "hbase": "10.0.8.1",
+      "hbase_hm2": "",
+      "hdfs": "10.0.8.1",
+      "hdfs_jns": "10.0.8.1,10.0.8.2,10.0.8.3",
+      "hdfs_nn2": "",
+      "hive": "10.0.8.1",
+      "hive_db": "10.0.8.1",
+      "hive_hs2b": "",
+      "hive_ms2": "",
+      "spark": "10.0.8.1",
+      "spark_m2": "",
+      "yarn": "10.0.8.1",
+      "yarn_rm2": "",
+      "zookeeper_ips": "10.0.8.1,10.0.8.2,10.0.8.3"
+    },
+    "injected": {
+      "__flink_jm2_ip": "",
+      "__ha_core_props": "",
+      "__ha_hdfs_props": "",
+      "__ha_hive_jdo": "  \u003cproperty\u003e\n    \u003cname\u003ejavax.jdo.option.ConnectionURL\u003c/name\u003e\n    \u003cvalue\u003ejdbc:derby:;databaseName=/opt/hive/data/derby;create=true\u003c/value\u003e\n  \u003c/property\u003e\n",
+      "__ha_hive_ms": "",
+      "__ha_hive_zk": "",
+      "__ha_yarn_props": "",
+      "__hdfs_entry": "hdfs://10.0.8.1:9000",
+      "__hive_db_ip": "10.0.8.1",
+      "__hive_ms_uris": "thrift://10.0.8.1:9083",
+      "__hmaster2_ip": "",
+      "__hs2_ips": "10.0.8.1",
+      "__jn_ips": "10.0.8.1,10.0.8.2,10.0.8.3",
+      "__master_flink": "10.0.8.1",
+      "__master_hbase": "10.0.8.1",
+      "__master_hdfs": "10.0.8.1",
+      "__master_hive": "10.0.8.1",
+      "__master_spark": "10.0.8.1",
+      "__master_trino": "10.0.8.1",
+      "__master_yarn": "10.0.8.1",
+      "__ms_ips": "10.0.8.1",
+      "__nn1_ip": "10.0.8.1",
+      "__nn2_ip": "",
+      "__rm1_ip": "10.0.8.1",
+      "__rm2_ip": "",
+      "__spark_m2_ip": "",
+      "__zk_ips": "10.0.8.1,10.0.8.2,10.0.8.3"
+    },
+    "warnings": [
+      "JournalNode 由自动分配落到前 3 台（10.0.8.1, 10.0.8.2, 10.0.8.3）",
+      "ZooKeeper 由自动分配落到前 3 台（10.0.8.1,10.0.8.2,10.0.8.3）"
+    ]
+  },
+  "services": [
+    {
+      "host_id": 2001,
+      "service_name": "HDFS NameNode",
+      "url": "http://10.0.8.1:9870",
+      "web": true,
+      "instance_id": 0
+    },
+    {
+      "host_id": 2001,
+      "service_name": "YARN ResourceManager",
+      "url": "http://10.0.8.1:8088",
+      "web": true,
+      "instance_id": 0
+    },
+    {
+      "host_id": 2001,
+      "service_name": "ZooKeeper",
+      "url": "zookeeper://10.0.8.1:2181",
+      "web": false,
+      "instance_id": 0
+    },
+    {
+      "host_id": 2002,
+      "service_name": "HDFS DataNode",
+      "url": "http://10.0.8.2:9864",
+      "web": false,
+      "instance_id": 0
+    },
+    {
+      "host_id": 2002,
+      "service_name": "YARN NodeManager",
+      "url": "http://10.0.8.2:8042",
+      "web": true,
+      "instance_id": 0
+    },
+    {
+      "host_id": 2002,
+      "service_name": "ZooKeeper",
+      "url": "zookeeper://10.0.8.2:2181",
+      "web": false,
+      "instance_id": 0
+    },
+    {
+      "host_id": 2003,
+      "service_name": "HDFS DataNode",
+      "url": "http://10.0.8.3:9864",
+      "web": false,
+      "instance_id": 0
+    },
+    {
+      "host_id": 2003,
+      "service_name": "YARN NodeManager",
+      "url": "http://10.0.8.3:8042",
+      "web": true,
+      "instance_id": 0
+    },
+    {
+      "host_id": 2003,
+      "service_name": "ZooKeeper",
+      "url": "zookeeper://10.0.8.3:2181",
+      "web": false,
+      "instance_id": 0
+    }
+  ],
+  "installs": [
+    {
+      "host_id": 2001,
+      "template_id": 0,
+      "template_name": "套件:bigdata/cluster(hdfs,yarn,zookeeper)",
+      "task_id": 0
+    },
+    {
+      "host_id": 2002,
+      "template_id": 0,
+      "template_name": "套件:bigdata/cluster(hdfs,yarn,zookeeper)",
+      "task_id": 0
+    },
+    {
+      "host_id": 2003,
+      "template_id": 0,
+      "template_name": "套件:bigdata/cluster(hdfs,yarn,zookeeper)",
+      "task_id": 0
+    }
+  ],
+  "endpoints": [
+    {
+      "name": "HDFS NameNode",
+      "component": "hdfs",
+      "url": "http://10.0.8.1:9870",
+      "role": "master"
+    },
+    {
+      "name": "HDFS JournalNode",
+      "component": "hdfs",
+      "url": "http://10.0.8.1:8485",
+      "role": "master"
+    },
+    {
+      "name": "YARN RM",
+      "component": "yarn",
+      "url": "http://10.0.8.1:8088",
+      "role": "master"
+    },
+    {
+      "name": "ZooKeeper",
+      "component": "zookeeper",
+      "url": "zookeeper://10.0.8.1:2181",
+      "role": "master"
+    },
+    {
+      "name": "HDFS JournalNode",
+      "component": "hdfs",
+      "url": "http://10.0.8.2:8485",
+      "role": "worker"
+    },
+    {
+      "name": "HDFS DataNode",
+      "component": "hdfs",
+      "url": "http://10.0.8.2:9864",
+      "role": "worker"
+    },
+    {
+      "name": "YARN NM",
+      "component": "yarn",
+      "url": "http://10.0.8.2:8042",
+      "role": "worker"
+    },
+    {
+      "name": "ZooKeeper",
+      "component": "zookeeper",
+      "url": "zookeeper://10.0.8.2:2181",
+      "role": "worker"
+    },
+    {
+      "name": "HDFS JournalNode",
+      "component": "hdfs",
+      "url": "http://10.0.8.3:8485",
+      "role": "worker"
+    },
+    {
+      "name": "HDFS DataNode",
+      "component": "hdfs",
+      "url": "http://10.0.8.3:9864",
+      "role": "worker"
+    },
+    {
+      "name": "YARN NM",
+      "component": "yarn",
+      "url": "http://10.0.8.3:8042",
+      "role": "worker"
+    },
+    {
+      "name": "ZooKeeper",
+      "component": "zookeeper",
+      "url": "zookeeper://10.0.8.3:2181",
+      "role": "worker"
+    }
+  ]
+}

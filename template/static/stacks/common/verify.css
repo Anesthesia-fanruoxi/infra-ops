@@ -1,0 +1,157 @@
+/* 套件部署页 · 探活对话框骨架样式（common/verify.css）。
+   迁自 style.css 的 .sv-* 规则（.sv- -> .stk-vf-），与 common/verify-dialog.js 配套；
+   数据由各套件 hooks 提供，本文件不含任何套件专属选择器。 */
+
+
+/* ---- 摘要横幅 ---- */
+.stk-vf-banner { display: flex; align-items: center; gap: 14px; padding: 18px 20px; border-radius: 12px; margin-bottom: 16px; }
+
+.stk-vf-banner.is-ok { background: linear-gradient(135deg, #ecfdf5 0%, #e8f7ee 100%); border: 1px solid #bbf7d0; }
+
+.stk-vf-banner.is-fail { background: linear-gradient(135deg, #fef2f2 0%, #fdecec 100%); border: 1px solid #fecaca; }
+
+.stk-vf-banner-icon { flex-shrink: 0; width: 44px; height: 44px; border-radius: 50%; display: flex; align-items: center; justify-content: center; }
+
+.stk-vf-banner.is-ok .stk-vf-banner-icon { background: var(--ok); color: #fff; }
+
+.stk-vf-banner.is-fail .stk-vf-banner-icon { background: var(--danger); color: #fff; }
+
+.stk-vf-banner-text { flex: 1; min-width: 0; }
+
+.stk-vf-banner-summary { font-size: 16px; font-weight: 700; color: var(--text-main); line-height: 1.4; }
+
+.stk-vf-banner-meta { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; font-size: 12px; color: var(--text-sub); }
+
+.stk-vf-banner-hint { color: var(--text-faint); }
+
+
+/* ---- 通用区块 ---- */
+.stk-vf-section { margin-bottom: 16px; }
+
+.stk-vf-section-title { font-size: 12px; font-weight: 600; color: var(--text-sub); margin-bottom: 8px; display: flex; align-items: center; gap: 8px; }
+
+.stk-vf-section-count { font-size: 11px; font-weight: 400; color: var(--text-faint); }
+
+.stk-vf-empty { padding: 16px; text-align: center; color: var(--text-faint); font-size: 12px; }
+
+.stk-vf-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 16px; }
+
+.stk-vf-tab { padding: 5px 14px; border-radius: 8px; font-size: 12px; font-weight: 600; color: var(--text-sub); background: var(--bg-faint); border: 1px solid var(--border); cursor: pointer; transition: all .15s; user-select: none; }
+
+.stk-vf-tab:hover { color: var(--brand); border-color: var(--brand-soft); }
+
+.stk-vf-tab.active { color: #fff; background: var(--brand); border-color: var(--brand); }
+
+
+/* ---- 接入地址(按主机分组) ---- */
+.stk-vf-ep-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 10px; }
+
+.stk-vf-ep-host-card { border: 1px solid var(--border); border-radius: 10px; background: var(--bg-card); overflow: hidden; transition: box-shadow .15s; }
+
+.stk-vf-ep-host-card:hover { box-shadow: 0 2px 10px rgba(15,23,42,.07); }
+
+.stk-vf-ep-host-header { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: var(--bg-faint); border-bottom: 1px solid var(--border); }
+
+.stk-vf-ep-host-role { flex-shrink: 0; padding: 1px 7px; border-radius: 4px; font-size: 10px; font-weight: 700; }
+
+.stk-vf-ep-host-role.is-master { background: var(--brand-soft); color: var(--brand); }
+
+.stk-vf-ep-host-role.is-replica { background: var(--ok-soft); color: var(--ok); }
+
+.stk-vf-ep-host-ip { font-size: 13px; font-weight: 600; color: var(--text-main); }
+
+.stk-vf-ep-host-eps { display: flex; flex-direction: column; gap: 4px; padding: 8px 12px; }
+
+.stk-vf-ep-mini { display: flex; align-items: center; gap: 8px; }
+
+.stk-vf-ep-mini + .stk-vf-ep-mini { border: none; }
+
+.stk-vf-ep-badge { flex-shrink: 0; min-width: 44px; padding: 3px 6px; border-radius: 6px; font-size: 9px; font-weight: 700; text-align: center; letter-spacing: .5px; color: #fff; }
+
+.stk-vf-ep-badge.proto-redis { background: #dc382d; }
+
+.stk-vf-ep-badge.proto-sentinel { background: #8b5cf6; }
+
+.stk-vf-ep-badge.proto-http { background: var(--brand); }
+
+.stk-vf-ep-badge.proto-zk { background: #f59e0b; }
+
+.stk-vf-ep-badge.proto-mongo { background: #059669; }
+
+.stk-vf-ep-badge.proto-kafka { background: #6366f1; }
+
+.stk-vf-ep-badge.proto-mq { background: #d97706; }
+
+.stk-vf-ep-badge.proto-tcp { background: var(--neutral); }
+
+.stk-vf-ep-mini-url { flex: 1; min-width: 0; font-size: 12px; color: var(--text-sub); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.stk-vf-ep-copy { flex-shrink: 0; width: 24px; height: 24px; border-radius: 5px; display: flex; align-items: center; justify-content: center; color: var(--text-faint); cursor: pointer; transition: background .15s, color .15s; }
+
+.stk-vf-ep-copy:hover { background: var(--bg-hover); color: var(--brand); }
+
+
+/* ---- 访问密码 ---- */
+.stk-vf-pass-row { display: inline-flex; align-items: center; gap: 10px; padding: 6px 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-faint); }
+
+.stk-vf-pass-dots { font-size: 14px; color: var(--text-sub); letter-spacing: 2px; }
+
+.stk-vf-pass-label { font-size: 11px; color: var(--ok); font-weight: 600; }
+
+.stk-vf-pass-copy { flex-shrink: 0; width: 26px; height: 26px; border-radius: 6px; display: flex; align-items: center; justify-content: center; color: var(--text-faint); cursor: pointer; transition: background .15s, color .15s; }
+
+.stk-vf-pass-copy:hover { background: var(--bg-hover); color: var(--brand); }
+
+
+/* ---- 节点状态表格 ---- */
+.stk-vf-node-table { border-radius: 8px; overflow: hidden; }
+
+.stk-vf-node-table .el-table__inner-wrapper { border: none; }
+
+.stk-vf-node-table .el-table__cell { border-right: none !important; border-bottom: none !important; }
+
+.stk-vf-node-table thead .el-table__cell { border-bottom: 2px solid var(--border) !important; background: var(--bg-faint); font-weight: 600; }
+
+.stk-vf-node-table tbody tr:hover > .el-table__cell { background: var(--bg-hover) !important; }
+
+.stk-vf-node-table::before, .stk-vf-node-table .el-table__border-left-patch { display: none; }
+
+/* 单元格内容统一省略号：长内容不再外溢覆盖相邻列（配合 el-tooltip 查看完整内容） */
+.stk-vf-node-table .cell { white-space: nowrap !important; overflow: hidden !important; text-overflow: ellipsis !important; }
+
+.stk-vf-cell-text { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.stk-vf-cell-muted { color: var(--text-faint); }
+
+.stk-vf-cell-count { display: inline-block; min-width: 16px; padding: 0 5px; margin-right: 6px; border-radius: 8px; background: var(--bg-faint); color: var(--text-sub); font-size: 10px; font-weight: 600; line-height: 16px; text-align: center; vertical-align: 1px; }
+
+.stk-vf-tip-list { max-width: 340px; max-height: 320px; overflow: auto; line-height: 1.75; }
+
+.stk-vf-table-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; }
+
+.stk-vf-table-dot.ok { background: var(--ok); box-shadow: 0 0 0 3px var(--ok-soft); }
+
+.stk-vf-table-dot.fail { background: var(--danger); box-shadow: 0 0 0 3px var(--danger-soft); }
+
+.stk-vf-role-badge { display: inline-block; padding: 2px 8px; border-radius: 5px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px; }
+
+.stk-vf-role-badge.is-master { background: var(--brand-soft); color: var(--brand); }
+
+.stk-vf-role-badge.is-replica { background: var(--ok-soft); color: var(--ok); }
+
+
+/* ---- 提示信息 ---- */
+.stk-vf-notes { display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; border-radius: 10px; background: var(--warn-soft, #fdf3e3); border: 1px solid #fde68a; margin-bottom: 8px; }
+
+.stk-vf-note-item { display: flex; align-items: flex-start; gap: 8px; font-size: 12px; color: #92400e; line-height: 1.5; }
+
+
+/* ---- 客户端接入 ---- */
+.stk-vf-client-hint { margin-top: 12px; }
+
+.stk-vf-client-hint-label { font-size: 12px; font-weight: 600; color: var(--text-sub); margin-bottom: 6px; }
+
+.stk-vf-client-hint-code { padding: 10px 14px; border-radius: 8px; background: #1e293b; color: #e2e8f0; font-size: 12px; font-family: var(--font-mono); white-space: pre-wrap; word-break: break-all; line-height: 1.6; }
+
+/* 探活接入地址 · ES 分层角色头 */
+.stk-vf-ep-host-role.is-es { background: #EFF3FA; color: #2B5FC7; border-color: #C6D6F2; }

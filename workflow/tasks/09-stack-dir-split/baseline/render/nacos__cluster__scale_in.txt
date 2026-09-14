@@ -1,0 +1,1 @@
+NO_SCRIPT: 套件 nacos 模式 cluster 没有 scale_in 脚本

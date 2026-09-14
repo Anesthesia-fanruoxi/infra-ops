@@ -4,8 +4,8 @@ package model
 type StackVar struct {
 	Name     string   `json:"name"`
 	Label    string   `json:"label"`
-	Default  string   `json:"default"`          // bool 型为 "true"/"false"
-	Type     string   `json:"type,omitempty"`   // "bool"=前端渲染开关，空=文本输入
+	Default  string   `json:"default"`        // bool 型为 "true"/"false"
+	Type     string   `json:"type,omitempty"` // "bool"=前端渲染开关，空=文本输入
 	Required bool     `json:"required"`
 	Modes    []string `json:"modes,omitempty"` // 空=所有模式
 }
@@ -116,7 +116,7 @@ type StackInstance struct {
 	HostCount      int                 `json:"host_count,omitempty"`
 }
 
-// RolePlanRole 角色计划中单个主机上的一个角色落点（docs/role-plan-design.md §2.2）。
+// RolePlanRole 角色计划中单个主机上的一个角色落点（docs/角色物化设计.md §2.2）。
 type RolePlanRole struct {
 	Comp   string `json:"comp"`            // 归属组件：hdfs/yarn/...
 	Role   string `json:"role"`            // 角色键：nn1/nn2/jn/dn/...
@@ -138,14 +138,14 @@ type RolePlanHost struct {
 // 确定性、已冻结、带来源标注的完整描述；同时是部署/探活/缩容保护/重装共读的可执行契约。
 type RolePlan struct {
 	Rev         int               `json:"rev"`
-	Op          string            `json:"op"`     // create/add_component/scale_out/scale_in/reinstall/replan
+	Op          string            `json:"op"` // create/add_component/scale_out/scale_in/reinstall/replan
 	GeneratedAt string            `json:"generated_at"`
 	GeneratedBy string            `json:"generated_by"` // auto=引擎生成 / manual=用户编辑后提交
 	Ha          bool              `json:"ha"`
 	Hosts       []RolePlanHost    `json:"hosts"`
-	Masters     map[string]string `json:"masters"`            // 权威 masters 全量投影（含自动落点的备角色），运行期推导的唯一输入
+	Masters     map[string]string `json:"masters"`               // 权威 masters 全量投影（含自动落点的备角色），运行期推导的唯一输入
 	ManualKeys  []string          `json:"manual_keys,omitempty"` // 用户显式指定的 masters 键（跨重规划保留来源标注）
-	Injected    map[string]string `json:"injected,omitempty"` // 物化后的脚本注入变量（部署直接取用）
+	Injected    map[string]string `json:"injected,omitempty"`    // 物化后的脚本注入变量（部署直接取用）
 	Warnings    []string          `json:"warnings,omitempty"`
 }
 

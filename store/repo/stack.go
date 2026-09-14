@@ -406,7 +406,7 @@ func (r *StackRepo) UpdateInstance(id int64, name, status, paramsJSON, component
 	return err
 }
 
-// SetInstanceRolePlan 写入最近一份角色计划（覆盖式，docs/role-plan-design.md §3.2）。
+// SetInstanceRolePlan 写入最近一份角色计划（覆盖式，docs/角色物化设计.md §3.2）。
 func (r *StackRepo) SetInstanceRolePlan(id int64, planJSON string) error {
 	_, err := store.DB.Exec(
 		`UPDATE stack_instances SET role_plan_json=?, updated_at=datetime('now','localtime') WHERE id=?`,
@@ -492,15 +492,15 @@ func (r *StackRepo) ListRunsByInstance(instanceID int64) ([]model.StackRun, erro
 
 // HostClusterMember 主机参与的集群信息。
 type HostClusterMember struct {
-	InstanceID    int64               `json:"instance_id"`
-	InstanceName  string              `json:"instance_name"`
-	StackKey      string              `json:"stack_key"`
-	StackName     string              `json:"stack_name"`
-	Mode          string              `json:"mode"`
-	Role          string              `json:"role"`      // 本机在集群中的角色
-	Status        string              `json:"status"`   // 集群状态
-	Peers         []ClusterPeer       `json:"peers"`    // 集群其他成员
-	Services      []model.HostService `json:"services"` // 本机在该集群下的服务入口
+	InstanceID   int64               `json:"instance_id"`
+	InstanceName string              `json:"instance_name"`
+	StackKey     string              `json:"stack_key"`
+	StackName    string              `json:"stack_name"`
+	Mode         string              `json:"mode"`
+	Role         string              `json:"role"`     // 本机在集群中的角色
+	Status       string              `json:"status"`   // 集群状态
+	Peers        []ClusterPeer       `json:"peers"`    // 集群其他成员
+	Services     []model.HostService `json:"services"` // 本机在该集群下的服务入口
 }
 
 // ClusterPeer 集群成员。

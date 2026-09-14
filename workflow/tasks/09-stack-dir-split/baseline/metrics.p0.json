@@ -1,0 +1,320 @@
+{
+  "_note": "任务 09 P0 基线：拆分期不得劣化；P7 起用 --targets 校验终态",
+  "_note_p1": "B2（P1）已知差异：store/builtin_stacks.go 576 -> 597（兼容壳 + 过渡驱动 legacyStack 样板，属计划内一次性增长；字面量自 B3 起陆续迁出，B7 目标 <=120，届时该差异自动消失）。api/stack/snapshot_test.go 由 349 修正为 350：B1 录基线时该文件尚差一行（SNAPSHOT_DB 排查开关），属记录时机问题，非劣化。",
+  "_note_branch": "套件分支数基线 52 处 / 14 个文件；B2 后仍为 52 处 / 14 个文件（P1 不动引擎分支，B3 起逐期归零）。",
+  "branch_details": [
+    {
+      "file": "api/stack/stack_create.go",
+      "line": 88,
+      "text": "if bp.Key == \"redis\" && req.Mode == \"cluster\" {"
+    },
+    {
+      "file": "api/stack/stack_create.go",
+      "line": 95,
+      "text": "if bp.Key == \"elasticsearch\" && req.Mode == \"cold_warm_hot\" {"
+    },
+    {
+      "file": "api/stack/stack_create.go",
+      "line": 100,
+      "text": "if bp.Key == \"bigdata\" {"
+    },
+    {
+      "file": "api/stack/stack_create.go",
+      "line": 105,
+      "text": "if bp.Key == \"kafka\" && req.Mode == \"kraft\" && strings.TrimSpace(params[\"cluster_id\"]) == \"\" {"
+    },
+    {
+      "file": "api/stack/stack_create.go",
+      "line": 112,
+      "text": "if bp.Key == \"rabbitmq\" && strings.TrimSpace(params[\"erlang_cookie\"]) == \"\" {"
+    },
+    {
+      "file": "api/stack/stack_create.go",
+      "line": 119,
+      "text": "if bp.Key == \"bigdata\" {"
+    },
+    {
+      "file": "api/stack/stack_create.go",
+      "line": 125,
+      "text": "if op == \"add_component\" && bp.Key == \"bigdata\" {"
+    },
+    {
+      "file": "api/stack/stack_create.go",
+      "line": 193,
+      "text": "if bp.Key == \"bigdata\" && op == \"scale_in\" && inst != nil {"
+    },
+    {
+      "file": "api/stack/stack_create.go",
+      "line": 230,
+      "text": "if bp.Key == \"bigdata\" {"
+    },
+    {
+      "file": "api/stack/stack_create_hosts.go",
+      "line": 42,
+      "text": "if op == \"scale_in\" && bp.Key == \"elasticsearch\" && req.Mode == \"cold_warm_hot\" && inst != nil {"
+    },
+    {
+      "file": "api/stack/stack_engine.go",
+      "line": 51,
+      "text": "if bp.Key == \"elasticsearch\" && run.Mode == \"cold_warm_hot\" {"
+    },
+    {
+      "file": "api/stack/stack_engine.go",
+      "line": 58,
+      "text": "if bp.Key == \"bigdata\" && run.InstanceID > 0 {"
+    },
+    {
+      "file": "api/stack/stack_engine.go",
+      "line": 118,
+      "text": "if op == \"scale_out\" && bp.Key == \"redis\" && run.Mode == \"cluster\" {"
+    },
+    {
+      "file": "api/stack/stack_instance_build.go",
+      "line": 38,
+      "text": "if bp.Key == \"bigdata\" && mode.HasBootstrap {"
+    },
+    {
+      "file": "api/stack/stack_instance_build.go",
+      "line": 81,
+      "text": "if bp.Key == \"redis\" && (mode.Key == \"replication\" || mode.Key == \"sentinel\") {"
+    },
+    {
+      "file": "api/stack/stack_instance_build.go",
+      "line": 87,
+      "text": "if bp.Key == \"redis\" && mode.Key == \"cluster\" && i == 0 {"
+    },
+    {
+      "file": "api/stack/stack_instance_reinstall.go",
+      "line": 65,
+      "text": "if bp != nil && bp.Key == \"bigdata\" && mode != nil && mode.HasBootstrap {"
+    },
+    {
+      "file": "api/stack/stack_instance_validate.go",
+      "line": 41,
+      "text": "needKeepMaster := (bp.Key == \"redis\" && (inst.Mode == \"replication\" || inst.Mode == \"sentinel\")) ||"
+    },
+    {
+      "file": "api/stack/stack_instance_validate.go",
+      "line": 42,
+      "text": "(bp.Key == \"rocketmq\" && inst.Mode == \"broker\") ||"
+    },
+    {
+      "file": "api/stack/stack_instance_validate.go",
+      "line": 43,
+      "text": "bp.Key == \"bigdata\""
+    },
+    {
+      "file": "api/stack/stack_instance_validate.go",
+      "line": 47,
+      "text": "if bp.Key == \"redis\" && inst.Mode == \"cluster\" && remain < 3 {"
+    },
+    {
+      "file": "api/stack/stack_instance_validate.go",
+      "line": 53,
+      "text": "if !hasProtected && bp.Key == \"bigdata\" {"
+    },
+    {
+      "file": "api/stack/stack_instance_validate.go",
+      "line": 122,
+      "text": "if bp.Key == \"redis\" && (mode.Key == \"replication\" || mode.Key == \"sentinel\") {"
+    },
+    {
+      "file": "api/stack/stack_op.go",
+      "line": 44,
+      "text": "if op == \"scale_in\" && run != nil && run.StackKey == \"elasticsearch\" && run.Mode == \"cold_warm_hot\" {"
+    },
+    {
+      "file": "api/stack/stack_phase.go",
+      "line": 145,
+      "text": "if bp.Key == \"redis\" {"
+    },
+    {
+      "file": "api/stack/stack_phase.go",
+      "line": 188,
+      "text": "if bp.Key == \"redis\" {"
+    },
+    {
+      "file": "api/stack/stack_phase.go",
+      "line": 224,
+      "text": "if bp.Key == \"redis\" && strings.TrimSpace(params[\"replicas\"]) == \"\" {"
+    },
+    {
+      "file": "api/stack/stack_phase.go",
+      "line": 238,
+      "text": "if bp.Key == \"bigdata\" {"
+    },
+    {
+      "file": "api/stack/stack_plan_generic.go",
+      "line": 76,
+      "text": "case bp.Key == \"redis\" && opts.Mode == \"replication\":"
+    },
+    {
+      "file": "api/stack/stack_plan_generic.go",
+      "line": 79,
+      "text": "case bp.Key == \"redis\" && opts.Mode == \"sentinel\":"
+    },
+    {
+      "file": "api/stack/stack_plan_generic.go",
+      "line": 83,
+      "text": "case bp.Key == \"redis\" && opts.Mode == \"cluster\":"
+    },
+    {
+      "file": "api/stack/stack_plan_generic.go",
+      "line": 87,
+      "text": "case bp.Key == \"kafka\" && opts.Mode == \"kraft\":"
+    },
+    {
+      "file": "api/stack/stack_plan_generic.go",
+      "line": 93,
+      "text": "case bp.Key == \"kafka\" && opts.Mode == \"zk\":"
+    },
+    {
+      "file": "api/stack/stack_plan_generic.go",
+      "line": 100,
+      "text": "case bp.Key == \"elasticsearch\":"
+    },
+    {
+      "file": "api/stack/stack_plan_generic.go",
+      "line": 103,
+      "text": "case bp.Key == \"rabbitmq\":"
+    },
+    {
+      "file": "api/stack/stack_plan_generic.go",
+      "line": 106,
+      "text": "case bp.Key == \"rocketmq\":"
+    },
+    {
+      "file": "api/stack/stack_plan_generic.go",
+      "line": 109,
+      "text": "case bp.Key == \"nacos\":"
+    },
+    {
+      "file": "api/stack/stack_plan_generic.go",
+      "line": 117,
+      "text": "case bp.Key == \"powerjob\":"
+    },
+    {
+      "file": "api/stack/stack_plan_generic.go",
+      "line": 125,
+      "text": "case bp.Key == \"elfk\":"
+    },
+    {
+      "file": "api/stack/stack_plan_persist.go",
+      "line": 162,
+      "text": "if inst.StackKey == \"bigdata\" {"
+    },
+    {
+      "file": "api/stack/stack_register.go",
+      "line": 93,
+      "text": "if bp.Key == \"bigdata\" {"
+    },
+    {
+      "file": "api/stack/stack_register.go",
+      "line": 98,
+      "text": "if bp.Key == \"elasticsearch\" && mode == \"cold_warm_hot\" {"
+    },
+    {
+      "file": "api/stack/stack_register.go",
+      "line": 137,
+      "text": "if bp.Key == \"elfk\" {"
+    },
+    {
+      "file": "api/stack/stack_register.go",
+      "line": 204,
+      "text": "if bp.Key == \"kafka\" && mode == \"zk\" {"
+    },
+    {
+      "file": "api/stack/stack_sync.go",
+      "line": 64,
+      "text": "if run.StackKey == \"bigdata\" {"
+    },
+    {
+      "file": "api/stack/stack_topo.go",
+      "line": 48,
+      "text": "if bp.Key == \"redis\" {"
+    },
+    {
+      "file": "api/stack/stack_verify.go",
+      "line": 76,
+      "text": "if inst.StackKey == \"bigdata\" {"
+    }
+  ],
+  "branch_files": [
+    "api/stack/stack_create.go",
+    "api/stack/stack_create_hosts.go",
+    "api/stack/stack_engine.go",
+    "api/stack/stack_instance_build.go",
+    "api/stack/stack_instance_reinstall.go",
+    "api/stack/stack_instance_validate.go",
+    "api/stack/stack_op.go",
+    "api/stack/stack_phase.go",
+    "api/stack/stack_plan_generic.go",
+    "api/stack/stack_plan_persist.go",
+    "api/stack/stack_register.go",
+    "api/stack/stack_sync.go",
+    "api/stack/stack_topo.go",
+    "api/stack/stack_verify.go"
+  ],
+  "branch_total": 52,
+  "lines": {
+    "api/stack/snapshot_cases_test.go": 191,
+    "api/stack/snapshot_test.go": 350,
+    "api/stack/stack.go": 129,
+    "api/stack/stack_bigdata.go": 182,
+    "api/stack/stack_bigdata_render.go": 156,
+    "api/stack/stack_compose.go": 51,
+    "api/stack/stack_create.go": 280,
+    "api/stack/stack_create_hosts.go": 66,
+    "api/stack/stack_cwh_validate_test.go": 86,
+    "api/stack/stack_drain.go": 96,
+    "api/stack/stack_engine.go": 207,
+    "api/stack/stack_exec.go": 73,
+    "api/stack/stack_instance.go": 222,
+    "api/stack/stack_instance_build.go": 205,
+    "api/stack/stack_instance_reinstall.go": 208,
+    "api/stack/stack_instance_util.go": 76,
+    "api/stack/stack_instance_validate.go": 135,
+    "api/stack/stack_log.go": 69,
+    "api/stack/stack_op.go": 163,
+    "api/stack/stack_phase.go": 258,
+    "api/stack/stack_phase_select_test.go": 162,
+    "api/stack/stack_plan.go": 285,
+    "api/stack/stack_plan_generic.go": 192,
+    "api/stack/stack_plan_generic_test.go": 241,
+    "api/stack/stack_plan_handler.go": 160,
+    "api/stack/stack_plan_op.go": 178,
+    "api/stack/stack_plan_pairs.go": 41,
+    "api/stack/stack_plan_persist.go": 248,
+    "api/stack/stack_plan_test.go": 188,
+    "api/stack/stack_register.go": 254,
+    "api/stack/stack_register_bigdata.go": 155,
+    "api/stack/stack_runs.go": 45,
+    "api/stack/stack_sse.go": 137,
+    "api/stack/stack_sync.go": 122,
+    "api/stack/stack_topo.go": 228,
+    "api/stack/stack_validate_bigdata.go": 205,
+    "api/stack/stack_validate_test.go": 282,
+    "api/stack/stack_vars.go": 288,
+    "api/stack/stack_vars_cwh.go": 79,
+    "api/stack/stack_verify.go": 261,
+    "api/stack/stack_verify_container.go": 79,
+    "api/stack/stack_verify_endpoints.go": 184,
+    "api/stack/stack_verify_masters.go": 63,
+    "api/stack/stack_verify_parse.go": 230,
+    "api/stack/stack_verify_redis.go": 140,
+    "api/stack/stack_verify_role_test.go": 144,
+    "api/stack/stack_verify_script.go": 289,
+    "api/stack/stack_verify_test.go": 269,
+    "api/stack/stack_verify_util.go": 97,
+    "store/builtin_stacks.go": 576,
+    "store/builtin_templates.go": 404,
+    "store/db.go": 86,
+    "store/migrations.go": 705,
+    "store/stack_render_snapshot_test.go": 152,
+    "store/stacks_test.go": 128,
+    "template/index.html": 43,
+    "template/static/pages/stacks-forms.js": 681,
+    "template/static/pages/stacks.js": 1824,
+    "template/static/style.css": 2333
+  }
+}

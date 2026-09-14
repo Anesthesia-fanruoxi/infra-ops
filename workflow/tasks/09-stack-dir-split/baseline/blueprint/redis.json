@@ -1,0 +1,86 @@
+{
+  "key": "redis",
+  "name": "Redis",
+  "description": "一次成型部署 Redis 主从、哨兵或集群。单机请走「基础建设」中的部署 Redis。",
+  "requires_docker": true,
+  "category": "service",
+  "ha_support": false,
+  "modes": [
+    {
+      "key": "replication",
+      "label": "主从",
+      "description": "1 主 N 从，指定一台为主节点，其余自动为从。",
+      "min_hosts": 2,
+      "host_hint": "至少 2 台，并指定一台主节点",
+      "has_bootstrap": false,
+      "assign_master": true,
+      "default_home_dir": "/data/redis-repl"
+    },
+    {
+      "key": "sentinel",
+      "label": "哨兵",
+      "description": "1 主 N 从，每台同时跑 Redis 与 Sentinel，自动故障切换。",
+      "min_hosts": 3,
+      "host_hint": "至少 3 台（建议奇数），并指定一台主节点",
+      "has_bootstrap": false,
+      "assign_master": true,
+      "default_home_dir": "/data/redis-sentinel"
+    },
+    {
+      "key": "cluster",
+      "label": "集群",
+      "description": "三主或三主三从，全员节点起来后自动 CLUSTER CREATE。",
+      "min_hosts": 3,
+      "host_hint": "三主至少 3 台；三主三从至少 6 台且为偶数",
+      "has_bootstrap": true,
+      "assign_master": false,
+      "default_home_dir": "/data/redis-cluster"
+    }
+  ],
+  "shared_vars": [
+    {
+      "name": "password",
+      "label": "访问密码",
+      "default": "",
+      "required": true
+    },
+    {
+      "name": "image",
+      "label": "镜像",
+      "default": "redis:7",
+      "required": true
+    },
+    {
+      "name": "replicas",
+      "label": "从节点倍数",
+      "default": "0",
+      "required": true,
+      "modes": [
+        "cluster"
+      ]
+    },
+    {
+      "name": "sentinel_port",
+      "label": "哨兵端口",
+      "default": "26379",
+      "required": true,
+      "modes": [
+        "sentinel"
+      ]
+    }
+  ],
+  "host_vars": [
+    {
+      "name": "port",
+      "label": "端口",
+      "default": "6379",
+      "required": true
+    },
+    {
+      "name": "home_dir",
+      "label": "服务主目录",
+      "default": "/data/redis",
+      "required": true
+    }
+  ]
+}

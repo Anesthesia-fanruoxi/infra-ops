@@ -25,9 +25,87 @@
   <script src="/static/pages/orchestration_drawer.js"></script>
   <script src="/static/pages/orchestrations.js"></script>
   <script src="/static/pages/schedules.js"></script>
-  <script src="/static/pages/stacks-forms.js"></script>
+
+  <!-- ===== 套件部署：通用骨架（设计文档 §4.2 / §5.4）=====
+       加载顺序：registry -> common/parts -> common 各分片 -> 模板片段。
+       命名空间：通用 .stk-*。 -->
+  <script src="/static/stacks/registry.js"></script>
+  <script src="/static/stacks/common/parts.js"></script>
+  <script src="/static/stacks/common/labels.js"></script>
+  <script src="/static/stacks/common/host-table.js"></script>
+  <script src="/static/stacks/common/role-plan.js"></script>
+  <script src="/static/stacks/common/instance-card.js"></script>
+  <script src="/static/stacks/common/verify-dialog.js"></script>
+  <script src="/static/stacks/common/run-log.js"></script>
+  <script src="/static/stacks/common/wizard.js"></script>
+  <script src="/static/stacks/common/assets.js"></script>
+  <script src="/static/stacks/common/tpl-hero.js"></script>
+  <script src="/static/stacks/common/tpl-wizard.js"></script>
+  <script src="/static/stacks/common/tpl-preflight.js"></script>
+  <script src="/static/stacks/common/tpl-instance.js"></script>
+  <script src="/static/stacks/common/tpl-verify.js"></script>
+  <script src="/static/stacks/common/tpl-run.js"></script>
+  <link rel="stylesheet" href="/static/stacks/common/common.css">
+  <link rel="stylesheet" href="/static/stacks/common/verify.css">
+
+  <!-- ===== 套件：Redis（.stk-redis-*）===== -->
+  <script src="/static/stacks/redis/hooks.js"></script>
+  <script src="/static/stacks/redis/topo.js"></script>
+  <script src="/static/stacks/redis/index.js"></script>
+  <link rel="stylesheet" href="/static/stacks/redis/style.css">
+
+  <!-- ===== 套件：大数据底座（.stk-bd-*）=====
+       组件文件先于 index.js（组件在各自文件内自注册，顺序仅需早于挂载壳）。 -->
+  <script src="/static/stacks/bigdata/select.js"></script>
+  <script src="/static/stacks/bigdata/op.js"></script>
+  <script src="/static/stacks/bigdata/roles.js"></script>
+  <script src="/static/stacks/bigdata/verify.js"></script>
+  <script src="/static/stacks/bigdata/index.js"></script>
+  <link rel="stylesheet" href="/static/stacks/bigdata/style.css">
+
+  <!-- ===== 套件：Kafka ===== -->
+  <script src="/static/stacks/kafka/index.js"></script>
+  <link rel="stylesheet" href="/static/stacks/kafka/style.css">
+
+  <!-- ===== 套件：Elasticsearch（.stk-es-*）===== -->
+  <script src="/static/stacks/elasticsearch/roles.js"></script>
+  <script src="/static/stacks/elasticsearch/verify.js"></script>
+  <script src="/static/stacks/elasticsearch/cluster.js"></script>
+  <script src="/static/stacks/elasticsearch/index.js"></script>
+  <link rel="stylesheet" href="/static/stacks/elasticsearch/style.css">
+
+  <!-- ===== 套件：RabbitMQ ===== -->
+  <script src="/static/stacks/rabbitmq/index.js"></script>
+  <link rel="stylesheet" href="/static/stacks/rabbitmq/style.css">
+
+  <!-- ===== 套件：RocketMQ ===== -->
+  <script src="/static/stacks/rocketmq/index.js"></script>
+  <link rel="stylesheet" href="/static/stacks/rocketmq/style.css">
+
+  <!-- ===== 套件：Nacos ===== -->
+  <script src="/static/stacks/nacos/index.js"></script>
+  <link rel="stylesheet" href="/static/stacks/nacos/style.css">
+
+  <!-- ===== 套件：PowerJob ===== -->
+  <script src="/static/stacks/powerjob/index.js"></script>
+  <link rel="stylesheet" href="/static/stacks/powerjob/style.css">
+
+  <!-- ===== 套件：ELFK 编排 ===== -->
+  <script src="/static/stacks/elfk/index.js"></script>
+  <link rel="stylesheet" href="/static/stacks/elfk/style.css">
+
+  <!-- 套件部署页挂载壳：必须在全部 /static/stacks/** 之后（装配 mixins / 模板 / 套件组件） -->
   <script src="/static/pages/stacks.js"></script>
+
   <script src="/static/pages/registry.js"></script>
+  <script src="/static/pages/es_index.js"></script>
+  <script src="/static/pages/es_fields.js"></script>
+  <script src="/static/pages/es_kql.js"></script>
+  <script src="/static/pages/es_analyze.js"></script>
+  <script src="/static/pages/es_discover.js"></script>
+  <script src="/static/pages/es_views.js"></script>
+  <script src="/static/pages/es_lifecycle.js"></script>
+  <script src="/static/pages/es_templates.js"></script>
   <script src="/static/pages/es.js"></script>
   <script src="/static/pages/sftp.js"></script>
   <script src="/static/app.js"></script>

@@ -1,0 +1,123 @@
+{
+  "case": "nacos_cluster_extdb",
+  "stack_key": "nacos",
+  "mode": "cluster",
+  "op": "create",
+  "role_plan": {
+    "rev": 1,
+    "op": "create",
+    "generated_at": "",
+    "generated_by": "manual",
+    "ha": false,
+    "hosts": [
+      {
+        "host_id": 1301,
+        "host_name": "sn10-0-4-1",
+        "host_ip": "10.0.4.1",
+        "seq": 1,
+        "roles": [
+          {
+            "comp": "nacos",
+            "role": "boot",
+            "label": "引导节点",
+            "source": "manual"
+          }
+        ]
+      },
+      {
+        "host_id": 1302,
+        "host_name": "sn10-0-4-2",
+        "host_ip": "10.0.4.2",
+        "seq": 2,
+        "roles": [
+          {
+            "comp": "nacos",
+            "role": "member",
+            "label": "Nacos 成员",
+            "source": "auto",
+            "scope": "rest"
+          }
+        ]
+      },
+      {
+        "host_id": 1303,
+        "host_name": "sn10-0-4-3",
+        "host_ip": "10.0.4.3",
+        "seq": 3,
+        "roles": [
+          {
+            "comp": "nacos",
+            "role": "member",
+            "label": "Nacos 成员",
+            "source": "auto",
+            "scope": "rest"
+          }
+        ]
+      }
+    ],
+    "masters": null,
+    "warnings": [
+      "使用外部 MySQL 10.0.9.9，引导节点不再自动部署 MySQL"
+    ]
+  },
+  "services": [
+    {
+      "host_id": 1301,
+      "service_name": "Nacos 主节点",
+      "url": "http://10.0.4.1",
+      "web": false,
+      "instance_id": 0
+    },
+    {
+      "host_id": 1302,
+      "service_name": "Nacos 工作节点",
+      "url": "http://10.0.4.2",
+      "web": false,
+      "instance_id": 0
+    },
+    {
+      "host_id": 1303,
+      "service_name": "Nacos 工作节点",
+      "url": "http://10.0.4.3",
+      "web": false,
+      "instance_id": 0
+    }
+  ],
+  "installs": [
+    {
+      "host_id": 1301,
+      "template_id": 0,
+      "template_name": "套件:nacos/cluster",
+      "task_id": 0
+    },
+    {
+      "host_id": 1302,
+      "template_id": 0,
+      "template_name": "套件:nacos/cluster",
+      "task_id": 0
+    },
+    {
+      "host_id": 1303,
+      "template_id": 0,
+      "template_name": "套件:nacos/cluster",
+      "task_id": 0
+    }
+  ],
+  "endpoints": [
+    {
+      "name": "Nacos",
+      "url": "tcp://10.0.4.1",
+      "role": "master"
+    },
+    {
+      "name": "Nacos",
+      "url": "tcp://10.0.4.2",
+      "role": "worker"
+    },
+    {
+      "name": "Nacos",
+      "url": "tcp://10.0.4.3",
+      "role": "worker"
+    }
+  ]
+}

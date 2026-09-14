@@ -7,13 +7,13 @@ type Orchestration struct {
 	Description string `json:"description"`
 	ExecMode    string `json:"exec_mode"` // 固定 by_step（顺序串行）
 	Enabled     bool   `json:"enabled"`
-	StepCount   int    `json:"step_count"` // 列表联查
-	State       string `json:"state"`     // 由最近一次运行派生：not_started / running / finished
-	LastRunID   int64  `json:"last_run_id"`   // 最近一次运行 id，0=未运行
-	Result      string `json:"result"`        // 最近运行结果：success/partial/failed，空=未运行
-	OkHosts     int    `json:"ok_hosts"`      // 最近运行成功主机数
-	FailHosts   int    `json:"fail_hosts"`    // 最近运行失败主机数
-	TotalHosts  int    `json:"total_hosts"`   // 最近运行总主机数
+	StepCount   int    `json:"step_count"`  // 列表联查
+	State       string `json:"state"`       // 由最近一次运行派生：not_started / running / finished
+	LastRunID   int64  `json:"last_run_id"` // 最近一次运行 id，0=未运行
+	Result      string `json:"result"`      // 最近运行结果：success/partial/failed，空=未运行
+	OkHosts     int    `json:"ok_hosts"`    // 最近运行成功主机数
+	FailHosts   int    `json:"fail_hosts"`  // 最近运行失败主机数
+	TotalHosts  int    `json:"total_hosts"` // 最近运行总主机数
 	CreatedAt   string `json:"created_at"`
 	UpdatedAt   string `json:"updated_at"`
 }

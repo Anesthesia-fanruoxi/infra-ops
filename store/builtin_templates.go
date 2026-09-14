@@ -5,13 +5,9 @@ package store
 
 import (
 	"database/sql"
-	"embed"
 	"errors"
 	"strings"
 )
-
-//go:embed builtin stacks/elasticsearch stacks/rocketmq stacks/rabbitmq
-var builtinFS embed.FS
 
 type builtinTemplate struct {
 	name        string
@@ -22,7 +18,7 @@ type builtinTemplate struct {
 	services    string            // JSON: [{name,url,web}]
 	requires    string            // JSON: [{check,hint}] 前置依赖检查
 	configs     string            // JSON: [{key,label,file,hint,required}] 可被用户覆盖的配置文件
-	path        string            // builtinFS 内相对脚本路径
+	path        string            // 内嵌资源路径：builtin/xxx.sh 或 stacks/<key>/scripts/xxx.sh
 	assets      map[string]string // 资源路径 -> 注入脚本占位符 @@KEY@@ 的内容
 }
 
@@ -302,8 +298,10 @@ var builtinTemplates = []builtinTemplate{
 }
 
 // loadBuiltinScript 读取模板脚本并注入其引用的资源占位符。
+// 脚本路径可能落在 builtin/（模板体系）或 stacks/<key>/scripts/（模板复用套件脚本，
+// 共 3 条：RocketMQ namesrv/broker、RabbitMQ node），由 readAsset 按前缀路由到对应内嵌 FS。
 func loadBuiltinScript(t builtinTemplate) (string, error) {
-	b, err := builtinFS.ReadFile(t.path)
+	b, err := readAsset(t.path)
 	if err != nil {
 		return "", err
 	}
@@ -312,7 +310,7 @@ func loadBuiltinScript(t builtinTemplate) (string, error) {
 		return "", errors.New("empty builtin script: " + t.path)
 	}
 	for key, asset := range t.assets {
-		c, err := builtinFS.ReadFile(asset)
+		c, err := readAsset(asset)
 		if err != nil {
 			return "", err
 		}

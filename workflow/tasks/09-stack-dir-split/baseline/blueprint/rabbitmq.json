@@ -1,0 +1,66 @@
+{
+  "key": "rabbitmq",
+  "name": "RabbitMQ",
+  "description": "一次成型部署 RabbitMQ 集群。指定一台初始化节点，其余自动 join；host 网络 + 节点名 rabbit@宿主机IP，Erlang cookie 留空则自动生成。",
+  "requires_docker": true,
+  "category": "service",
+  "ha_support": false,
+  "modes": [
+    {
+      "key": "cluster",
+      "label": "集群",
+      "description": "1 初始化节点 + N 加入节点，管理插件默认开启。",
+      "min_hosts": 1,
+      "host_hint": "至少 1 台；多节点请指定一台初始化节点，生产建议 ≥3 台奇数",
+      "has_bootstrap": false,
+      "assign_master": true,
+      "default_home_dir": "/data/rabbitmq"
+    }
+  ],
+  "shared_vars": [
+    {
+      "name": "image",
+      "label": "镜像",
+      "default": "rabbitmq:3.13-management",
+      "required": true
+    },
+    {
+      "name": "admin_user",
+      "label": "管理员账号",
+      "default": "admin",
+      "required": true
+    },
+    {
+      "name": "admin_pass",
+      "label": "管理员密码",
+      "default": "",
+      "required": true
+    },
+    {
+      "name": "erlang_cookie",
+      "label": "Erlang Cookie（留空自动生成）",
+      "default": "",
+      "required": false
+    },
+    {
+      "name": "amqp_port",
+      "label": "AMQP 端口",
+      "default": "5672",
+      "required": true
+    },
+    {
+      "name": "mgmt_port",
+      "label": "管理端口",
+      "default": "15672",
+      "required": true
+    }
+  ],
+  "host_vars": [
+    {
+      "name": "home_dir",
+      "label": "服务主目录",
+      "default": "/data/rabbitmq",
+      "required": true
+    }
+  ]
+}

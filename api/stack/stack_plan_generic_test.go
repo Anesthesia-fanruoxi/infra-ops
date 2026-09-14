@@ -1,0 +1,241 @@
+package stack
+
+import (
+	"strings"
+	"testing"
+
+	"infra-ops/model"
+	"infra-ops/store"
+)
+
+func gh(id int64, ip, role string, seq int) model.StackRunHost {
+	return model.StackRunHost{HostID: id, HostIP: ip, HostName: "h" + ip, Role: role, Seq: seq}
+}
+
+// 通用套件：redis 主从——master 手动指定（manual），其余 replica（rest）。
+func TestPlanGenericRedisReplication(t *testing.T) {
+	bp := store.FindBuiltinStack("redis")
+	hosts := []model.StackRunHost{gh(1, "10.0.0.1", "master", 1), gh(2, "10.0.0.2", "worker", 2), gh(3, "10.0.0.3", "worker", 3)}
+	plan, err := planGenericRoles(bp, hosts, PlanOptions{Op: "create", Mode: "replication", ManualMaster: true})
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+	if len(plan.Hosts) != 3 {
+		t.Fatalf("hosts = %d", len(plan.Hosts))
+	}
+	r1 := plan.Hosts[0].Roles
+	if len(r1) != 1 || r1[0].Label != "Redis Master" || r1[0].Source != "manual" || r1[0].Scope != "" {
+		t.Fatalf("host1 roles = %+v", r1)
+	}
+	for i := 1; i < 3; i++ {
+		rr := plan.Hosts[i].Roles
+		if len(rr) != 1 || rr[0].Label != "Redis Replica" || rr[0].Scope != "rest" || rr[0].Source != "auto" {
+			t.Fatalf("host%d roles = %+v", i+1, rr)
+		}
+	}
+	if len(plan.Warnings) != 0 {
+		t.Fatalf("manual master 不应有警告: %v", plan.Warnings)
+	}
+	// 落点保护：仅 master 不可缩容
+	protected, ok := planProtectedHosts(&plan)
+	if !ok || len(protected) != 1 || !strings.Contains(protected["10.0.0.1"], "Redis Master") {
+		t.Fatalf("protected = %v ok=%v", protected, ok)
+	}
+}
+
+// 未显式指定主节点 → 自动落首台并出警告。
+func TestPlanGenericAutoMasterWarning(t *testing.T) {
+	bp := store.FindBuiltinStack("redis")
+	hosts := []model.StackRunHost{gh(1, "10.0.0.1", "worker", 1), gh(2, "10.0.0.2", "worker", 2)}
+	plan, err := planGenericRoles(bp, hosts, PlanOptions{Op: "create", Mode: "replication"})
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+	if plan.Hosts[0].Roles[0].Source != "auto" {
+		t.Fatalf("auto master source = %s", plan.Hosts[0].Roles[0].Source)
+	}
+	found := false
+	for _, w := range plan.Warnings {
+		if strings.Contains(w, "10.0.0.1") && strings.Contains(w, "自动") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("缺少自动落点警告: %v", plan.Warnings)
+	}
+}
+
+// redis cluster：全员节点角色 + 自动分配提示；min hosts 校验。
+func TestPlanGenericRedisCluster(t *testing.T) {
+	bp := store.FindBuiltinStack("redis")
+	hosts := []model.StackRunHost{gh(1, "10.0.0.1", "node", 1), gh(2, "10.0.0.2", "node", 2), gh(3, "10.0.0.3", "node", 3)}
+	plan, err := planGenericRoles(bp, hosts, PlanOptions{Op: "create", Mode: "cluster", Params: map[string]string{"replicas": "1"}})
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+	for _, h := range plan.Hosts {
+		if len(h.Roles) != 1 || h.Roles[0].Scope != "all" || h.Roles[0].Label != "Redis Cluster 节点" {
+			t.Fatalf("%s roles = %+v", h.HostIP, h.Roles)
+		}
+	}
+	if len(plan.Warnings) == 0 || !strings.Contains(plan.Warnings[0], "replicas") {
+		t.Fatalf("warnings = %v", plan.Warnings)
+	}
+	if _, ok := planProtectedHosts(&plan); ok {
+		t.Fatalf("redis cluster 全员角色不应有落点保护")
+	}
+	// sentinel 模式至少 3 台
+	_, err = planGenericRoles(bp, hosts[:2], PlanOptions{Op: "create", Mode: "sentinel"})
+	if err == nil || !strings.Contains(err.Error(), "至少需要 3 台") {
+		t.Fatalf("sentinel min hosts err = %v", err)
+	}
+}
+
+// kafka kraft：全员 broker+controller；enable_ui 时 UI 落首台（aux，不保护）。
+func TestPlanGenericKafkaKraft(t *testing.T) {
+	bp := store.FindBuiltinStack("kafka")
+	hosts := []model.StackRunHost{gh(1, "10.0.0.1", "node", 1), gh(2, "10.0.0.2", "node", 2), gh(3, "10.0.0.3", "node", 3)}
+	plan, err := planGenericRoles(bp, hosts, PlanOptions{Op: "create", Mode: "kraft", Params: map[string]string{"enable_ui": "yes"}})
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+	for i, h := range plan.Hosts {
+		want := 2
+		if i > 0 {
+			want = 1
+		}
+		if len(h.Roles) != want {
+			t.Fatalf("%s roles = %+v", h.HostIP, h.Roles)
+		}
+	}
+	if plan.Hosts[0].Roles[1].Label != "Kafka UI" || plan.Hosts[0].Roles[1].Scope != "aux" {
+		t.Fatalf("UI role = %+v", plan.Hosts[0].Roles[1])
+	}
+	if _, ok := planProtectedHosts(&plan); ok {
+		t.Fatalf("kraft 全员角色不应有落点保护")
+	}
+}
+
+// elasticsearch：引导主节点（master,data）落点保护，其余 data 节点随成员伸缩。
+func TestPlanGenericElasticsearch(t *testing.T) {
+	bp := store.FindBuiltinStack("elasticsearch")
+	hosts := []model.StackRunHost{gh(1, "10.0.0.2", "worker", 1), gh(2, "10.0.0.1", "master", 2)}
+	plan, err := planGenericRoles(bp, hosts, PlanOptions{Op: "create", Mode: "cluster", ManualMaster: true})
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+	// master 角色主机（10.0.0.1）才是引导节点，与引擎 stackClusterExtra 一致
+	var bootHost *model.RolePlanHost
+	for i := range plan.Hosts {
+		if plan.Hosts[i].HostIP == "10.0.0.1" {
+			bootHost = &plan.Hosts[i]
+		}
+	}
+	if bootHost == nil || len(bootHost.Roles) != 1 || !strings.Contains(bootHost.Roles[0].Label, "引导主节点") {
+		t.Fatalf("boot host roles = %+v", bootHost)
+	}
+	protected, ok := planProtectedHosts(&plan)
+	if !ok || len(protected) != 1 || protected["10.0.0.1"] == "" {
+		t.Fatalf("protected = %v", protected)
+	}
+}
+
+// ELFK（组件编排型，非主从型）：引导机 ES boot + Kibana，第 2 台 Logstash，其余 ES data，Filebeat 全员。
+func TestPlanGenericELFK(t *testing.T) {
+	bp := store.FindBuiltinStack("elfk")
+	if bp == nil {
+		t.Fatal("elfk 套件未注册")
+	}
+	hosts := []model.StackRunHost{
+		gh(1, "10.0.0.1", "master", 1), gh(2, "10.0.0.2", "worker", 2),
+		gh(3, "10.0.0.3", "worker", 3), gh(4, "10.0.0.4", "worker", 4), gh(5, "10.0.0.5", "worker", 5),
+	}
+	plan, err := planGenericRoles(bp, hosts, PlanOptions{Op: "create", Mode: "standard", ManualMaster: true})
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+	rolesOf := func(ip string) []model.RolePlanRole {
+		for _, h := range plan.Hosts {
+			if h.HostIP == ip {
+				return h.Roles
+			}
+		}
+		t.Fatalf("host %s not found", ip)
+		return nil
+	}
+	// 引导机：ES 引导主节点（落点保护）+ Kibana（aux）+ Filebeat（all）
+	r1 := rolesOf("10.0.0.1")
+	if len(r1) != 3 || r1[0].Scope != "" || !strings.Contains(r1[0].Label, "引导主节点") {
+		t.Fatalf("boot roles = %+v", r1)
+	}
+	if r1[1].Label != "Kibana（可视化）" || r1[1].Scope != "aux" {
+		t.Fatalf("kibana role = %+v", r1[1])
+	}
+	if r1[2].Label != "Filebeat 采集代理" || r1[2].Scope != "all" {
+		t.Fatalf("filebeat role = %+v", r1[2])
+	}
+	// 第 2 台：ES data（rest 先加入）+ Logstash（aux，自动）+ Filebeat
+	r2 := rolesOf("10.0.0.2")
+	if len(r2) != 3 || r2[0].Label != "ES 数据节点（data）" || r2[1].Label != "Logstash（日志管道）" || r2[1].Source != "auto" {
+		t.Fatalf("logstash host roles = %+v", r2)
+	}
+	// 第 3-5 台：ES data + Filebeat
+	for _, ip := range []string{"10.0.0.3", "10.0.0.4", "10.0.0.5"} {
+		rr := rolesOf(ip)
+		if len(rr) != 2 || rr[0].Label != "ES 数据节点（data）" || rr[1].Label != "Filebeat 采集代理" {
+			t.Fatalf("%s roles = %+v", ip, rr)
+		}
+	}
+	// 落点保护：仅 ES 引导主节点
+	protected, ok := planProtectedHosts(&plan)
+	if !ok || len(protected) != 1 || protected["10.0.0.1"] == "" {
+		t.Fatalf("protected = %v ok=%v", protected, ok)
+	}
+	// Logstash 手动覆盖 → source manual，无自动落点警告
+	plan2, err := planGenericRoles(bp, hosts, PlanOptions{Op: "create", Mode: "standard", ManualMaster: true,
+		Params: map[string]string{"logstash_host": "10.0.0.5"}})
+	if err != nil {
+		t.Fatalf("plan2: %v", err)
+	}
+	var ls *model.RolePlanRole
+	for _, h := range plan2.Hosts {
+		if h.HostIP == "10.0.0.5" {
+			for i := range h.Roles {
+				if h.Roles[i].Label == "Logstash（日志管道）" {
+					ls = &h.Roles[i]
+				}
+			}
+		}
+	}
+	if ls == nil || ls.Label != "Logstash（日志管道）" || ls.Source != "manual" {
+		t.Fatalf("manual logstash = %+v", ls)
+	}
+	// 低于 3 台拦截（standard MinHosts=3）
+	_, err = planGenericRoles(bp, hosts[:2], PlanOptions{Op: "create", Mode: "standard"})
+	if err == nil || !strings.Contains(err.Error(), "至少需要 3 台") {
+		t.Fatalf("elfk min hosts err = %v", err)
+	}
+}
+
+// 扩容刷新：既有 master 保持引导落点，新机自动获得 rest 角色（redis replication）。
+func TestPlanGenericScaleOutRefresh(t *testing.T) {
+	bp := store.FindBuiltinStack("redis")
+	existing := []model.StackRunHost{gh(1, "10.0.0.1", "master", 1), gh(2, "10.0.0.2", "worker", 2)}
+	fresh := []model.StackRunHost{gh(3, "10.0.0.3", "worker", 3)}
+	all := planFullMemberSet(
+		[]model.StackInstanceHost{
+			{HostID: 1, HostIP: "10.0.0.1", Role: "master", Seq: 1, Status: "active"},
+			{HostID: 2, HostIP: "10.0.0.2", Role: "worker", Seq: 2, Status: "active"},
+		}, fresh)
+	plan, err := planGenericRoles(bp, all, PlanOptions{Op: "scale_out", Mode: "replication", ManualMaster: true})
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+	_ = existing
+	if len(plan.Hosts) != 3 {
+		t.Fatalf("hosts = %d", len(plan.Hosts))
+	}
+	if plan.Hosts[0].Roles[0].Label != "Redis Master" || plan.Hosts[2].Roles[0].Label != "Redis Replica" {
+		t.Fatalf("scale_out roles: %+v / %+v", plan.Hosts[0].Roles, plan.Hosts[2].Roles)
+	}
+}

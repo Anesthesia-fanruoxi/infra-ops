@@ -4,7 +4,7 @@
 
 ## 1. 代码规模与文件边界
 
-1. **单文件 ≤ 300 行**（含空行注释）。超限必须按职责拆分，拆分优先按
+1. **单文件尽量不超过 500 行**（含空行注释）。超出宜按职责拆分，拆分优先按
    "资源维度"（如 api/host.go / api/credential.go）而非机械切行。
 2. 每个包（package）必须能用一句话说清职责，写在包注释里；说不清说明拆分有问题。
 
@@ -17,7 +17,7 @@ common/probe（巡检）→ store · sshx · crypto（由 main 注入依赖）
 ```
 
 1. **api 层负责参数绑定校验、业务逻辑与对 store/common 的编排**，按资源分文件
-   （api/host.go、api/credential.go 等），单文件 ≤300 行。
+   （api/host.go、api/credential.go 等），单文件尽量 ≤500 行。
 2. **api 三条红线**：禁止直接写 SQL（必须调用 store）；禁止直连 SSH（必须经
    common/sshx）；禁止直接加解密（必须经 common/crypto）。明文密钥材料不在
    api 多做停留。

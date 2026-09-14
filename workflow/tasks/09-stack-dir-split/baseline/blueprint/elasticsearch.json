@@ -1,0 +1,128 @@
+{
+  "key": "elasticsearch",
+  "name": "Elasticsearch",
+  "description": "一次成型部署 Elasticsearch 集群。双模式：原「集群」模式（指定一台引导主节点，其余 seed_hosts 加入）；新增「冷热温」模式（按主机勾选 master/纯协调/数据层角色，主脑流水线阶段编排，支持 SSL 自签）。host 网络直连，默认关闭 xpack 安全。",
+  "requires_docker": true,
+  "category": "service",
+  "ha_support": false,
+  "modes": [
+    {
+      "key": "cluster",
+      "label": "集群",
+      "description": "1 引导 master + N data，节点名/种子地址由平台注入，无需手工填 is_bootstrap。",
+      "min_hosts": 1,
+      "host_hint": "至少 1 台；多节点请指定一台引导主节点，生产建议 ≥3 台",
+      "has_bootstrap": false,
+      "assign_master": true,
+      "default_home_dir": "/data/elasticsearch"
+    },
+    {
+      "key": "cold_warm_hot",
+      "label": "冷热温",
+      "description": "按数据热度分层：每台多选 master/纯协调/数据-hot/warm/cold 角色；master 不与数据层混部；生产建议 master ≥3 台（奇数）。SSL 可自签。",
+      "min_hosts": 4,
+      "host_hint": "至少 4 台；建议 1+ master（≥3，奇数）+ ≥2 纯协调 + 数据层（按 tier）",
+      "has_bootstrap": true,
+      "assign_master": false,
+      "default_home_dir": "/data/elasticsearch"
+    }
+  ],
+  "shared_vars": [
+    {
+      "name": "cluster_name",
+      "label": "集群名",
+      "default": "es-cluster",
+      "required": true
+    },
+    {
+      "name": "image",
+      "label": "镜像",
+      "default": "elasticsearch:9.5.3",
+      "required": true
+    },
+    {
+      "name": "java_opts",
+      "label": "堆内存",
+      "default": "-Xms1g -Xmx1g",
+      "required": true,
+      "modes": [
+        "cluster"
+      ]
+    },
+    {
+      "name": "transport_port",
+      "label": "Transport 端口",
+      "default": "9300",
+      "required": true
+    },
+    {
+      "name": "ssl_enabled",
+      "label": "启用 SSL（节点自签证书）",
+      "default": "false",
+      "type": "bool",
+      "required": false,
+      "modes": [
+        "cold_warm_hot"
+      ]
+    },
+    {
+      "name": "coordinator_count",
+      "label": "纯协调节点数",
+      "default": "2",
+      "required": false,
+      "modes": [
+        "cold_warm_hot"
+      ]
+    },
+    {
+      "name": "heap_xms",
+      "label": "JVM 初始堆",
+      "default": "1g",
+      "required": false,
+      "modes": [
+        "cold_warm_hot"
+      ]
+    },
+    {
+      "name": "heap_xmx",
+      "label": "JVM 最大堆",
+      "default": "1g",
+      "required": false,
+      "modes": [
+        "cold_warm_hot"
+      ]
+    },
+    {
+      "name": "jvm_opts",
+      "label": "JVM 额外参数（追加进 ES_JAVA_OPTS）",
+      "default": "-XX:+UseG1GC",
+      "required": false,
+      "modes": [
+        "cold_warm_hot"
+      ]
+    }
+  ],
+  "host_vars": [
+    {
+      "name": "port",
+      "label": "HTTP 端口",
+      "default": "9200",
+      "required": true
+    },
+    {
+      "name": "home_dir",
+      "label": "服务主目录",
+      "default": "/data/elasticsearch",
+      "required": true
+    },
+    {
+      "name": "roles",
+      "label": "节点角色",
+      "default": "coordinator",
+      "required": false,
+      "modes": [
+        "cold_warm_hot"
+      ]
+    }
+  ]
+}

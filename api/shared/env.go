@@ -2,9 +2,12 @@
 package shared
 
 import (
+	"bytes"
+	"encoding/json"
 	"strconv"
 	"strings"
 
+	"infra-ops/model"
 	"infra-ops/store/repo"
 )
 
@@ -25,4 +28,34 @@ func lastOctet(ip string) string {
 		return ip[i+1:]
 	}
 	return ip
+}
+
+// RegisterTemplateServices 模板在某主机成功执行后，按其 services 声明登记/刷新服务清单。
+// url 支持占位符：{{ip}} 替换为主机 IP，{{变量名}} 替换为该主机执行时的变量值。
+// 模板无服务声明时静默跳过。
+func RegisterTemplateServices(tplRepo *repo.DeployRepo, hostID int64, hostIP string, templateID int64, vars map[string]string) error {
+	tpl, err := tplRepo.GetTemplate(templateID)
+	if err != nil || tpl == nil {
+		return err
+	}
+	if len(bytes.TrimSpace(tpl.Services)) == 0 {
+		return nil
+	}
+	var svcs []model.TemplateService
+	if err := json.Unmarshal(tpl.Services, &svcs); err != nil || len(svcs) == 0 {
+		return nil
+	}
+	for _, s := range svcs {
+		url := strings.ReplaceAll(s.URL, "{{ip}}", hostIP)
+		for k, v := range vars {
+			url = strings.ReplaceAll(url, "{{"+k+"}}", v)
+		}
+		if err := tplRepo.UpsertHostService(&model.HostService{
+			HostID: hostID, HostIP: hostIP, ServiceName: s.Name,
+			URL: url, Web: s.Web, TemplateID: templateID,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }

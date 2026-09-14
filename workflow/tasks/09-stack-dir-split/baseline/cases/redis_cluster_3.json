@@ -1,0 +1,124 @@
+{
+  "case": "redis_cluster_3",
+  "stack_key": "redis",
+  "mode": "cluster",
+  "op": "create",
+  "role_plan": {
+    "rev": 1,
+    "op": "create",
+    "generated_at": "",
+    "generated_by": "auto",
+    "ha": false,
+    "hosts": [
+      {
+        "host_id": 301,
+        "host_name": "sn10-0-0-1",
+        "host_ip": "10.0.0.1",
+        "seq": 1,
+        "roles": [
+          {
+            "comp": "redis",
+            "role": "node",
+            "label": "Redis Cluster 节点",
+            "source": "auto",
+            "scope": "all"
+          }
+        ]
+      },
+      {
+        "host_id": 302,
+        "host_name": "sn10-0-0-2",
+        "host_ip": "10.0.0.2",
+        "seq": 2,
+        "roles": [
+          {
+            "comp": "redis",
+            "role": "node",
+            "label": "Redis Cluster 节点",
+            "source": "auto",
+            "scope": "all"
+          }
+        ]
+      },
+      {
+        "host_id": 303,
+        "host_name": "sn10-0-0-3",
+        "host_ip": "10.0.0.3",
+        "seq": 3,
+        "roles": [
+          {
+            "comp": "redis",
+            "role": "node",
+            "label": "Redis Cluster 节点",
+            "source": "auto",
+            "scope": "all"
+          }
+        ]
+      }
+    ],
+    "masters": null,
+    "warnings": [
+      "主从与哈希槽由 Redis Cluster 自动分配（--cluster-replicas 0），预览不指定具体主从"
+    ]
+  },
+  "services": [
+    {
+      "host_id": 301,
+      "service_name": "Redis Cluster",
+      "url": "redis://10.0.0.1:6379",
+      "web": false,
+      "instance_id": 0
+    },
+    {
+      "host_id": 302,
+      "service_name": "Redis Cluster",
+      "url": "redis://10.0.0.2:6379",
+      "web": false,
+      "instance_id": 0
+    },
+    {
+      "host_id": 303,
+      "service_name": "Redis Cluster",
+      "url": "redis://10.0.0.3:6379",
+      "web": false,
+      "instance_id": 0
+    }
+  ],
+  "installs": [
+    {
+      "host_id": 301,
+      "template_id": 0,
+      "template_name": "套件:Redis/cluster",
+      "task_id": 0
+    },
+    {
+      "host_id": 302,
+      "template_id": 0,
+      "template_name": "套件:Redis/cluster",
+      "task_id": 0
+    },
+    {
+      "host_id": 303,
+      "template_id": 0,
+      "template_name": "套件:Redis/cluster",
+      "task_id": 0
+    }
+  ],
+  "endpoints": [
+    {
+      "name": "Redis",
+      "url": "redis://10.0.0.1:6379",
+      "role": "node"
+    },
+    {
+      "name": "Redis",
+      "url": "redis://10.0.0.2:6379",
+      "role": "node"
+    },
+    {
+      "name": "Redis",
+      "url": "redis://10.0.0.3:6379",
+      "role": "node"
+    }
+  ]
+}

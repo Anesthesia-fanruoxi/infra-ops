@@ -1,0 +1,29 @@
+[
+  {
+    "key": "reset",
+    "label": "清理旧环境与残留容器",
+    "target": "all",
+    "full_only": true
+  },
+  {
+    "key": "masters",
+    "label": "启动 master 候选节点",
+    "target": "all"
+  },
+  {
+    "key": "coords",
+    "label": "启动纯协调节点",
+    "target": "all"
+  },
+  {
+    "key": "data",
+    "label": "启动数据节点（hot/warm/cold）",
+    "target": "all"
+  },
+  {
+    "key": "verify",
+    "label": "校验集群健康与各分层",
+    "target": "leader",
+    "always": true
+  }
+]

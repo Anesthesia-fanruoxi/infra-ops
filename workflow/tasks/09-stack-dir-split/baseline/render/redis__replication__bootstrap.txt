@@ -1,0 +1,1 @@
+NO_SCRIPT: 套件 redis 模式 replication 没有 bootstrap 脚本
