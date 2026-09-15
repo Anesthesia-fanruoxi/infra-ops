@@ -39,13 +39,16 @@
     <template v-if="instDetail.id">
       <div class="drawer-sec-title stk-inst-runs-title">
         <span>角色计划</span>
+        <span v-if="instPlan" class="stk-inst-plan-meta">rev {{instPlan.rev}} · {{instPlan.ha ? 'HA' : '单机'}} · <span class="mono">{{planTime(instPlan.generated_at)}}</span></span>
         <span class="stk-inst-mem-count">
-          <el-button v-if="instPlan" size="small" text type="primary" @click="replanInst">重新规划</el-button>
+          <el-tooltip v-if="instReady(instDetail)" content="部署已完成，角色计划已定型，不支持重新规划" placement="top">
+            <span><el-button v-if="instPlan" size="small" text type="primary" disabled>重新规划</el-button></span>
+          </el-tooltip>
+          <el-button v-else-if="instPlan" size="small" text type="primary" @click="replanInst">重新规划</el-button>
           <span v-else class="faint">加载中…</span>
         </span>
       </div>
       <div v-if="instPlan" class="stk-inst-plan-box">
-        <div class="stk-inst-plan-meta">rev {{instPlan.rev}} · {{instPlan.ha ? 'HA' : '单机'}} · <span class="mono">{{instPlan.generated_at}}</span></div>
         <div v-for="h in instPlan.hosts" :key="h.host_ip" class="stk-inst-plan-row">
           <span class="mono stk-inst-plan-ip">{{h.host_ip}}</span>
           <div class="stk-inst-plan-chips">

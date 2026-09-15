@@ -48,17 +48,29 @@ func CheckRequires(hostRepo *repo.HostRepo, credRepo *repo.CredentialRepo, crypt
 // ExecHostWith 部署与编排共用的单主机执行：解密凭据→SSH 拨号→运行脚本。
 func ExecHostWith(hostRepo *repo.HostRepo, credRepo *repo.CredentialRepo, cryptoS *icrypto.Service,
 	sshC *sshx.Client, hostID int64, script string, onLog func(string)) (string, error) {
+	client, _, err := DialHost(hostRepo, credRepo, cryptoS, sshC, hostID)
+	if err != nil {
+		return "", err
+	}
+	defer client.Close()
+
+	return runRemoteScript(client, script, onLog)
+}
+
+// DialHost 部署族共用的单主机拨号：解密凭据 → SSH 连接。调用方负责关闭返回的 client。
+func DialHost(hostRepo *repo.HostRepo, credRepo *repo.CredentialRepo, cryptoS *icrypto.Service,
+	sshC *sshx.Client, hostID int64) (*ssh.Client, *model.Host, error) {
 	host, err := hostRepo.GetByID(hostID)
 	if err != nil || host == nil {
-		return "", fmt.Errorf("主机不存在")
+		return nil, nil, fmt.Errorf("主机不存在")
 	}
 	cred, err := credRepo.GetByID(host.CredentialID)
 	if err != nil || cred == nil {
-		return "", fmt.Errorf("凭据不存在")
+		return nil, nil, fmt.Errorf("凭据不存在")
 	}
 	secret, err := cryptoS.Decrypt(cred.EncryptedSecret)
 	if err != nil {
-		return "", fmt.Errorf("凭据解密失败: %w", err)
+		return nil, nil, fmt.Errorf("凭据解密失败: %w", err)
 	}
 
 	dialCfg := sshx.DialConfig{
@@ -72,11 +84,9 @@ func ExecHostWith(hostRepo *repo.HostRepo, credRepo *repo.CredentialRepo, crypto
 	}
 	client, err := sshC.Dial(dialCfg)
 	if err != nil {
-		return "", err
+		return nil, nil, err
 	}
-	defer client.Close()
-
-	return runRemoteScript(client, script, onLog)
+	return client, host, nil
 }
 
 // runRemoteScript 在连接上执行脚本：合并输出落缓冲（上限 64KB），

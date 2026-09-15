@@ -39,8 +39,11 @@ func (h *stackHandler) planForStackOp(op string, d stackkit.Driver, mode *model.
 			return nil, err
 		}
 		// 重规划：rev 在既有计划上递增（§3.2 只保留最近一份）
-		if old := decodeRolePlan(inst.RolePlanJSON); old != nil && old.Rev > 0 {
-			plan.Rev = old.Rev + 1
+		// create 时实例尚未落库（inst == nil），计划从 rev 1 起算，无既有计划可继承
+		if inst != nil {
+			if old := decodeRolePlan(inst.RolePlanJSON); old != nil && old.Rev > 0 {
+				plan.Rev = old.Rev + 1
+			}
 		}
 		return &plan, nil
 
@@ -117,8 +120,12 @@ func (h *stackHandler) planForGenericOp(op string, d stackkit.Driver, mode *mode
 		if err != nil {
 			return nil, err
 		}
-		if old := decodeRolePlan(inst.RolePlanJSON); old != nil && old.Rev > 0 {
-			plan.Rev = old.Rev + 1
+		// create 时实例尚未落库（inst == nil），计划从 rev 1 起算。此分支只处理 create
+		// （通用套件无 add_component 语义），保留判空以便将来接入增量操作时语义不变。
+		if inst != nil {
+			if old := decodeRolePlan(inst.RolePlanJSON); old != nil && old.Rev > 0 {
+				plan.Rev = old.Rev + 1
+			}
 		}
 		return &plan, nil
 

@@ -36,7 +36,13 @@ func (h *stackHandler) execute(runID int64) {
 	}
 
 	if op == "scale_in" || op == "uninstall" || op == "remove_component" {
+		for _, s := range buildRunSteps(op, d, mode, nil, "") {
+			_ = h.repo.CreateRunSteps(runID, []model.StackRunStep{s})
+		}
+		h.stepRunning(runID, "remove")
 		h.runPhaseRemove(runID, run, hosts)
+		hosts, _ = h.repo.RunHosts(runID)
+		h.stepDone(runID, "remove", !anyHostFailed(hosts))
 		h.finish(runID)
 		return
 	}
@@ -49,11 +55,17 @@ func (h *stackHandler) execute(runID int64) {
 	}
 	extraAll := h.runClusterExtra(d, run, op, existing, hosts)
 
+	// 步骤清单一次性物化（在 prereq 之前，Docker 环境步骤的状态推进才有载体）
+	installPhases := selectPipelinePhases(d, run, op)
+	_ = h.repo.CreateRunSteps(runID, buildRunSteps(op, d, mode, installPhases, h.runStepComponents(run)))
+
 	if d.Blueprint().RequiresDocker {
+		h.stepRunning(runID, "prereq")
 		ok := h.runPhasePrereq(runID, hosts)
+		h.stepDone(runID, "prereq", ok)
 		hosts, _ = h.repo.RunHosts(runID)
 		if !ok {
-			h.skipRemaining(hosts, true, true)
+			h.skipRemaining(runID, hosts, true, true)
 			h.finish(runID)
 			return
 		}
@@ -64,7 +76,6 @@ func (h *stackHandler) execute(runID int64) {
 
 	// 主脑编排的流水线：套件声明了 ordered 多阶段时，逐阶段调度主机（替代 node→bootstrap 单步）。
 	// installPhases 会按运行类型裁剪：create/reinstall 全量、add_component 只跑新增组件、scale_out 只跑节点阶段。
-	installPhases := selectPipelinePhases(d, run, op)
 	if len(d.Pipeline(run.Mode)) > 0 && len(installPhases) == 0 &&
 		(op == "add_component" || op == "scale_out") {
 		// 声明了流水线的套件，加装/扩容必须走流水线；阶段为空说明请求无效（如未解析到新增组件）。
@@ -72,11 +83,15 @@ func (h *stackHandler) execute(runID int64) {
 		h.failAll(runID, hosts, "未解析到需要执行的流水线阶段（新增组件为空？）")
 		return
 	}
+	// 离线资产分发：套件声明（AssetProvisioner）且服务端已就绪的资产经 SFTP 推送到各主机，
+	// 部署脚本优先使用已就位文件（存在性判断），未就绪则回落脚本内建下载
+	h.provisionAssets(runID, run, d, mode, hosts)
+
 	if len(installPhases) > 0 {
 		ok := h.runPipeline(runID, run.InstanceID, run.Mode, d, hosts, extraAll, installPhases)
 		hosts, _ = h.repo.RunHosts(runID)
 		if !ok {
-			h.skipRemaining(hosts, false, true)
+			h.skipRemaining(runID, hosts, false, true)
 			h.finish(runID)
 			return
 		}
@@ -87,30 +102,38 @@ func (h *stackHandler) execute(runID int64) {
 				_ = h.repo.UpdateHost(&hosts[i])
 			}
 		}
-		h.markHostsDone(hosts)
+		h.markHostsDone(runID, hosts)
 		h.finish(runID)
 		return
 	}
 
+	h.stepRunning(runID, "node")
 	ok := h.runPhaseNode(runID, run.InstanceID, run.Mode, d, hosts, extraAll, "node", true)
+	h.stepDone(runID, "node", ok)
 	hosts, _ = h.repo.RunHosts(runID)
 	if !ok {
-		h.skipRemaining(hosts, false, true)
+		h.skipRemaining(runID, hosts, false, true)
 		h.finish(runID)
 		return
 	}
 
 	if op == "scale_out" && hasPhase(run.StackKey, run.Mode, stackkit.PhaseScaleOut) {
+		h.stepRunning(runID, "scale_out")
 		h.runPhaseScaleOut(runID, run.Mode, d, hosts, existing, extraAll)
+		hosts, _ = h.repo.RunHosts(runID)
+		h.stepDone(runID, "scale_out", !anyHostFailed(hosts))
 		h.finish(runID)
 		return
 	}
 	if stackInstallOp(op) && mode.HasBootstrap {
+		h.stepRunning(runID, "bootstrap")
 		h.runPhaseBootstrap(runID, run.Mode, d, hosts)
+		hosts, _ = h.repo.RunHosts(runID)
+		h.stepDone(runID, "bootstrap", !anyHostFailed(hosts))
 		h.finish(runID)
 		return
 	}
-	h.markHostsDone(hosts)
+	h.markHostsDone(runID, hosts)
 	h.finish(runID)
 }
 
@@ -123,12 +146,13 @@ func (h *stackHandler) failAll(runID int64, hosts []model.StackRunHost, msg stri
 		hosts[i].NodeStatus = "skipped"
 		hosts[i].BootstrapStatus = "skipped"
 		_ = h.repo.UpdateHost(&hosts[i])
+		h.publishHost(runID, &hosts[i], "node")
 	}
 	h.finish(runID)
 }
 
 // skipRemaining 把未执行的阶段与主机标记为跳过。
-func (h *stackHandler) skipRemaining(hosts []model.StackRunHost, skipNode, skipBoot bool) {
+func (h *stackHandler) skipRemaining(runID int64, hosts []model.StackRunHost, skipNode, skipBoot bool) {
 	for i := range hosts {
 		if skipNode && (hosts[i].NodeStatus == "pending" || hosts[i].NodeStatus == "running") {
 			hosts[i].NodeStatus = "skipped"
@@ -146,14 +170,16 @@ func (h *stackHandler) skipRemaining(hosts []model.StackRunHost, skipNode, skipB
 			hosts[i].Status = stackHostOverall(hosts[i])
 		}
 		_ = h.repo.UpdateHost(&hosts[i])
+		h.publishHost(runID, &hosts[i], "node")
 	}
 }
 
-// markHostsDone 按各子阶段状态收敛主机总体状态。
-func (h *stackHandler) markHostsDone(hosts []model.StackRunHost) {
+// markHostsDone 按各子阶段状态收敛主机总体状态（收敛结果同步推送 SSE，前端运行抽屉实时可见）。
+func (h *stackHandler) markHostsDone(runID int64, hosts []model.StackRunHost) {
 	for i := range hosts {
 		hosts[i].Status = stackHostOverall(hosts[i])
 		_ = h.repo.UpdateHost(&hosts[i])
+		h.publishHost(runID, &hosts[i], "node")
 	}
 }
 
@@ -176,8 +202,10 @@ func stackHostOverall(h model.StackRunHost) string {
 // finish 汇总运行结果、收尾实例状态并广播完成事件。
 func (h *stackHandler) finish(runID int64) {
 	hosts, _ := h.repo.RunHosts(runID)
-	h.markHostsDone(hosts)
+	h.markHostsDone(runID, hosts)
 	status, _ := h.repo.FinishRun(runID)
+	// 步骤收敛兜底：正常推进时每步都已落终态；失败中止路径残留的 running/pending 在这里收口
+	_ = h.repo.ConvergeRunSteps(runID)
 	sc, fc, total := 0, 0, len(hosts)
 	if run, _ := h.repo.GetRun(runID); run != nil {
 		sc, fc, total = run.SuccessCnt, run.FailCnt, run.Total

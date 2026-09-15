@@ -94,8 +94,8 @@
     compLabel(stackKey, k) {
       const def = this.compsOf(stackKey).find(c => c.key === k)
       if (def) return def.label
-      // 运行期组件（不在组件目录里，如 HA 的 metastore_db）给出中文名而不是裸键名
-      return { metastore_db: 'Hive MetaDB' }[k] || k
+      // 运行期组件（不在组件目录里）给出可读名而不是裸键名
+      return { metastore_db: 'Hive MetaDB', redis: 'Redis', sentinel: 'Sentinel' }[k] || k
     },
     instStatusType(s) { return { ready: 'success', deploying: 'warning', partial: 'danger', failed: 'danger', uninstalled: 'info' }[s] || 'info' },
     instStatusLabel(s) { return { ready: '就绪', deploying: '变更中', partial: '部分成功', failed: '失败', uninstalled: '已卸载' }[s] || s },
@@ -254,13 +254,17 @@
   })
 
   P.mixins.push({
+    computed: {
+    // 模板裸引用（v-if="caDownloadAvailable"）必须是 computed；放 methods 里求值为函数对象恒真
+    // （曾导致所有套件的实例抽屉都显示「下载 CA 证书」，实际仅 ES 冷热温 + SSL 开启有证书）
+    caDownloadAvailable() { const h = this.hook(this.instKey(), 'caDownloadAvailable'); return h ? !!h.call(this, this) : false },
+    },
     methods: {
     // —— 套件专属展示的分发点 ——
     instKey() { const it = this.instDetail || this.verifyTarget; return (it && it.stack_key) || '' },
     instIsHa(it) { const h = this.hook(it && it.stack_key, 'instIsHa'); return h ? !!h.call(this, this, it) : false },
     memTags(h) { const hk = this.hook(this.instKey(), 'memTags'); return hk ? hk.call(this, this, h) : [] },
     instTierStyle(it) { const h = this.hook(it && it.stack_key, 'instTierStyle'); return h ? h.call(this, this, it) : null },
-    caDownloadAvailable() { const h = this.hook(this.instKey(), 'caDownloadAvailable'); return h ? !!h.call(this, this) : false },
     async downloadCa() { const h = this.hook(this.instKey(), 'downloadCa'); if (h) return h.call(this, this) },
     }
   })

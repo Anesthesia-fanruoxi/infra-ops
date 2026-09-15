@@ -51,7 +51,8 @@ func (h *stackHandler) SSESetup(c *gin.Context) {
 					"success_cnt": p.SuccessCnt, "fail_cnt": p.FailCnt, "total": p.Total})
 			} else {
 				c.SSEvent("track", gin.H{"run_id": p.RunID, "host_id": p.HostID, "phase": p.Phase, "status": p.Status,
-					"prereq_status": p.PrereqStatus, "node_status": p.NodeStatus, "bootstrap_status": p.BootstrapStatus})
+					"prereq_status": p.PrereqStatus, "node_status": p.NodeStatus, "bootstrap_status": p.BootstrapStatus,
+					"step_key": p.StepKey, "step_status": p.StepStatus})
 			}
 		case <-ticker.C:
 			_, _ = io.WriteString(w, ": ping\n\n")

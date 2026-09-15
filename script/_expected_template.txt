@@ -193,6 +193,29 @@
           </label>
           <div v-if="!filteredHosts.length && !hostsLoading" class="deploy-placeholder">无匹配主机</div>
         </div>
+        <!-- 角色计划预览（通用套件）：第二步勾选主机即确认落点，不再藏进开始部署的弹框 -->
+        <div v-if="needOpPlan" class="stk-plan-preview" style="margin-top:12px">
+          <div class="stk-plan-preview-head">
+            <span>角色计划预览 · 确认落点后开始部署</span>
+            <span v-if="opPlan" class="faint">{{opPlan.generated_by === 'manual' ? '含手动指定' : '自动分配'}}</span>
+            <el-button size="small" text type="primary" :loading="opPlanLoading" @click="refreshOpPlan">{{opPlan ? '刷新' : '生成预览'}}</el-button>
+          </div>
+          <div v-if="opPlanErr" class="stk-plan-preview-warn"><div>{{opPlanErr}}</div></div>
+          <div v-else-if="opPlan" class="stk-plan-preview-grid">
+            <div v-for="h in opPlan.hosts" :key="h.host_ip" class="stk-plan-preview-row">
+              <span class="mono stk-plan-preview-ip">{{h.host_ip}}</span>
+              <div class="stk-plan-preview-chips">
+                <span v-for="(r, i) in h.roles" :key="i" class="stk-plan-chip" :class="[r.source==='manual' ? 'is-manual' : 'is-auto', roleTextClass(r)]" :title="r.source==='manual' ? '手动指定' : '自动分配'">{{r.label}}</span>
+                <span v-if="!(h.roles||[]).length" class="faint">—</span>
+              </div>
+            </div>
+          </div>
+          <div v-else class="faint" style="font-size:12px;padding-top:6px">勾选主机后自动生成角色计划预览…</div>
+          <div class="stk-legend"><span class="stk-legend-item"><i class="dot is-manual"></i>手动</span><span class="stk-legend-item"><i class="dot is-auto"></i>自动</span><span class="stk-legend-sep"></span><span class="stk-legend-item rt-primary">主/Active</span><span class="stk-legend-item rt-standby">备/Standby</span><span class="stk-legend-item rt-quorum">仲裁</span><span class="stk-legend-item rt-worker">工作/成员</span><span class="stk-legend-item rt-aux">辅助</span></div>
+          <div v-if="opPlan && (opPlan.warnings||[]).length" class="stk-plan-preview-warn">
+            <div v-for="(w, i) in opPlan.warnings" :key="i">{{w}}</div>
+          </div>
+        </div>
       </template>
     </div>
 
@@ -268,29 +291,8 @@
       <div class="stk-preflight-title">已有 Docker，跳过且不改动（{{preflight.will_skip.length}}）</div>
       <div v-for="h in preflight.will_skip" :key="h.host_id">{{h.name}} <span class="mono">{{h.ip}}</span></div>
     </div>
-    <!-- 部署前角色预览（全部套件）：与部署前置一同确认落点，未通过不能确认部署 -->
-    <div v-if="needOpPlan" class="stk-plan-preview" style="margin-top:12px">
-      <div class="stk-plan-preview-head">
-        <span>角色计划预览 · 确认落点后开始部署</span>
-        <span v-if="opPlan" class="faint">{{opPlan.generated_by === 'manual' ? '含手动指定' : '自动分配'}}</span>
-        <el-button v-if="opPlanErr" size="small" text type="primary" @click="refreshOpPlan">重试</el-button>
-      </div>
-      <div v-if="opPlanErr" class="stk-plan-preview-warn"><div>{{opPlanErr}}</div></div>
-      <div v-else-if="opPlan" class="stk-plan-preview-grid">
-        <div v-for="h in opPlan.hosts" :key="h.host_ip" class="stk-plan-preview-row">
-          <span class="mono stk-plan-preview-ip">{{h.host_ip}}</span>
-          <div class="stk-plan-preview-chips">
-            <span v-for="(r, i) in h.roles" :key="i" class="stk-plan-chip" :class="[r.source==='manual' ? 'is-manual' : 'is-auto', roleTextClass(r)]" :title="r.source==='manual' ? '手动指定' : '自动分配'">{{r.label}}</span>
-            <span v-if="!(h.roles||[]).length" class="faint">—</span>
-          </div>
-        </div>
-      </div>
-      <div v-else class="faint" style="font-size:12px;padding-top:6px">正在生成角色计划预览…</div>
-      <div class="stk-legend"><span class="stk-legend-item"><i class="dot is-manual"></i>手动</span><span class="stk-legend-item"><i class="dot is-auto"></i>自动</span><span class="stk-legend-sep"></span><span class="stk-legend-item rt-primary">主/Active</span><span class="stk-legend-item rt-standby">备/Standby</span><span class="stk-legend-item rt-quorum">仲裁</span><span class="stk-legend-item rt-worker">工作/成员</span><span class="stk-legend-item rt-aux">辅助</span></div>
-      <div v-if="opPlan && (opPlan.warnings||[]).length" class="stk-plan-preview-warn">
-        <div v-for="(w, i) in opPlan.warnings" :key="i">{{w}}</div>
-      </div>
-    </div>
+    <!-- 角色计划预览已前移到向导第二步（tpl-wizard.js 通用分支 / bigdata roles.js）：
+         这里只做 Docker 前置检查，不再同屏展示落点信息 -->
     <template #footer>
       <el-button @click="preflightVisible=false">取消</el-button>
       <el-button type="primary" :loading="deploying" :disabled="!preflightReady" @click="confirmRun">确认部署</el-button>
@@ -335,13 +337,16 @@
     <template v-if="instDetail.id">
       <div class="drawer-sec-title stk-inst-runs-title">
         <span>角色计划</span>
+        <span v-if="instPlan" class="stk-inst-plan-meta">rev {{instPlan.rev}} · {{instPlan.ha ? 'HA' : '单机'}} · <span class="mono">{{planTime(instPlan.generated_at)}}</span></span>
         <span class="stk-inst-mem-count">
-          <el-button v-if="instPlan" size="small" text type="primary" @click="replanInst">重新规划</el-button>
+          <el-tooltip v-if="instReady(instDetail)" content="部署已完成，角色计划已定型，不支持重新规划" placement="top">
+            <span><el-button v-if="instPlan" size="small" text type="primary" disabled>重新规划</el-button></span>
+          </el-tooltip>
+          <el-button v-else-if="instPlan" size="small" text type="primary" @click="replanInst">重新规划</el-button>
           <span v-else class="faint">加载中…</span>
         </span>
       </div>
       <div v-if="instPlan" class="stk-inst-plan-box">
-        <div class="stk-inst-plan-meta">rev {{instPlan.rev}} · {{instPlan.ha ? 'HA' : '单机'}} · <span class="mono">{{instPlan.generated_at}}</span></div>
         <div v-for="h in instPlan.hosts" :key="h.host_ip" class="stk-inst-plan-row">
           <span class="mono stk-inst-plan-ip">{{h.host_ip}}</span>
           <div class="stk-inst-plan-chips">
@@ -555,18 +560,39 @@
       <el-tag :type="taskTagType(recordMeta.status)" size="small">{{taskStatusLabel(recordMeta.status)}}</el-tag>
       <span v-if="recordMeta.created_at" class="mono faint deploy-drawer-meta-time">{{formatTime(recordMeta.created_at)}}</span>
     </div>
+    <div v-if="recordSteps.length" class="stk-run-steps">
+      <span v-for="s in recordSteps" :key="s.key" class="stk-run-step" :class="'is-' + s.status" :title="runStepTitle(s)">
+        <i class="dot"></i><span class="stk-run-step-label">{{s.label}}</span>
+      </span>
+    </div>
     <div v-if="recordHosts.length" class="deploy-drawer-hostlist">
-      <div class="deploy-drawer-host" v-for="h in recordHosts" :key="h.id">
-        <span class="status-badge" :class="hostStatusCls(h.status)"><span class="dot"></span>{{hostStatusText(h.status)}}</span>
-        <span class="deploy-host-name">{{h.host_name}}</span>
-        <span class="mono deploy-host-ip">{{h.host_ip}}</span>
-        <el-tag size="small" type="info">{{roleLabel(h.role)}}</el-tag>
-        <span class="stk-phase-pills">
-          <el-tag v-if="showPrereqPill" size="small" :type="phaseTag(h.prereq_status)">Docker {{phaseText(h.prereq_status)}}</el-tag>
-          <el-tag size="small" :type="phaseTag(h.node_status)">节点 {{phaseText(h.node_status)}}</el-tag>
-          <el-tag v-if="showBootstrapPill" size="small" :type="phaseTag(h.bootstrap_status)">初始化 {{phaseText(h.bootstrap_status)}}</el-tag>
-        </span>
-      </div>
+      <template v-if="runHasCompView">
+        <div class="stk-run-host" v-for="g in runHostComps" :key="g.host_ip">
+          <div class="stk-run-host-head">
+            <span class="status-badge" :class="g.rh ? hostStatusCls(g.rh.status) : 'unverified'"><span class="dot"></span>{{g.rh ? hostStatusText(g.rh.status) : '未参与'}}</span>
+            <span class="deploy-host-name">{{g.host_name}}</span>
+            <span class="mono deploy-host-ip">{{g.host_ip}}</span>
+          </div>
+          <div class="stk-run-host-comps">
+            <span v-for="c in g.comps" :key="c.comp" class="stk-run-step stk-run-hostcomp" :class="c.status ? 'is-' + c.status : ''" :title="c.label + '：' + c.title">
+              <i class="dot"></i><span>{{c.label}}</span><span v-if="c.status" class="stk-run-hostcomp-status">{{compStatusText(c.status)}}</span>
+            </span>
+          </div>
+        </div>
+      </template>
+      <template v-else>
+        <div class="deploy-drawer-host" v-for="h in recordHosts" :key="h.id">
+          <span class="status-badge" :class="hostStatusCls(h.status)"><span class="dot"></span>{{hostStatusText(h.status)}}</span>
+          <span class="deploy-host-name">{{h.host_name}}</span>
+          <span class="mono deploy-host-ip">{{h.host_ip}}</span>
+          <el-tag size="small" type="info">{{roleLabel(h.role)}}</el-tag>
+          <span class="stk-phase-pills">
+            <el-tag v-if="showPrereqPill" size="small" :type="phaseTag(h.prereq_status)">Docker {{phaseText(h.prereq_status)}}</el-tag>
+            <el-tag size="small" :type="phaseTag(h.node_status)">节点 {{phaseText(h.node_status)}}</el-tag>
+            <el-tag v-if="showBootstrapPill" size="small" :type="phaseTag(h.bootstrap_status)">初始化 {{phaseText(h.bootstrap_status)}}</el-tag>
+          </span>
+        </div>
+      </template>
     </div>
     <div class="drawer-sec deploy-log-sec">
       <div class="drawer-sec-title">运行日志</div>

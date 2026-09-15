@@ -52,6 +52,7 @@
       this.selectedHostIds = new Set((rows || []).map(h => h.id))
       this.syncMasters()
       this.ensureDefaultRoles()
+      this.refreshOpPlanDebounced()
     },
     syncRoleHostTableSelection() {
       if (!this.useRolePlan) return
@@ -75,6 +76,7 @@
       this.syncMasters()
       if (this.useRolePlan) this.ensureDefaultRoles()
       this.$nextTick(() => this.syncRoleHostTableSelection())
+      this.refreshOpPlanDebounced()
     },
     toggleSelectAll() {
       // 缩容（bigdata）：全选跳过承载落点角色的成员
@@ -87,6 +89,7 @@
       this.syncMasters()
       if (this.useRolePlan) this.ensureDefaultRoles()
       this.$nextTick(() => this.syncRoleHostTableSelection())
+      this.refreshOpPlanDebounced()
     },
     toggleHostSortOrder() { this.hostSort = { ...this.hostSort, order: this.hostSort.order === 'asc' ? 'desc' : 'asc' } },
     sortHostList(list, sort) {

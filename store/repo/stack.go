@@ -120,6 +120,87 @@ func (r *StackRepo) UpdateHost(h *model.StackRunHost) error {
 	return err
 }
 
+// CreateRunSteps 批量创建运行步骤（步骤清单在 execute 入口一次性物化）。
+func (r *StackRepo) CreateRunSteps(runID int64, steps []model.StackRunStep) error {
+	if len(steps) == 0 {
+		return nil
+	}
+	tx, err := store.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	for _, s := range steps {
+		if _, err := tx.Exec(
+			`INSERT INTO stack_run_steps(run_id,seq,key,label,target,component,phase,status) VALUES(?,?,?,?,?,?,?,?)`,
+			runID, s.Seq, s.Key, s.Label, s.Target, s.Component, s.Phase, s.Status,
+		); err != nil {
+			return fmt.Errorf("create stack run step: %w", err)
+		}
+	}
+	return tx.Commit()
+}
+
+// RunSteps 运行下全部步骤，按 seq。
+func (r *StackRepo) RunSteps(runID int64) ([]model.StackRunStep, error) {
+	rows, err := store.DB.Query(
+		`SELECT id,run_id,seq,key,label,target,component,phase,status,error,started_at,finished_at
+		 FROM stack_run_steps WHERE run_id=? ORDER BY seq`, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []model.StackRunStep{}
+	for rows.Next() {
+		var s model.StackRunStep
+		var started, finished sql.NullString
+		if err := rows.Scan(&s.ID, &s.RunID, &s.Seq, &s.Key, &s.Label, &s.Target, &s.Component,
+			&s.Phase, &s.Status, &s.Error, &started, &finished); err != nil {
+			return nil, err
+		}
+		if started.Valid {
+			s.StartedAt = &started.String
+		}
+		if finished.Valid {
+			s.FinishedAt = &finished.String
+		}
+		items = append(items, s)
+	}
+	return items, rows.Err()
+}
+
+// SetStepStatus 推进步骤状态：running 起记 started_at，终态记 finished_at。
+func (r *StackRepo) SetStepStatus(runID int64, key, status, errMsg string) error {
+	_, err := store.DB.Exec(
+		`UPDATE stack_run_steps SET status=?, error=?,
+		 started_at=COALESCE(started_at, datetime('now','localtime')),
+		 finished_at=CASE WHEN ? IN ('success','failed','skipped') THEN datetime('now','localtime') ELSE finished_at END
+		 WHERE run_id=? AND key=?`,
+		status, errMsg, status, runID, key,
+	)
+	return err
+}
+
+// ConvergeRunSteps 收敛残留步骤：run 终态后仍 running 的按 run 成败定终态，pending 的记为 skipped
+// （引擎正常推进时每步都会落终态；这里是失败中止路径的兜底，保证前端步骤条无悬空状态）。
+func (r *StackRepo) ConvergeRunSteps(runID int64) error {
+	stmts := []string{
+		`UPDATE stack_run_steps SET status = CASE
+			WHEN (SELECT status FROM stack_runs WHERE id = stack_run_steps.run_id) = 'success' THEN 'success'
+			ELSE 'failed' END,
+		 finished_at = datetime('now','localtime')
+		 WHERE run_id=? AND status='running'`,
+		`UPDATE stack_run_steps SET status='skipped', finished_at=datetime('now','localtime')
+		 WHERE run_id=? AND (status='pending' OR status='')`,
+	}
+	for _, s := range stmts {
+		if _, err := store.DB.Exec(s, runID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // FinishRun 汇总成败并落终态。
 func (r *StackRepo) FinishRun(runID int64) (string, error) {
 	var successCnt, failCnt, total int
@@ -209,6 +290,8 @@ func (r *StackRepo) FailStaleRuns() ([]int64, error) {
 		if _, err := r.FinishRun(run.ID); err != nil {
 			return instIDs, err
 		}
+		// 步骤表同步收敛：running 的按失败收口、pending 的记 skipped，避免步骤条悬空
+		_ = r.ConvergeRunSteps(run.ID)
 	}
 	return instIDs, nil
 }

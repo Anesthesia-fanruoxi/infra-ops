@@ -36,10 +36,14 @@ func (h *stackHandler) RunDetail(c *gin.Context) {
 	if hosts == nil {
 		hosts = []model.StackRunHost{}
 	}
+	steps, _ := h.repo.RunSteps(id)
+	if steps == nil {
+		steps = []model.StackRunStep{}
+	}
 	resp.OK(c, gin.H{
 		"id": run.ID, "instance_id": run.InstanceID, "op": run.Op,
 		"stack_key": run.StackKey, "stack_name": run.StackName, "mode": run.Mode,
 		"status": run.Status, "total": run.Total, "success_cnt": run.SuccessCnt, "fail_cnt": run.FailCnt,
-		"created_at": run.CreatedAt, "finished_at": run.FinishedAt, "hosts": hosts,
+		"created_at": run.CreatedAt, "finished_at": run.FinishedAt, "hosts": hosts, "steps": steps,
 	})
 }

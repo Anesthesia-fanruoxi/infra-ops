@@ -98,6 +98,22 @@ type StackRunLog struct {
 	CreatedAt string `json:"created_at"`
 }
 
+// StackRunStep 套件运行的流水线步骤（一次运行内的阶段序列，前端按序渲染步骤条）。
+type StackRunStep struct {
+	ID         int64   `json:"id"`
+	RunID      int64   `json:"run_id"`
+	Seq        int     `json:"seq"`
+	Key        string  `json:"key"`                // 步骤键（prereq/流水线阶段键/node/bootstrap/scale_out/remove）
+	Label      string  `json:"label"`              // 展示名（取自蓝图流水线或引擎通用文案）
+	Target     string  `json:"target"`             // all=全部主机 / leader=仅主节点
+	Component  string  `json:"component"`          // 归属组件（逗号分隔，空=不隶属）
+	Phase      string  `json:"phase"`              // 日志阶段归属：prereq/node/bootstrap
+	Status     string  `json:"status"`             // pending/running/success/failed/skipped
+	Error      string  `json:"error"`
+	StartedAt  *string `json:"started_at"`
+	FinishedAt *string `json:"finished_at"`
+}
+
 // StackInstance 一套已落地的集群（可扩容/缩容/加装）。
 type StackInstance struct {
 	ID             int64               `json:"id"`

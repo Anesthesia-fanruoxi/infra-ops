@@ -96,6 +96,13 @@ wait_port() { # wait_port <端口> <次数> <容器名> <角色中文名>
     (ss -ltn 2>/dev/null | grep ":${PORT} ") || echo "宿主机无进程监听 ${PORT}"
     echo "最近日志:"
     docker logs "${C}" --tail 60 2>&1 || true
+    # Java 组件（Hive Metastore/HiveServer2）真正的失败原因写在**容器内**的 hive.log，
+    # stdout 只有 STARTUP_MSG 与周期性的 "Hive Session ID" —— 不取内部日志时，现场只剩
+    # 「端口未就绪」，必须上机才能看到 StandbyException / HDFS 选主失败这类根因（run 75 实测）。
+    if docker exec "${C}" sh -c 'test -s /tmp/hive/hive.log' 2>/dev/null; then
+      echo "--- 容器内 /tmp/hive/hive.log 尾部 ---"
+      docker exec "${C}" sh -c 'tail -n 60 /tmp/hive/hive.log' 2>&1 || true
+    fi
     # return 而非 exit：函数内 exit 会绕过调用方的 `|| true`（ha.sh 依赖此语义）
     return 1
   fi

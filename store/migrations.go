@@ -34,6 +34,53 @@ var migrations = []migration{
 	{24, migrateV24},
 	{25, migrateV25},
 	{26, migrateV26},
+	{27, migrateV27},
+	{28, migrateV28},
+}
+
+// migrateV28 部署资产：套件离线物料登记（上传 / 服务端代下），部署时引擎经 SFTP 分发到目标机；
+// 文件本体落盘 data/assets/<key>/<version>/，表里只存元数据（大小、哈希、来源）。
+func migrateV28(db *sql.DB) error {
+	_, err := db.Exec(`CREATE TABLE IF NOT EXISTS stack_assets (
+		id         INTEGER PRIMARY KEY AUTOINCREMENT,
+		asset_key  TEXT NOT NULL,
+		version    TEXT NOT NULL,
+		file_name  TEXT NOT NULL,
+		size_bytes INTEGER NOT NULL DEFAULT 0,
+		sha256     TEXT NOT NULL DEFAULT '',
+		source     TEXT NOT NULL DEFAULT 'upload',
+		created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+		updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+		UNIQUE(asset_key, version)
+	)`)
+	return err
+}
+
+// migrateV27 套件运行流水线步骤：一次运行的阶段序列与状态（引擎推进、SSE 推送、前端步骤条渲染）。
+func migrateV27(db *sql.DB) error {
+	stmts := []string{
+		`CREATE TABLE IF NOT EXISTS stack_run_steps (
+			id          INTEGER PRIMARY KEY AUTOINCREMENT,
+			run_id      INTEGER NOT NULL REFERENCES stack_runs(id) ON DELETE CASCADE,
+			seq         INTEGER NOT NULL,
+			key         TEXT NOT NULL,
+			label       TEXT NOT NULL DEFAULT '',
+			target      TEXT NOT NULL DEFAULT '',
+			component   TEXT NOT NULL DEFAULT '',
+			phase       TEXT NOT NULL DEFAULT 'node',
+			status      TEXT NOT NULL DEFAULT 'pending',
+			error       TEXT NOT NULL DEFAULT '',
+			started_at  TEXT,
+			finished_at TEXT
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_stack_run_steps_run ON stack_run_steps(run_id, seq)`,
+	}
+	for _, s := range stmts {
+		if _, err := db.Exec(s); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // migrateV26 数据视图（es_views）：字段表本地持久化 + 异步同步，字段表随时可由 ES 重算故存单 JSON 快照。

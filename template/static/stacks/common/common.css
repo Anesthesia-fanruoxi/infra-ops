@@ -337,7 +337,7 @@
 /* 抽屉 · 角色计划 */
 .stk-inst-plan-box { border: 1px solid #E4E9F2; border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; }
 
-.stk-inst-plan-meta { font-size: 11px; color: #7C8798; }
+.stk-inst-plan-meta { font-size: 11px; color: #7C8798; margin-right: auto; }
 
 .stk-inst-plan-row { display: flex; align-items: flex-start; gap: 10px; }
 
@@ -407,3 +407,39 @@
 .stk-legend-item.rt-worker { color: #2B5FC7; }
 
 .stk-legend-item.rt-aux { color: #7C8798; }
+
+.stk-run-host { border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; }
+
+.stk-run-host + .stk-run-host { margin-top: 8px; }
+
+.stk-run-host-head { display: flex; align-items: center; gap: 8px; }
+
+.stk-run-host-comps { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 6px; padding-left: 4px; }
+
+.stk-run-hostcomp .stk-run-hostcomp-status { opacity: .78; font-size: 11px; }
+
+.stk-run-steps { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; margin-bottom: 10px; }
+
+.stk-run-step { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--border); background: var(--bg-faint); color: var(--text-faint); }
+
+.stk-run-step .dot { width: 7px; height: 7px; border-radius: 50%; background: #CBD5E1; flex-shrink: 0; }
+
+.stk-run-step.is-running { border-color: #FCD34D; background: #FFFBEB; color: #B45309; }
+
+.stk-run-step.is-running .dot { background: #F59E0B; animation: stk-step-pulse 1.2s ease-in-out infinite; }
+
+.stk-run-step.is-success { border-color: #BBF7D0; background: #F0FDF4; color: #15803D; }
+
+.stk-run-step.is-success .dot { background: #22C55E; }
+
+.stk-run-step.is-failed { border-color: #FECACA; background: #FEF2F2; color: #B91C1C; }
+
+.stk-run-step.is-failed .dot { background: #EF4444; }
+
+.stk-run-step.is-skipped { opacity: .62; }
+
+.stk-run-step.is-skipped .dot { background: #E2E8F0; }
+
+.stk-run-step-label { white-space: nowrap; }
+
+@keyframes stk-step-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }

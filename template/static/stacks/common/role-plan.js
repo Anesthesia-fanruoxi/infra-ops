@@ -120,6 +120,12 @@
       if (['ui','sentinel'].includes(role)) return 'rt-aux'
       return 'rt-worker'
     },
+    // 勾选主机变化后防抖刷新第二步的角色计划预览（避免每次勾选都打一次预览接口）
+    refreshOpPlanDebounced() {
+      if (!this.needOpPlan) return
+      clearTimeout(this._opPlanTimer)
+      this._opPlanTimer = setTimeout(() => this.refreshOpPlan(), 400)
+    },
     // 部署前角色预览（全部套件，docs/角色物化设计.md §二）：create 取所选主机；scale_out 取既有成员 + 新选主机
     async refreshOpPlan() {
       if (!this.needOpPlan || !this.selectedKey || !this.mode) return

@@ -16,10 +16,13 @@ type stackProgress struct {
 	PrereqStatus    string `json:"prereq_status,omitempty"`
 	NodeStatus      string `json:"node_status,omitempty"`
 	BootstrapStatus string `json:"bootstrap_status,omitempty"`
-	SuccessCnt      int    `json:"success_cnt"`
-	FailCnt         int    `json:"fail_cnt"`
-	Total           int    `json:"total"`
-	RunStatus       string `json:"run_status"`
+	// StepKey/StepStatus：流水线步骤状态迁移（与主机进度共用 TopicStackProgress，二者互斥出现）
+	StepKey    string `json:"step_key,omitempty"`
+	StepStatus string `json:"step_status,omitempty"`
+	SuccessCnt int    `json:"success_cnt"`
+	FailCnt    int    `json:"fail_cnt"`
+	Total      int    `json:"total"`
+	RunStatus  string `json:"run_status"`
 }
 
 // stackLogEvent SSE 日志事件载荷。
@@ -66,4 +69,35 @@ func (h *stackHandler) publishHost(runID int64, host *model.StackRunHost, phase 
 		PrereqStatus: host.PrereqStatus, NodeStatus: host.NodeStatus, BootstrapStatus: host.BootstrapStatus,
 		RunStatus: "running",
 	})
+}
+
+// publishStep 推送流水线步骤状态迁移事件。
+func (h *stackHandler) publishStep(runID int64, key, status string) {
+	if h.bus == nil {
+		return
+	}
+	h.bus.Publish(eventbus.TopicStackProgress, stackProgress{
+		RunID: runID, StepKey: key, StepStatus: status, Status: status, RunStatus: "running",
+	})
+}
+
+// stepRunning / stepDone：引擎推进步骤状态并广播（状态落库失败不阻断执行，日志已有记录）。
+func (h *stackHandler) stepRunning(runID int64, key string) {
+	if err := h.repo.SetStepStatus(runID, key, "running", ""); err != nil {
+		log.Printf("stack: 步骤置 running 失败 run=%d step=%s: %v", runID, key, err)
+		return
+	}
+	h.publishStep(runID, key, "running")
+}
+
+func (h *stackHandler) stepDone(runID int64, key string, ok bool) {
+	status := "success"
+	if !ok {
+		status = "failed"
+	}
+	if err := h.repo.SetStepStatus(runID, key, status, ""); err != nil {
+		log.Printf("stack: 步骤置终态失败 run=%d step=%s: %v", runID, key, err)
+		return
+	}
+	h.publishStep(runID, key, status)
 }

@@ -9,7 +9,7 @@ SPARK_M2="{{__spark_m2_ip}}"
 FLINK_JM2="{{__flink_jm2_ip}}"
 HMASTER2="{{__hmaster2_ip}}"
 HS2S="{{__hs2_ips}}"; MSS="{{__ms_ips}}"; HIVE_DB="{{__hive_db_ip}}"
-HDFS_ENTRY="{{__hdfs_entry}}"; ZK_IPS="{{__zk_ips}}"
+HDFS_ENTRY="{{__hdfs_entry}}"; ZK_IPS="{{__zk_ips}}"; ZK_ALL_IPS="{{__node_ips}}"
 NAMESPACE="{{hdfs_nameservice}}"
 NN_RPC="{{nn_rpc_port}}"; JN_RPC="{{jn_rpc_port}}"; JN_HTTP="{{jn_http_port}}"
 HIVE_DB_IMAGE="{{hive_db_image}}"; HIVE_DB_PW="{{hive_db_password}}"
@@ -47,20 +47,77 @@ wait_remote_port() { # wait_remote_port <ip> <port> <次数> <名>
   done
   [ "${R}" = "1" ] || { echo "${N} ${IP}:${P} 未就绪"; return 1; }
 }
-# ZK ensemble 任一可用（上限 120s）
+# 读取单个 ZK 的 zk_server_state（4lw mntr，compose 已放行 mntr），不可达/未参与时输出空。
+zk_state() { # zk_state <ip> → leader / follower / standalone / 空
+  local ip="$1" r=""
+  r="$( { exec 3<>"/dev/tcp/${ip}/2181" && printf 'mntr' >&3 && timeout 3 cat <&3; } 2>/dev/null )" || true
+  printf '%s\n' "${r}" | sed -n 's/^zk_server_state[[:space:]]*//p' | head -n 1
+}
+
+# ZK ensemble 就绪判定：**不能只看 2181 TCP 通** —— 尚未形成多数派的节点同样 accept()，
+# 但客户端会话建立会一直失败（实测 09-14 run 75：ZK 容器 12:32:38 启动、12:32:42 才各自
+# 报到，formatZK 12:32:54 就开跑，10s 会话超时放弃 → /hadoop-ha 从未创建 → ZKFC 崩溃循环）。
+# 判据 =「多数派完成选主（mntr 的 zk_server_state 为 leader/follower，即已脱离 looking）
+#         且探测集内可见 leader」。
+# 探测集必须用 **ensemble 全集** ZK_ALL_IPS（{{__node_ips}}，全体节点），不能用客户端
+# 连接串 ZK_IPS（{{__zk_ips}}，用户勾选的 ≥3 台）：zookeeper 按 node.sh 部署在**全部节点**
+# 组建 ensemble（ZOO_SERVERS 由全体 IP 生成），leader 可能落在 ZK_IPS 之外 ——
+# 实测 09-14 run 76：5 节点 ensemble 的 leader 是 myid=5（192.168.3.44），而
+# ZK_IPS=40,41,42 全是 follower，按 3 节点探测「见 leader」永假 → wait_zk 180s 超时死锁。
 wait_zk() {
-  local I=1 R=0
-  for _ in $(seq 1 40); do
-    R=1
-    IFS=',' read -ra _Z <<< "${ZK_IPS}"
-    for z in "${_Z[@]}"; do
-      (echo > "/dev/tcp/${z}/2181") >/dev/null 2>&1 && { R=0; break; }
+  local _z st N TOTAL NEED L
+  local -a Z
+  IFS=',' read -ra Z <<< "${ZK_ALL_IPS}"
+  TOTAL=${#Z[@]}
+  NEED=$(( TOTAL / 2 + 1 ))
+  echo "[HA] 等待 ZooKeeper ensemble（${ZK_ALL_IPS} 共 ${TOTAL} 节点，需 ≥${NEED} 完成选主且可见 leader）..."
+  for _ in $(seq 1 60); do
+    N=0; L=0
+    for _z in "${Z[@]}"; do
+      st="$(zk_state "${_z}")"
+      case "${st}" in
+        leader)   N=$((N+1)); L=$((L+1)) ;;
+        follower) N=$((N+1)) ;;
+      esac
     done
-    [ "${R}" = "0" ] && return 0
+    if [ "${N}" -ge "${NEED}" ] && [ "${L}" -ge 1 ]; then
+      echo "[HA] ZooKeeper 就绪：${N}/${TOTAL} 节点完成选主，leader 可见（客户端连接串仍用 ${ZK_IPS}）"
+      return 0
+    fi
     sleep 3
   done
-  echo "[HA] ZooKeeper ensemble 未就绪（${ZK_IPS}）"
+  echo "[HA] ZooKeeper ensemble 未就绪（完成选主 ${N}/${TOTAL}，需 ≥${NEED} 且含 leader；探测集 ${ZK_ALL_IPS}）"
+  echo "[HA] 排查：逐节点 docker exec bigdata-zookeeper zkServer.sh status（looking=仍在选主）；确认 zoo.cfg 放行了 mntr 四字命令"
   return 1
+}
+
+# 确保 ZKFC 自动故障转移所需的父 znode 存在（幂等，重装也执行）。
+# 本函数是本套件唯一的创建入口：一旦它静默失败，ZKFC 会以
+# "Parent znode does not exist. Run with -formatZK flag to initialize ZooKeeper."
+# 反复崩溃重启（实测 117 次、状态 Restarting），两个 NameNode 都停在 standby，
+# 直到 Hive 阶段才以「端口 10000 未就绪」暴露（实测 7 分钟后）。
+# 故此处有界重试 12×20s，并以日志中的 "Successfully created /hadoop-ha" 为**成功判据**，
+# 连续失败即中止整个部署（不再降级为告警）。
+ensure_hadoop_ha_znode() { # ensure_hadoop_ha_znode <core-site 挂载卷> <hdfs-site 挂载卷>
+  local V1="$1" V2="$2" ZKLOG OK=0 _TRY
+  ZKLOG="/tmp/nn1_zkfc_$$.log"
+  echo "[HA-HDFS] 初始化 ZKFC 自动故障转移状态（formatZK）..."
+  for _TRY in $(seq 1 12); do
+    docker run --network host --rm -v "${V1}" -v "${V2}" \
+      -e HADOOP_OPTS="-Ddfs.ha.namenode.id=nn1" \
+      {{image}} hdfs zkfc -formatZK -force -nonInteractive >"${ZKLOG}" 2>&1 || true
+    if grep -q "Successfully created /hadoop-ha" "${ZKLOG}"; then OK=1; break; fi
+    echo "[HA-HDFS] formatZK 第 ${_TRY}/12 次未成功，20s 后重试..."
+    sleep 20
+  done
+  if [ "${OK}" != "1" ]; then
+    echo "[HA-HDFS] formatZK 连续 12 次失败 —— ZKFC 将无法选主、NameNode 会一直停在 standby，中止部署。"
+    echo "[HA-HDFS] formatZK 日志尾部（${ZKLOG}）："
+    tail -n 40 "${ZKLOG}" || true
+    return 1
+  fi
+  echo "[HA-HDFS] formatZK 完成（/hadoop-ha 已创建）"
+  return 0
 }
 
 # ---------------- HDFS boot（先 JN + NN 格式化/启动，DN 留待 hdfs_dn 阶段，保证 DN 晚于 NN 就绪） ----------------
@@ -140,14 +197,11 @@ HAEOF
       touch "${C_MARK}"
     fi
     # 初始化 ZKFC 自动故障转移状态（幂等，重装也执行）：缺它会导致 ZKFC 无法选出 active
-    # NameNode，bootstrap 的 dfsadmin/客户端连接将一直挂起
-    echo "[HA-HDFS] 初始化 ZKFC 自动故障转移状态（formatZK）..."
-    ZKLOG="/tmp/nn1_zkfc_$$.log"
-    docker run --network host --rm -v "${VOL_CONF1}" -v "${VOL_CONF2}" \
-      -e HADOOP_OPTS="-Ddfs.ha.namenode.id=nn1" \
-      {{image}} hdfs zkfc -formatZK -force -nonInteractive >"${ZKLOG}" 2>&1 \
-      && echo "[HA-HDFS] formatZK 完成" \
-      || echo "[HA-HDFS] formatZK 未完全成功，继续（依赖后续选主）"
+    # NameNode，bootstrap 的 dfsadmin/客户端连接将一直挂起。
+    # 关键：必须先等 ZK **真正可用**（多数派 + leader）再 formatZK —— 只有 TCP 通就开跑
+    # 会因会话建立超时而静默失败，随后 ZKFC 进入崩溃循环（run 75 的根因）。
+    wait_zk || { echo "[HA-HDFS] ZooKeeper 未就绪，中止（formatZK 无法建立会话）"; exit 1; }
+    ensure_hadoop_ha_znode "${VOL_CONF1}" "${VOL_CONF2}" || exit 1
   fi
   # —— NameNode2：等 ZK + quorum + 等 NN1 RPC 就绪 后 bootstrap ——
   if [ "${IS_NN2}" = "yes" ]; then
@@ -230,6 +284,19 @@ HAEOF
     done
     [ "${READY_}" = "1" ] || { echo "[HA-HDFS] NameNode WebUI 未就绪（${SELF_IP}:${P_}）"; docker logs "${C_}" --tail 60 2>&1 || true; }
     echo "[HA-HDFS] NameNode${NN_SUF} 已启动（${SELF_IP}:${P_}）"
+    # ZKFC 是 NameNode 选主的执行者：它一旦崩溃重启（父 znode 缺失等），两侧 NN 会一直
+    # 停在 standby，而这一状态要到 Hive 阶段才以「端口 10000 未就绪」暴露（实测 7 分钟后）。
+    # 此处提前拦截：ZKFC 必须处于 running 且没在反复重启，否则带日志中止。
+    sleep 8
+    ZKC_="hadoop-zkfc${NN_SUF}"
+    ZK_ST="$(docker inspect -f '{{.State.Status}}' "${ZKC_}" 2>/dev/null || echo unknown)"
+    ZK_RC="$(docker inspect -f '{{.RestartCount}}' "${ZKC_}" 2>/dev/null || echo 0)"
+    if [ "${ZK_ST}" != "running" ] || [ "${ZK_RC:-0}" -ge 3 ]; then
+      echo "[HA-HDFS] ZKFC 未正常运行（${ZKC_} status=${ZK_ST} restarts=${ZK_RC}），自动故障转移不会生效，日志尾部："
+      docker logs "${ZKC_}" --tail 40 2>&1 || true
+      exit 1
+    fi
+    echo "[HA-HDFS] ZKFC 已运行（${ZKC_}，restarts=${ZK_RC}）"
   else
     echo "[HA-HDFS] ${ROLE_} boot 完成（本机无 NameNode，JN 已就绪）"
   fi
@@ -594,11 +661,15 @@ deploy_hive_ha() {
   # 仅承载 Hive 实例的机器需要（下载判定在 CONTAINER_ARR 之后），且必须以单文件挂载——
   # 若把宿主机 lib 目录整体挂到 /opt/hive/lib，会遮盖镜像自带的 hive-exec 等全部 jar
   MYSQL_JAR_NAME="mysql-connector-j-8.4.0.jar"
+  # 每项第 4 个字段 = SKIP_SCHEMA_INIT。镜像 entrypoint 对 metastore 与 hiveserver2 都会跑
+  # schematool，同一次部署里 3–4 个容器同时 -initSchema 打同一个 MySQL 会互抢：输的一方
+  # 报 "Table 'CTLGS' already exists" → exit 1 → 靠 restart 恢复（run 75 实测，白丢一轮重启）。
+  # 故只保留 MS1 的 metastore 作为**唯一**初始化入口（与脚本末尾的 schematool 幂等校验配套）。
   CONTAINER_ARR=()
-  [ -n "${MS1}" ] && ha_is "${MS1}" && CONTAINER_ARR+=("hive-metastore|metastore|metastore")
-  [ -n "${MS2}" ] && ha_is "${MS2}" && CONTAINER_ARR+=("hive-metastore2|metastore|metastore")
-  [ -n "${HS1}" ] && ha_is "${HS1}" && CONTAINER_ARR+=("hive-hiveserver2|hiveserver2|hiveserver2")
-  [ -n "${HS2}" ] && ha_is "${HS2}" && CONTAINER_ARR+=("hive-hiveserver2-2|hiveserver2|hiveserver2")
+  [ -n "${MS1}" ] && ha_is "${MS1}" && CONTAINER_ARR+=("hive-metastore|metastore|metastore|false")
+  [ -n "${MS2}" ] && ha_is "${MS2}" && CONTAINER_ARR+=("hive-metastore2|metastore|metastore|true")
+  [ -n "${HS1}" ] && ha_is "${HS1}" && CONTAINER_ARR+=("hive-hiveserver2|hiveserver2|hiveserver2|true")
+  [ -n "${HS2}" ] && ha_is "${HS2}" && CONTAINER_ARR+=("hive-hiveserver2-2|hiveserver2|hiveserver2|true")
   if [ ${#CONTAINER_ARR[@]} -eq 0 ]; then
     echo "[HA-Hive] 本机 ${SELF_IP} 不承载 Hive 实例"
     return 0
@@ -618,7 +689,7 @@ deploy_hive_ha() {
   : > "{{home_dir}}/hive/compose.yml"
   printf 'name: bigdata-hive\nservices:\n' >> "{{home_dir}}/hive/compose.yml"
   for item in "${CONTAINER_ARR[@]}"; do
-    IFS='|' read -r C SVC LBL <<< "${item}"
+    IFS='|' read -r C SVC LBL SKIP_INIT <<< "${item}"
     cat >> "{{home_dir}}/hive/compose.yml" <<HAEOF
   ${SVC}:
     image: {{image_hive}}
@@ -628,6 +699,8 @@ deploy_hive_ha() {
     environment:
       SERVICE_NAME: ${LBL}
       DB_DRIVER: mysql
+      # true 时跳过 entrypoint 的 schematool（见上方 CONTAINER_ARR 注释：唯一初始化入口是 MS1）
+      SKIP_SCHEMA_INIT: "${SKIP_INIT}"
       # Metastore/HS2 需访问 HDFS（warehouse），ns1 的 HA 映射在 Hadoop 配置里，仅 hive-site 不够
       HADOOP_CONF_DIR: /opt/hadoop-conf
     volumes:
@@ -637,6 +710,13 @@ deploy_hive_ha() {
       - {{home_dir}}/hive/data/warehouse:/opt/hive/data/warehouse
 HAEOF
   done
+  # MS2 已跳过 schema 初始化，故先等 MS1 的 Metastore 就绪（其 entrypoint 完成后 schema 才存在），
+  # 否则 MS2 会以「表不存在」启动失败、靠 restart 反复重试。
+  # ! ha_is "${MS1}"：MS1/MS2 同机（退化配置）时不能自等，否则会死等到超时。
+  if [ -n "${MS2}" ] && ha_is "${MS2}" && ! ha_is "${MS1}"; then
+    echo "[HA-Hive] 等待 MS1 ${MS1}:9083 就绪（MS2 复用其已初始化的 schema）..."
+    wait_remote_port "${MS1}" 9083 60 "Hive Metastore(MS1)" || exit 1
+  fi
   migrate_old "${C}"
   pull_retry "{{home_dir}}/hive/compose.yml"
   docker compose -f "{{home_dir}}/hive/compose.yml" up -d --remove-orphans

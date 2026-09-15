@@ -208,10 +208,17 @@ def main():
     if args.record:
         BASELINE.parent.mkdir(parents=True, exist_ok=True)
         payload = dict(cur)
-        payload["_note"] = ("任务 09 基线（P0 首录见 metrics.p0.json；B10 删壳前存档见 metrics.p7-preb10.json；"
-                            "此份为 P7 + B10 终态基线：套件分支 0、前端已目录化、引擎侧无 BuiltinStack 兼容壳。"
-                            "与 preb10 的差异仅三处 +1 行（新增 stackkit import）与 builtin_stacks_test.go "
-                            "+160 行（B10 契约冒烟单测），无生产逻辑行数增长；拆分期不得劣化，--targets 校验终态语义）")
+        payload["_note"] = ("任务 09 基线（P0 首录见 metrics.p0.json；B10 删壳前见 metrics.p7-preb10.json；"
+                            "P7+B10 删壳终态见 metrics.p7-b10.json）。本份在上一份（部署期缺陷修复）之上叠加"
+                            "「部署资产」功能（套件离线物料上传/代下 + SFTP 分发）："
+                            "api/stack/stack_engine.go 216→220（provisionAssets 调用点）、"
+                            "store/migrations.go 733→752（V28 stack_assets 表）、"
+                            "template/static/stacks/bigdata/roles.js 184→263（第二步资产检查条）、"
+                            "template/static/stacks/bigdata/style.css 98→124（.stk-bd-asset* 样式）、"
+                            "template/static/stacks/common/wizard.js 306→309（assetCheck 响应式字段）。"
+                            "新增文件不参与劣化比对：api/stack/stack_asset.go（资产管理 API）、"
+                            "api/stack/stack_asset_push.go（SFTP 分发钩子）、store/stacks/bigdata/assets.go（资产声明）、"
+                            "store/repo/asset.go、model/asset.go。拆分期不得劣化，--targets 校验终态语义）")
         with BASELINE.open("w", encoding="utf-8", newline="\n") as f:
             json.dump(payload, f, ensure_ascii=False, indent=2, sort_keys=True)
             f.write("\n")

@@ -9,18 +9,39 @@
       <el-tag :type="taskTagType(recordMeta.status)" size="small">{{taskStatusLabel(recordMeta.status)}}</el-tag>
       <span v-if="recordMeta.created_at" class="mono faint deploy-drawer-meta-time">{{formatTime(recordMeta.created_at)}}</span>
     </div>
+    <div v-if="recordSteps.length" class="stk-run-steps">
+      <span v-for="s in recordSteps" :key="s.key" class="stk-run-step" :class="'is-' + s.status" :title="runStepTitle(s)">
+        <i class="dot"></i><span class="stk-run-step-label">{{s.label}}</span>
+      </span>
+    </div>
     <div v-if="recordHosts.length" class="deploy-drawer-hostlist">
-      <div class="deploy-drawer-host" v-for="h in recordHosts" :key="h.id">
-        <span class="status-badge" :class="hostStatusCls(h.status)"><span class="dot"></span>{{hostStatusText(h.status)}}</span>
-        <span class="deploy-host-name">{{h.host_name}}</span>
-        <span class="mono deploy-host-ip">{{h.host_ip}}</span>
-        <el-tag size="small" type="info">{{roleLabel(h.role)}}</el-tag>
-        <span class="stk-phase-pills">
-          <el-tag v-if="showPrereqPill" size="small" :type="phaseTag(h.prereq_status)">Docker {{phaseText(h.prereq_status)}}</el-tag>
-          <el-tag size="small" :type="phaseTag(h.node_status)">节点 {{phaseText(h.node_status)}}</el-tag>
-          <el-tag v-if="showBootstrapPill" size="small" :type="phaseTag(h.bootstrap_status)">初始化 {{phaseText(h.bootstrap_status)}}</el-tag>
-        </span>
-      </div>
+      <template v-if="runHasCompView">
+        <div class="stk-run-host" v-for="g in runHostComps" :key="g.host_ip">
+          <div class="stk-run-host-head">
+            <span class="status-badge" :class="g.rh ? hostStatusCls(g.rh.status) : 'unverified'"><span class="dot"></span>{{g.rh ? hostStatusText(g.rh.status) : '未参与'}}</span>
+            <span class="deploy-host-name">{{g.host_name}}</span>
+            <span class="mono deploy-host-ip">{{g.host_ip}}</span>
+          </div>
+          <div class="stk-run-host-comps">
+            <span v-for="c in g.comps" :key="c.comp" class="stk-run-step stk-run-hostcomp" :class="c.status ? 'is-' + c.status : ''" :title="c.label + '：' + c.title">
+              <i class="dot"></i><span>{{c.label}}</span><span v-if="c.status" class="stk-run-hostcomp-status">{{compStatusText(c.status)}}</span>
+            </span>
+          </div>
+        </div>
+      </template>
+      <template v-else>
+        <div class="deploy-drawer-host" v-for="h in recordHosts" :key="h.id">
+          <span class="status-badge" :class="hostStatusCls(h.status)"><span class="dot"></span>{{hostStatusText(h.status)}}</span>
+          <span class="deploy-host-name">{{h.host_name}}</span>
+          <span class="mono deploy-host-ip">{{h.host_ip}}</span>
+          <el-tag size="small" type="info">{{roleLabel(h.role)}}</el-tag>
+          <span class="stk-phase-pills">
+            <el-tag v-if="showPrereqPill" size="small" :type="phaseTag(h.prereq_status)">Docker {{phaseText(h.prereq_status)}}</el-tag>
+            <el-tag size="small" :type="phaseTag(h.node_status)">节点 {{phaseText(h.node_status)}}</el-tag>
+            <el-tag v-if="showBootstrapPill" size="small" :type="phaseTag(h.bootstrap_status)">初始化 {{phaseText(h.bootstrap_status)}}</el-tag>
+          </span>
+        </div>
+      </template>
     </div>
     <div class="drawer-sec deploy-log-sec">
       <div class="drawer-sec-title">运行日志</div>

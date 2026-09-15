@@ -23,7 +23,7 @@
             "source": "manual"
           },
           {
-            "comp": "redis",
+            "comp": "sentinel",
             "role": "sentinel",
             "label": "Sentinel",
             "source": "auto",
@@ -45,7 +45,7 @@
             "scope": "rest"
           },
           {
-            "comp": "redis",
+            "comp": "sentinel",
             "role": "sentinel",
             "label": "Sentinel",
             "source": "auto",
@@ -67,7 +67,7 @@
             "scope": "rest"
           },
           {
-            "comp": "redis",
+            "comp": "sentinel",
             "role": "sentinel",
             "label": "Sentinel",
             "source": "auto",

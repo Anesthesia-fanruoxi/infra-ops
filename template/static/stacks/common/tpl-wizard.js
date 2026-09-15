@@ -125,6 +125,29 @@
           </label>
           <div v-if="!filteredHosts.length && !hostsLoading" class="deploy-placeholder">无匹配主机</div>
         </div>
+        <!-- 角色计划预览（通用套件）：第二步勾选主机即确认落点，不再藏进开始部署的弹框 -->
+        <div v-if="needOpPlan" class="stk-plan-preview" style="margin-top:12px">
+          <div class="stk-plan-preview-head">
+            <span>角色计划预览 · 确认落点后开始部署</span>
+            <span v-if="opPlan" class="faint">{{opPlan.generated_by === 'manual' ? '含手动指定' : '自动分配'}}</span>
+            <el-button size="small" text type="primary" :loading="opPlanLoading" @click="refreshOpPlan">{{opPlan ? '刷新' : '生成预览'}}</el-button>
+          </div>
+          <div v-if="opPlanErr" class="stk-plan-preview-warn"><div>{{opPlanErr}}</div></div>
+          <div v-else-if="opPlan" class="stk-plan-preview-grid">
+            <div v-for="h in opPlan.hosts" :key="h.host_ip" class="stk-plan-preview-row">
+              <span class="mono stk-plan-preview-ip">{{h.host_ip}}</span>
+              <div class="stk-plan-preview-chips">
+                <span v-for="(r, i) in h.roles" :key="i" class="stk-plan-chip" :class="[r.source==='manual' ? 'is-manual' : 'is-auto', roleTextClass(r)]" :title="r.source==='manual' ? '手动指定' : '自动分配'">{{r.label}}</span>
+                <span v-if="!(h.roles||[]).length" class="faint">—</span>
+              </div>
+            </div>
+          </div>
+          <div v-else class="faint" style="font-size:12px;padding-top:6px">勾选主机后自动生成角色计划预览…</div>
+          <div class="stk-legend"><span class="stk-legend-item"><i class="dot is-manual"></i>手动</span><span class="stk-legend-item"><i class="dot is-auto"></i>自动</span><span class="stk-legend-sep"></span><span class="stk-legend-item rt-primary">主/Active</span><span class="stk-legend-item rt-standby">备/Standby</span><span class="stk-legend-item rt-quorum">仲裁</span><span class="stk-legend-item rt-worker">工作/成员</span><span class="stk-legend-item rt-aux">辅助</span></div>
+          <div v-if="opPlan && (opPlan.warnings||[]).length" class="stk-plan-preview-warn">
+            <div v-for="(w, i) in opPlan.warnings" :key="i">{{w}}</div>
+          </div>
+        </div>
       </template>
     </div>
 

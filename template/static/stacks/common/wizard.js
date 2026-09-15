@@ -20,6 +20,9 @@
       verifyVisible: false, verifyTarget: null, verifyResult: null, verifying: false, verifyActiveTab: 'all',
       preflightVisible: false, preflight: {},
       drawerVisible: false, recordMeta: null, recordHosts: [], recordLogs: [], logFilter: '',
+      recordPlan: null, recordSteps: [], runPoll: null,
+      // 部署资产就绪状态（第二步套件表单消费，如大数据 HA 的 MySQL 驱动）
+      assetCheck: [], assetCheckBusy: false,
       sseLog: null, setupSse: null, logAutoScroll: true
     }
   },
@@ -147,6 +150,7 @@
       this.preflightVisible = false; this.preflight = {}; this.deploying = false
       this.wizardOp = 'create'; this.clusterName = ''; this.targetInstance = null; this.memberHostIds = new Set()
       this.opPlan = null; this.opPlanErr = ''; this.opPlanLoading = false
+      this.assetCheck = []; this.assetCheckBusy = false
     },
     selectStack(s) {
       this.selectedKey = s.key

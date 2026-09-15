@@ -156,6 +156,7 @@ func (h *stackHandler) runPhaseNode(runID int64, instanceID int64, mode string, 
 func (h *stackHandler) runPipeline(runID, instanceID int64, mode string, d stackkit.Driver, hosts []model.StackRunHost, extraAll map[int64]map[string]string, phases []model.StackPhase) bool {
 	for _, step := range phases {
 		h.appendLog(runID, "node", 0, "", "【流水线】"+step.Label)
+		h.stepRunning(runID, step.Key)
 		var ok bool
 		if step.Target == "leader" {
 			h.runPhaseBootstrap(runID, mode, d, hosts)
@@ -171,6 +172,7 @@ func (h *stackHandler) runPipeline(runID, instanceID int64, mode string, d stack
 			ok = h.runPhaseNode(runID, instanceID, mode, d, hosts, extraAll, step.Key, false)
 			hosts, _ = h.repo.RunHosts(runID)
 		}
+		h.stepDone(runID, step.Key, ok)
 		if !ok {
 			h.appendLog(runID, "node", 0, "", "阶段未通过，终止流水线: "+step.Label)
 			return false
@@ -191,7 +193,7 @@ func (h *stackHandler) runPhaseBootstrap(runID int64, mode string, d stackkit.Dr
 	script, err := store.LoadStackPhase(d, mode, "bootstrap")
 	if err != nil {
 		h.appendLog(runID, "bootstrap", 0, "", "加载初始化脚本失败: "+err.Error())
-		h.skipRemaining(hosts, false, true)
+		h.skipRemaining(runID, hosts, false, true)
 		return
 	}
 	var leader *model.StackRunHost

@@ -88,7 +88,7 @@ func (h *stackHandler) runPhaseScaleOut(runID int64, mode string, d stackkit.Dri
 	script, err := store.LoadStackPhase(d, mode, "scale_out")
 	if err != nil {
 		h.appendLog(runID, "bootstrap", 0, "", "无扩容初始化脚本，节点已启动")
-		h.markHostsDone(newHosts)
+		h.markHostsDone(runID, newHosts)
 		return
 	}
 	var leader *model.StackRunHost

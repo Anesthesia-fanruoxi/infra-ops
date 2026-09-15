@@ -121,9 +121,12 @@
   })
 
   P.mixins.push({
+    computed: {
+    // 模板裸引用（v-if="verifyTabbed"）必须是 computed；放 methods 里求值为函数对象恒真
+    verifyTabbed() { const h = this.hook(this.verifyTarget?.stack_key, 'verifyTabbed'); return h ? !!h.call(this, this) : false },
+    },
     methods: {
     // —— 套件专属展示的分发点（探活）——
-    verifyTabbed() { const h = this.hook(this.verifyTarget?.stack_key, 'verifyTabbed'); return h ? !!h.call(this, this) : false },
     verifyComponents() { const h = this.hook(this.verifyTarget?.stack_key, 'verifyComponents'); return h ? h.call(this, this) : [] },
     currentVerifyCompLabel() { const h = this.hook(this.verifyTarget?.stack_key, 'currentVerifyCompLabel'); return h ? h.call(this, this) : '' },
     verifyCompEndpoints() { const h = this.hook(this.verifyTarget?.stack_key, 'verifyCompEndpoints'); return h ? h.call(this, this) : [] },

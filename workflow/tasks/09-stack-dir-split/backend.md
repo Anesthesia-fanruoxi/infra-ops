@@ -232,4 +232,9 @@
   - 生成器：`script/_gen_stacks_fe.py`（前端骨架/套件拆分，幂等，源文件缺失时回退 `script/_stacks_src_snapshot.js` / `_stacks_forms_src_snapshot.js`）、`script/_gen_stacks_css.py`（CSS 拆分 + 字节守恒校验，回退 `_style_src_snapshot.css`）；
   - 校验：`script/_fe_smoke.js`（Node 沙箱装载冒烟 + 模板逐字节断言）、`script/_expected_template.txt`（39422 字符预期模板）、`script/_css_*.py` / `_scan_b9*.py` / `_extract_stack_frontend.py`（拆分期一次性测绘脚本）。
   处理建议：把「生成器 + 冒烟 + 快照」补进 boundary.md §1 白名单（它们是可复现性的关键，删掉就失去「重跑生成器零差异」的能力）；一次性测绘脚本（`_css_*` / `_scan_b9*` / `_extract_stack_frontend.py`）可删。**本次未擅自增删或改 boundary.md**，等用户裁定。
+- **任务关闭后的一次基线刷新（2026-09-14，属修复不属重构）**：修 run 75 的 bigdata HA 部署失败时改了 `store/stacks/bigdata/scripts/{ha.sh,node.sh}`（根因与修复见 `docs/大数据HA部署ZKFC故障修复.md`），
+  连带使 `baseline/render/bigdata__cluster__node.txt` 变化：**1754 → 1834 行（+102 / −22）**，已 `SNAPSHOT_WRITE=1 go test ./store/ -run TestSnapshotRenderScripts` 刷新。
+  差异逐条对应修复的 6 处改动（wait_zk 判据、NN1 先等 ZK、formatZK 重试+硬失败、ZKFC 运行校验、wait_port 附打 hive 内部日志、SKIP_SCHEMA_INIT/MS2 等待），**其余基线文件（蓝图/流水线/其余套件渲染/行为快照）零变化**。
+  这是本任务「快照零差异」纪律的**唯一一次例外**，性质是**部署脚本缺陷修复**（`ha.sh` 只注入 `node.sh`，故仅 bigdata node 渲染受影响），不是目录化重构引入的行为漂移。
+- **刷新顺序的坑**：刷新基线后若又改了脚本，须**再刷一次**再跑门禁；否则基线与代码不一致，会被误判成回归（本次实测踩到一次）。
 

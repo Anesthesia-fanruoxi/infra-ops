@@ -24,6 +24,15 @@
     phaseName(p) { return { prereq: 'Docker', node: '节点', bootstrap: '初始化' }[p] || p || '' },
     phaseText(s) { return { pending: '等待', running: '进行', success: '成功', failed: '失败', skipped: '跳过' }[s] || s },
     phaseTag(s) { if (s === 'success' || s === 'skipped') return 'success'; if (s === 'failed') return 'danger'; if (s === 'running') return 'warning'; return 'info' },
+    // 流水线步骤条 tooltip：状态 + 执行范围
+    runStepTitle(s) {
+      const scope = s.target === 'leader' ? '仅主节点' : '全部主机'
+      return (s.label || s.key) + ' · ' + this.hostStatusText(s.status) + ' · ' + scope
+    },
+    // 主机视图组件芯片的状态文案（与运行步骤状态同词汇）
+    compStatusText(s) { return { pending: '等待', running: '进行中', success: '完成', failed: '失败', skipped: '跳过' }[s] || s },
+    // 角色计划生成时间：RFC3339（2026-09-11T14:39:21+08:00）→ 界面统一口径 2026-09-11 14:39:21
+    planTime(t) { return t ? String(t).replace('T', ' ').replace(/(Z|[+-]\d{2}:\d{2})$/, '') : '' },
     hostStatusCls(s) { if (s === 'success') return 'online'; if (s === 'failed') return 'offline'; if (s === 'running') return 'running'; return 'unverified' },
     hostStatusText(s) { return { pending: '等待中', running: '执行中', success: '成功', failed: '失败', skipped: '跳过' }[s] || s },
     logTime(ts) { return ts ? (ts.length >= 19 ? ts.slice(11, 19) : ts) : '' },

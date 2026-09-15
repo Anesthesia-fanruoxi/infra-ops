@@ -302,6 +302,14 @@ type DefaultsProvider interface {
 	Defaults(op, mode string, params map[string]string) error
 }
 
+// AssetProvisioner 离线资产声明（可选能力）：套件按模式与参数声明部署所需的离线物料
+// （如 Hive HA 需要 MySQL Connector/J 驱动）。引擎在执行部署阶段前把已就绪的资产
+// 经 SFTP 分发到目标机（{{home_dir}} 等占位按主机参数渲染）；资产未上传时跳过分发，
+// 脚本内建下载兜底，不阻塞部署。副作用（落盘、SSH）仍在引擎，套件只声明。
+type AssetProvisioner interface {
+	RequiredAssets(mode string, params map[string]string) []model.StackAssetNeed
+}
+
 // VerifyProbe 旧版探活接口（B2 草案）。已被 probe.go 的 ProbePlugin 取代：
 // 后者额外覆盖「期望容器清单 / 脚本尾片段 / 汇总提示」，才能把引擎里的套件分支清零。
 // 保留类型别名仅为兼容，勿在新代码中使用。

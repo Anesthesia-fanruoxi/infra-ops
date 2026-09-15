@@ -56,6 +56,32 @@
 
 .stk-bd-ha-conflict { margin-top: 10px; font-size: 12px; color: var(--el-color-danger, #f56c6c); }
 
+/* 部署资产检查条（HA+Hive 的 MySQL 驱动）：绿=已就绪，橙=未准备 */
+.stk-bd-assets { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+
+.stk-bd-asset {
+  display: flex; align-items: center; gap: 10px; padding: 9px 12px;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--bg-card);
+}
+
+.stk-bd-asset.is-ok { border-color: #bfe3c8; background: var(--ok-soft, #f2fbf4); }
+
+.stk-bd-asset.is-miss { border-color: #f0d9a8; background: var(--warn-soft, #fffaf0); }
+
+.stk-bd-asset-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+
+.stk-bd-asset.is-ok .stk-bd-asset-dot { background: var(--el-color-success, #67c23a); }
+
+.stk-bd-asset.is-miss .stk-bd-asset-dot { background: var(--el-color-warning, #e6a23c); }
+
+.stk-bd-asset-body { flex: 1; min-width: 0; }
+
+.stk-bd-asset-title { font-size: 12.5px; font-weight: 600; }
+
+.stk-bd-asset-sub { margin-top: 2px; font-size: 11.5px; color: var(--text-sub); line-height: 1.4; }
+
+.stk-bd-asset .el-button + .el-button { margin-left: 0; }
+
 .stk-bd-comp-select { margin-bottom: 8px; }
 
 .stk-bd-comp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; margin-top: 8px; }

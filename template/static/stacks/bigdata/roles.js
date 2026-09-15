@@ -1,6 +1,12 @@
 // 该套件独有的表单向导组件；app.js 按 window.StackFormBigdataRoles 全局注册，名称保持不变。
 window.StackFormBigdataRoles = {
   props: ['ctx'],
+  watch: {
+    // 组件勾选 / HA 开关变化 → 重查资产需求（如 HA+Hive 需要 MySQL 驱动）
+    'ctx.bdSel'() { this.onAssetInputsChange() },
+    'ctx.sharedParams.ha'() { this.onAssetInputsChange() }
+  },
+  mounted() { this.onAssetInputsChange() },
   computed: {
     isHa() { return this.ctx.sharedParams?.ha === 'true' },
     roleComps() { return (window.StackForms.bigdata.masterComps || []).filter(c => this.ctx.bdSel.includes(c.key)) },
@@ -32,6 +38,63 @@ window.StackFormBigdataRoles = {
     }
   },
   methods: {
+    // —— 部署资产（HA+Hive 需要 MySQL 驱动；未就绪不阻塞，目标机现场下载兜底）——
+    assetParams() {
+      return { ...this.ctx.sharedParams, components: this.ctx.bdSel.join(',') }
+    },
+    onAssetInputsChange() {
+      if (!(this.isHa && this.ctx.bdSel.includes('hive'))) { this.ctx.assetCheck = []; return }
+      this.checkAssetsSoon()
+    },
+    checkAssetsSoon() {
+      clearTimeout(this._assetTimer)
+      this._assetTimer = setTimeout(() => this.checkAssets(), 300)
+    },
+    async checkAssets() {
+      const ctx = this.ctx
+      ctx.assetCheckBusy = true
+      try {
+        const r = await api.post('/stacks/assets/check', { stack_key: 'bigdata', mode: 'cluster', params: this.assetParams() })
+        ctx.assetCheck = r.code === 0 ? (r.data.items || []) : []
+      } catch (e) { ctx.assetCheck = [] }
+      finally { ctx.assetCheckBusy = false }
+    },
+    pickAsset(a) { this._assetPick = a; this.$refs.assetFile.value = ''; this.$refs.assetFile.click() },
+    async onAssetPicked(e) {
+      const file = e.target.files && e.target.files[0]
+      const it = this._assetPick
+      if (!file || !it) return
+      if (it.file_name && file.name !== it.file_name) { ElMessage.error('文件名应为 ' + it.file_name); return }
+      const fd = new FormData()
+      fd.append('asset_key', it.key)
+      fd.append('version', it.version)
+      fd.append('file_name', it.file_name)
+      fd.append('file', file)
+      try {
+        const r = await api.post('/stacks/assets/upload', fd, { timeout: 120000 })
+        if (r.code === 0) { ElMessage.success('资产已就绪'); this.checkAssets() }
+        else ElMessage.error(r.message || '上传失败')
+      } catch (err) { ElMessage.error(err.message || '上传失败') }
+    },
+    async fetchAsset(a) {
+      const ctx = this.ctx
+      ctx.assetCheckBusy = true
+      try {
+        const r = await api.post('/stacks/assets/fetch', {
+          stack_key: 'bigdata', mode: 'cluster', params: this.assetParams(),
+          asset_key: a.key, version: a.version, file_name: a.file_name
+        }, { timeout: 600000 })
+        if (r.code === 0) { ElMessage.success('资产已在服务端就绪'); this.checkAssets() }
+        else ElMessage.error(r.message || '服务端下载失败')
+      } catch (e) { ElMessage.error(e.message || '服务端下载失败') }
+      finally { ctx.assetCheckBusy = false }
+    },
+    fmtSize(n) {
+      if (n == null) return ''
+      if (n >= 1048576) return (n / 1048576).toFixed(1).replace(/\.0$/, '') + 'MB'
+      if (n >= 1024) return (n / 1024).toFixed(1).replace(/\.0$/, '') + 'KB'
+      return n + 'B'
+    },
     // 仅收集显式指定的角色（空值不提交，保证后端来源标注准确）
     manualOverrides() {
       const fe = window.StackForms.bigdata
@@ -113,6 +176,22 @@ window.StackFormBigdataRoles = {
     </div>
     <div v-if="haConflictText" class="stk-bd-ha-conflict">{{haConflictText}}</div>
   </template>
+  <!-- 部署资产检查条（HA+Hive 的 MySQL 驱动）：上传 / 服务端代下，未就绪不阻塞（脚本现场下载兜底） -->
+  <div v-if="ctx.assetCheck && ctx.assetCheck.length" class="stk-bd-assets">
+    <div v-for="a in ctx.assetCheck" :key="a.key + '-' + a.version" class="stk-bd-asset" :class="a.satisfied ? 'is-ok' : 'is-miss'">
+      <span class="stk-bd-asset-dot"></span>
+      <div class="stk-bd-asset-body">
+        <div class="stk-bd-asset-title">{{a.desc}}</div>
+        <div class="stk-bd-asset-sub" v-if="a.satisfied">已就绪 · {{a.asset.file_name}}（{{fmtSize(a.asset.size_bytes)}}）· 部署时自动分发到各主机，无需现场下载</div>
+        <div class="stk-bd-asset-sub" v-else>尚未准备：部署时目标机将现场下载（需外网）；离线内网环境必须提前就绪</div>
+      </div>
+      <template v-if="!a.satisfied">
+        <el-button size="small" :loading="ctx.assetCheckBusy" @click="fetchAsset(a)">服务端下载</el-button>
+        <el-button size="small" @click="pickAsset(a)">本地上传</el-button>
+      </template>
+    </div>
+    <input ref="assetFile" type="file" style="display:none" @change="onAssetPicked($event)" />
+  </div>
   <!-- 非 HA：保持现状 -->
   <div v-else class="stk-bd-role-grid">
     <div v-for="c in roleComps" :key="c.key" class="stk-bd-role-item">
@@ -123,11 +202,13 @@ window.StackFormBigdataRoles = {
     </div>
   </div>
   <!-- 角色计划预览：部署前物化，冲突在提交前暴露（§5.1/§5.2） -->
-  <div v-if="ctx.wizardOp==='create' || ctx.wizardOp==='add_component'" class="stk-plan-preview-bar">
+  <!-- preflightVisible（Docker 前置检查）期间隐藏：bigdata 的 useRolePlan=true 使预览不进前置对话框
+       （needOpPlan 为 false），若不隐藏就会与前置对话框同屏出现两份落点信息 -->
+  <div v-if="(ctx.wizardOp==='create' || ctx.wizardOp==='add_component') && !ctx.preflightVisible" class="stk-plan-preview-bar">
     <el-button size="small" :loading="!!ctx.rolePreviewBusy" @click="previewPlan">{{ctx.rolePreview ? '刷新角色计划' : '预览角色计划'}}</el-button>
     <span class="deploy-var-hint">提交前物化校验：主备冲突、IP 越界在此暴露；「手」= 手动指定，「自」= 自动分配</span>
   </div>
-  <div v-if="ctx.rolePreview" class="stk-plan-preview">
+  <div v-if="ctx.rolePreview && !ctx.preflightVisible" class="stk-plan-preview">
     <div class="stk-plan-preview-head">
       <span>角色计划 · rev {{ctx.rolePreview.rev}} · {{ctx.rolePreview.ha ? 'HA' : '单机'}}</span>
       <span class="deploy-var-hint">{{previewSummary}}</span>

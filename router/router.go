@@ -192,6 +192,17 @@ func Setup(staticFS fs.FS, deps Deps) *gin.Engine {
 		stacks.POST("/instances/:id/replan", stackHandler.ReplanPlan)
 	}
 
+	// 部署资产：套件离线物料（上传 / 服务端代下 / 就绪检查），部署时经 SFTP 分发
+	assetHandler := stack.NewAssetHandler()
+	assets := protected.Group("/stacks/assets")
+	{
+		assets.GET("", assetHandler.List)
+		assets.POST("/check", assetHandler.Check)
+		assets.POST("/upload", assetHandler.Upload)
+		assets.POST("/fetch", assetHandler.Fetch)
+		assets.DELETE("/:id", assetHandler.Delete)
+	}
+
 	// 工具-镜像仓库（Docker Registry）
 	regRepo := repo.NewRegistryRepo()
 	regHandler := regapi.NewHandler(regRepo, deps.CryptoService)
