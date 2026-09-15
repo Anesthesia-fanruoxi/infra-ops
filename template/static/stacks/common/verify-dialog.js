@@ -4,6 +4,16 @@
   const P = (window.StacksParts = window.StacksParts || {})
   // 源文件模块级助手（逗号列表 → 数组）：骨架统一提供在 StacksParts.splitList
   const splitList = P.splitList
+  // 组件页签过滤：探活结果里既无端点、也无检查项的组件会渲染成空壳页签
+  // （如 bigdata 的 metastore_db 是运行期组件，其容器 hive-metastore-db 归属 hive）。
+  // 仅当结果中确实带有组件归属信息时才过滤；无归属信息（整体探活失败/套件未打归属）时
+  // 原样返回声明清单，保证任何套件都不会因探活中断而丢掉全部页签。
+  function probeAttributed(ctx, list) {
+    const keys = new Set()
+    ;(ctx.verifyResult?.endpoints || []).forEach(e => e.component && keys.add(e.component))
+    ;(ctx.verifyResult?.hosts || []).forEach(h => (h.checks || []).forEach(c => c.component && keys.add(c.component)))
+    return keys.size ? list.filter(c => keys.has(c.key)) : list
+  }
   P.mixins.push({
     computed: {
     verifyParams() {
@@ -121,19 +131,31 @@
   })
 
   P.mixins.push({
+    // 模板「裸引用」（v-if / v-for / :data / :label / {{ }}）的挂点必须是 computed：
+    // Vue 把 methods 绑定成 bound function，裸引用拿到的是函数对象——v-for/:data 渲染为空、
+    // {{}}/:label 直接打印 function () { [native code] }。无参挂点一律放 computed，
+    // 只有需要在模板里显式传参的（verifyHostRole(hg)）才留 methods。门禁见 script/_fe_smoke.js 第 9 项。
     computed: {
-    // 模板裸引用（v-if="verifyTabbed"）必须是 computed；放 methods 里求值为函数对象恒真
     verifyTabbed() { const h = this.hook(this.verifyTarget?.stack_key, 'verifyTabbed'); return h ? !!h.call(this, this) : false },
-    },
-    methods: {
     // —— 套件专属展示的分发点（探活）——
-    verifyComponents() { const h = this.hook(this.verifyTarget?.stack_key, 'verifyComponents'); return h ? h.call(this, this) : [] },
+    verifyComponents() {
+      const h = this.hook(this.verifyTarget?.stack_key, 'verifyComponents')
+      return probeAttributed(this, h ? (h.call(this, this) || []) : [])
+    },
     currentVerifyCompLabel() { const h = this.hook(this.verifyTarget?.stack_key, 'currentVerifyCompLabel'); return h ? h.call(this, this) : '' },
     verifyCompEndpoints() { const h = this.hook(this.verifyTarget?.stack_key, 'verifyCompEndpoints'); return h ? h.call(this, this) : [] },
     verifyCompEndpointsByHost() { const h = this.hook(this.verifyTarget?.stack_key, 'verifyCompEndpointsByHost'); return h ? h.call(this, this) : [] },
     verifyCompHostRows() { const h = this.hook(this.verifyTarget?.stack_key, 'verifyCompHostRows'); return h ? h.call(this, this) : [] },
     verifyCountLabel() { const h = this.hook(this.verifyTarget?.stack_key, 'verifyCountLabel'); return (h && h.call(this, this)) || '实例' },
     verifyCompCountLabel() { const h = this.hook(this.verifyTarget?.stack_key, 'verifyCompCountLabel'); return (h && h.call(this, this)) || '实例' },
+    },
+    watch: {
+      // 切实例或重新探活后，活动页签若已被过滤掉（组件在本实例不存在 / 无归属），回落到「查看所有」
+      verifyComponents(list) {
+        if (this.verifyActiveTab !== 'all' && !(list || []).some(c => c.key === this.verifyActiveTab)) this.verifyActiveTab = 'all'
+      },
+    },
+    methods: {
     verifyHostRole(hg) { const h = this.hook(this.verifyTarget?.stack_key, 'verifyHostRole'); return h ? (h.call(this, this, hg) || '') : '' },
     }
   })

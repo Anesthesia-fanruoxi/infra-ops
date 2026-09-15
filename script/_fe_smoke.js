@@ -2,11 +2,13 @@
 // 前端装载冒烟（不做真实浏览器渲染）：
 //   按 template/index.html 的 script 顺序在沙箱中求值全部前端脚本，
 //   断言 window.StackDrivers / StackForms / StacksPage 的装配结果与预期一致。
-// 用法：node script/_fe_smoke.js
+// 用法：node script/_fe_smoke.js            校验（模板逐字节比对 _expected_template.txt）
+//      node script/_fe_smoke.js --record     有意改动模板后重录基线（_expected_template.txt）
 const fs = require('fs')
 const path = require('path')
 const vm = require('vm')
 
+const RECORD = process.argv.includes('--record')
 const ROOT = path.resolve(__dirname, '..')
 const INDEX = path.join(ROOT, 'template', 'index.html')
 const EXPECT = path.join(ROOT, 'script', '_expected_template.txt')
@@ -107,9 +109,13 @@ if (page) {
                    'StackFormRedisTopo', 'StackFormElasticsearchRoles']) {
     check(!!sandbox[g] && typeof sandbox[g] === 'object', '全局组件缺失: window.' + g)
   }
-  // 6. 模板逐字节等于拆分前（生成器产出的预期串）
-  const expect = fs.readFileSync(EXPECT, 'utf8')
-  check(page.template === expect, `template 与拆分前不一致: got ${page.template.length} 字符, exp ${expect.length} 字符`)
+  // 6. 模板逐字节等于拆分前（生成器产出的预期串）；--record 时以当前拼装结果重录基线
+  if (RECORD) {
+    fs.writeFileSync(EXPECT, page.template)
+  } else {
+    const expect = fs.readFileSync(EXPECT, 'utf8')
+    check(page.template === expect, `template 与拆分前不一致: got ${page.template.length} 字符, exp ${expect.length} 字符（有意改动请加 --record 重录）`)
+  }
   // 7. 骨架不含套件分支
   const hooks = Object.keys(page.components || {}).length
   check(hooks >= 5, 'componentsOf 汇总数异常')
@@ -121,6 +127,24 @@ if (page) {
   for (const good of ['verifyTabbed', 'verifyHostRole', 'instTierStyle', 'memTags', 'hook']) {
     check(probeSrc.includes('"' + good + '"'), '骨架缺少通用分发成员: ' + good)
   }
+  // 9. 模板「裸引用」的成员不得落在 methods（Vue 把 methods 绑定为 bound function，
+  //    裸引用拿到的是函数对象：v-for/:data 渲染为空、{{}}/:label 打印 function () { [native code] }；
+  //    带参调用（foo(x)）不受影响，故仍可留在 methods）。同类缺陷已出现三次（CA 按钮 / 探活页签 / 组件页签）。
+  const bare = new Set()
+  // 只收「后面不跟 (」的顶层标识符：foo(x) 是调用（methods 合法），foo 才是裸引用
+  const collect = (expr) => {
+    const re = /(?:^|[^A-Za-z0-9_$.])([A-Za-z_$][A-Za-z0-9_$]*)(\s*\()?/g
+    let m
+    while ((m = re.exec(String(expr)))) { if (!m[2]) bare.add(m[1]) }
+  }
+  for (const m of page.template.matchAll(/\{\{\s*([^}]+?)\s*\}\}/g)) collect(m[1])
+  for (const m of page.template.matchAll(/\sv-(?:if|else-if)="([^"]*)"/g)) collect(m[1])
+  for (const m of page.template.matchAll(/\sv-for="[^"]*?\sin\s+([^"]*)"/g)) collect(m[1])
+  for (const m of page.template.matchAll(/\s:(?:data|label|title|class|content|disabled|loading)="([^"]*)"/g)) collect(m[1])
+  const allMethods = Object.assign({}, ...page.mixins.map(mx => mx.methods || {}))
+  const allComputed = Object.assign({}, ...page.mixins.map(mx => mx.computed || {}))
+  const bareMethods = [...bare].filter(n => allMethods[n] && !allComputed[n])
+  check(bareMethods.length === 0, '模板裸引用了 methods 成员（须改为 computed）: ' + bareMethods.join(','))
 }
 
 if (errs.length) {
@@ -129,4 +153,5 @@ if (errs.length) {
   process.exit(1)
 }
 console.log(`前端装载冒烟 通过：脚本 ${loaded}/${expected} 个，9 个套件注册齐备，`
-  + `页面局部组件 ${Object.keys(page.components).length} 个，模板 ${page.template.length} 字符逐字节一致。`)
+  + `页面局部组件 ${Object.keys(page.components).length} 个，模板 ${page.template.length} 字符`
+  + (RECORD ? '已重录为基线。' : '逐字节一致。'))

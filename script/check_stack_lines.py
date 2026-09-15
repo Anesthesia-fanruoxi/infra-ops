@@ -216,9 +216,31 @@ def main():
                             "template/static/stacks/bigdata/roles.js 184→263（第二步资产检查条）、"
                             "template/static/stacks/bigdata/style.css 98→124（.stk-bd-asset* 样式）、"
                             "template/static/stacks/common/wizard.js 306→309（assetCheck 响应式字段）。"
+                            "其后叠加「Hive HA 元数据库密码前端必填提示」："
+                            "template/static/stacks/bigdata/index.js 163→168（visibleSharedVars 对 hive_db_password "
+                            "在前端补 required，仅提示星号 + 新建时提交前拦截，后端 Required 仍为 false、不加校验；"
+                            "同时吸收前次删除「预览角色计划」的 template/static/stacks/bigdata/roles.js 263→187）。"
+                            "本轮叠加「探活弹框：组件页签修复 + Web 端点外链」："
+                            "template/static/stacks/common/verify-dialog.js 140→143（6 个无参挂点从 methods 挪到 computed，"
+                            "修模板裸引用取到 bound function 的缺陷）、"
+                            "template/static/stacks/common/tpl-verify.js 188→194（两组端点芯片各加一个「打开」外链）、"
+                            "template/static/stacks/common/labels.js 73→75（isWebUrl 助手）；"
+                            "verify.css 用扩展既有选择器的方式实现未增行数。"
+                            "本轮叠加「接入地址：最外框 + 每屏约 4 台主机的横向滚动卡片」（每行 = 服务名称/协议/访问地址/复制，"
+                            "服务名底色按端点角色推断主·备·平级）："
+                            "template/static/stacks/common/tpl-verify.js 194→202（两处接入地址改为 .stk-vf-ep-box 外框 + 新行结构 + 端口数计数）、"
+                            "template/static/stacks/common/verify.css 157→179（.stk-vf-ep-box 外框、卡片等分 4 列且 overflow-x 横向滚动、"
+                            ".stk-vf-ep-svc 三态底色、细滚动条）、"
+                            "template/static/stacks/common/labels.js 75→85（epRole/epRoleClass/epRoleText）。"
                             "新增文件不参与劣化比对：api/stack/stack_asset.go（资产管理 API）、"
                             "api/stack/stack_asset_push.go（SFTP 分发钩子）、store/stacks/bigdata/assets.go（资产声明）、"
-                            "store/repo/asset.go、model/asset.go。拆分期不得劣化，--targets 校验终态语义）")
+                            "store/repo/asset.go、model/asset.go。"
+                            "本轮叠加「探活页签剔除无归属组件的空壳页签」（bigdata 的 metastore_db 由 HA+Hive 自动追加，"
+                            "属运行期组件：容器 hive-metastore-db 的检查项归属 hive、endpoint 也无 case，页签恒空）："
+                            "template/static/stacks/common/verify-dialog.js 143→162（新增模块级 probeAttributed 过滤助手、"
+                            "verifyComponents 计算属性接过滤、watch 把被过滤掉的活动页签回落 all；"
+                            "过滤在通用层实现，套件分支仍为 0；仅当结果带组件归属信息时生效，"
+                            "整体探活失败时退回声明清单）。拆分期不得劣化，--targets 校验终态语义）")
         with BASELINE.open("w", encoding="utf-8", newline="\n") as f:
             json.dump(payload, f, ensure_ascii=False, indent=2, sort_keys=True)
             f.write("\n")

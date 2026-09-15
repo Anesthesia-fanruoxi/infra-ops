@@ -145,11 +145,16 @@
       visibleSharedVars(ctx, list) {
         const haOnly = ['hdfs_nameservice', 'jn_http_port', 'jn_rpc_port', 'hive_db_image', 'hive_db_password']
         const haOn = ctx.sharedParams?.ha === 'true'
+        // 元数据库密码：HA+Hive 新建时前端标必填（星号 + 提交前拦截），避免留空导致 MySQL
+        // 拒绝初始化；只在新建拦截，加装/扩缩容等操作沿用实例已存参数，不阻塞
+        // 仅前端提示，后端不做校验（空值仍由 hive-site JDO 与 ha.sh 兜底 HiveDb@123）
+        const pwRequired = ctx.wizardOp === 'create' && haOn && (ctx.bdSel || []).includes('hive')
         return list.filter(v => v.name !== 'components')
           // 高可用已在第 1 步确定，填写参数页不再展示该开关
           .filter(v => v.name !== 'ha')
           .filter(v => !bigdataVarComp[v.name] || ctx.bdSel.includes(bigdataVarComp[v.name]))
           .filter(v => !haOnly.includes(v.name) || haOn)
+          .map(v => (pwRequired && v.name === 'hive_db_password' ? { ...v, required: true } : v))
       },
       extraParams(ctx) {
         const out = { components: ctx.bdSel.join(',') }

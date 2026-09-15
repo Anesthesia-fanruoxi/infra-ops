@@ -394,23 +394,30 @@
       <!-- 组件视角：选中具体组件（仅 bigdata） -->
       <template v-if="verifyTabbed && verifyActiveTab !== 'all'">
         <div class="stk-vf-section">
-          <div class="stk-vf-section-title">接入地址 · {{currentVerifyCompLabel}}</div>
-          <div class="stk-vf-ep-grid">
-            <div class="stk-vf-ep-host-card" v-for="hg in verifyCompEndpointsByHost" :key="hg.host_ip">
-              <div class="stk-vf-ep-host-header">
-                <span class="mono stk-vf-ep-host-ip">{{hg.host_ip}}</span>
-              </div>
-              <div class="stk-vf-ep-host-eps">
-                <div class="stk-vf-ep-mini" v-for="ep in hg.endpoints" :key="ep.url">
-                  <span class="stk-vf-ep-badge" :class="epProtocolClass(ep.url)">{{epProtocolLabel(ep.url)}}</span>
-                  <span class="mono stk-vf-ep-mini-url">{{ep.url}}</span>
-                  <span class="stk-vf-ep-copy" @click="copyText(ep.url)" title="复制">
-                    <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-                  </span>
+          <div class="stk-vf-section-title">接入地址 · {{currentVerifyCompLabel}} <span class="stk-vf-section-count">{{verifyCompEndpointsByHost.length}} 台主机 · {{verifyCompEndpoints.length}} 个端口</span></div>
+          <div class="stk-vf-ep-box">
+            <div class="stk-vf-ep-grid" v-if="verifyCompEndpointsByHost.length">
+              <div class="stk-vf-ep-host-card" v-for="hg in verifyCompEndpointsByHost" :key="hg.host_ip">
+                <div class="stk-vf-ep-host-header">
+                  <span class="mono stk-vf-ep-host-ip">{{hg.host_ip}}</span>
+                  <span class="stk-vf-section-count">{{hg.endpoints.length}} 个端口</span>
+                </div>
+                <div class="stk-vf-ep-host-eps">
+                  <div class="stk-vf-ep-mini" v-for="ep in hg.endpoints" :key="ep.url">
+                    <span class="stk-vf-ep-svc" :class="epRoleClass(ep.name, hg.role)" :title="ep.name + ' · ' + epRoleText(ep.name, hg.role)">{{ep.name}}</span>
+                    <span class="stk-vf-ep-badge" :class="epProtocolClass(ep.url)">{{epProtocolLabel(ep.url)}}</span>
+                    <span class="mono stk-vf-ep-mini-url" :title="ep.url">{{ep.url}}</span>
+                    <span class="stk-vf-ep-acts"><a v-if="isWebUrl(ep.url)" class="stk-vf-ep-open" :href="ep.url" target="_blank" rel="noopener" title="打开 Web 界面">
+                      <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+                    </a>
+                    <span class="stk-vf-ep-copy" @click="copyText(ep.url)" title="复制地址">
+                      <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                    </span></span>
+                  </div>
                 </div>
               </div>
             </div>
-            <div v-if="!verifyCompEndpointsByHost.length" class="stk-vf-empty">该组件暂无接入地址</div>
+            <div v-else class="stk-vf-empty">该组件暂无接入地址</div>
           </div>
         </div>
 
@@ -456,29 +463,36 @@
       <template v-else>
         <!-- 接入地址 -->
         <div class="stk-vf-section">
-          <div class="stk-vf-section-title">接入地址</div>
-          <div class="stk-vf-ep-grid">
-            <div class="stk-vf-ep-host-card" v-for="hg in verifyEndpointsByHost" :key="hg.host_ip">
-              <div class="stk-vf-ep-host-header">
-                <template v-if="verifyHostRole(hg)">
-                  <span class="stk-vf-ep-host-role is-es">{{verifyHostRole(hg)}}</span>
-                </template>
-                <template v-else>
-                  <span class="stk-vf-ep-host-role" :class="hg.role === 'master' ? 'is-master' : 'is-replica'">{{hg.role === 'master' ? '主' : '从'}}</span>
-                </template>
-                <span class="mono stk-vf-ep-host-ip">{{hg.host_ip}}</span>
-              </div>
-              <div class="stk-vf-ep-host-eps">
-                <div class="stk-vf-ep-mini" v-for="ep in hg.endpoints" :key="ep.url">
-                  <span class="stk-vf-ep-badge" :class="epProtocolClass(ep.url)">{{epProtocolLabel(ep.url)}}</span>
-                  <span class="mono stk-vf-ep-mini-url">{{ep.url}}</span>
-                  <span class="stk-vf-ep-copy" @click="copyText(ep.url)" title="复制">
-                    <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-                  </span>
+          <div class="stk-vf-section-title">接入地址 <span class="stk-vf-section-count">{{verifyEndpointsByHost.length}} 台主机 · {{verifyEndpoints.length}} 个端口</span></div>
+          <div class="stk-vf-ep-box">
+            <div class="stk-vf-ep-grid" v-if="verifyEndpointsByHost.length">
+              <div class="stk-vf-ep-host-card" v-for="hg in verifyEndpointsByHost" :key="hg.host_ip">
+                <div class="stk-vf-ep-host-header">
+                  <template v-if="verifyHostRole(hg)">
+                    <span class="stk-vf-ep-host-role is-es">{{verifyHostRole(hg)}}</span>
+                  </template>
+                  <template v-else>
+                    <span class="stk-vf-ep-host-role" :class="hg.role === 'master' ? 'is-master' : 'is-replica'">{{hg.role === 'master' ? '主' : '从'}}</span>
+                  </template>
+                  <span class="mono stk-vf-ep-host-ip">{{hg.host_ip}}</span>
+                  <span class="stk-vf-section-count">{{hg.endpoints.length}} 个端口</span>
+                </div>
+                <div class="stk-vf-ep-host-eps">
+                  <div class="stk-vf-ep-mini" v-for="ep in hg.endpoints" :key="ep.url">
+                    <span class="stk-vf-ep-svc" :class="epRoleClass(ep.name, hg.role)" :title="ep.name + ' · ' + epRoleText(ep.name, hg.role)">{{ep.name}}</span>
+                    <span class="stk-vf-ep-badge" :class="epProtocolClass(ep.url)">{{epProtocolLabel(ep.url)}}</span>
+                    <span class="mono stk-vf-ep-mini-url" :title="ep.url">{{ep.url}}</span>
+                    <span class="stk-vf-ep-acts"><a v-if="isWebUrl(ep.url)" class="stk-vf-ep-open" :href="ep.url" target="_blank" rel="noopener" title="打开 Web 界面">
+                      <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+                    </a>
+                    <span class="stk-vf-ep-copy" @click="copyText(ep.url)" title="复制地址">
+                      <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                    </span></span>
+                  </div>
                 </div>
               </div>
             </div>
-            <div v-if="!verifyEndpointsByHost.length" class="stk-vf-empty">暂无接入地址</div>
+            <div v-else class="stk-vf-empty">暂无接入地址</div>
           </div>
         </div>
 

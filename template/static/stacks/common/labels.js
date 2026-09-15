@@ -58,6 +58,21 @@
       const p = this.epProtocolLabel(url).toLowerCase()
       return 'proto-' + p
     },
+    // 接入地址服务名的角色（决定底色）：端点只带 name，主备信息编码在名称里
+    // （-2 / Backup / Standby / 主·从），故按名称推断；平级服务（DataNode/JN/ZK/WM 等
+    // 无主备之分）显式归「平级」，避免被主机角色兜底误标成「主」。完全无法判定的
+    // 通用端点（未实现 EndpointProvider 的套件）才回落主机角色。
+    epRole(name, hostRole) {
+      const n = String(name == null ? '' : name)
+      if (/[-_\s]2$|backup|standby|replica|slave|从|备/i.test(n)) return 'standby'
+      if (/datanode|journalnode|zookeeper|\bnm$|\bnodemanager|worker|\brs$|regionserver|sentinel|broker|controller/i.test(n)) return 'peer'
+      if (/namenode|master$|metastore|hiveserver2|coord|leader|\brm$|\bjm$|主/i.test(n)) return 'primary'
+      return hostRole === 'master' ? 'primary' : 'peer'
+    },
+    epRoleClass(name, hostRole) { return 'is-' + this.epRole(name, hostRole) },
+    epRoleText(name, hostRole) { return { primary: '主', standby: '备', peer: '平级' }[this.epRole(name, hostRole)] },
+    // 端点是否为 Web 控制台（http/https）：探活弹框据此给「打开」外链，其余协议只能复制
+    isWebUrl(url) { return /^https?:\/\//i.test(String(url == null ? '' : url)) },
     copyText(text) {
       if (!text) return
       if (navigator.clipboard) {

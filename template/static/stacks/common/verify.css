@@ -43,10 +43,23 @@
 .stk-vf-tab.active { color: #fff; background: var(--brand); border-color: var(--brand); }
 
 
-/* ---- 接入地址(按主机分组) ---- */
-.stk-vf-ep-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 10px; }
+/* ---- 接入地址(按主机分组 · 外框 + 横向滚动) ---- */
+/* 最外框：整块接入地址共用一层边框与底色 */
+.stk-vf-ep-box { border: 1px solid var(--border); border-radius: 10px; background: var(--bg-faint); padding: 10px; }
 
-.stk-vf-ep-host-card { border: 1px solid var(--border); border-radius: 10px; background: var(--bg-card); overflow: hidden; transition: box-shadow .15s; }
+/* 每屏 3 台主机（3 列 + 2 个 10px 间距）；一行内容最少需 ~466px，故 min-width 抬到 490px
+   保证地址不被截断，容器不够宽时每屏 2 台并横向滚动 */
+.stk-vf-ep-grid { display: flex; align-items: flex-start; gap: 10px; overflow-x: auto; overflow-y: hidden; padding-bottom: 4px; scrollbar-width: thin; }
+
+.stk-vf-ep-grid::-webkit-scrollbar { height: 8px; }
+
+.stk-vf-ep-grid::-webkit-scrollbar-track { background: transparent; }
+
+.stk-vf-ep-grid::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+
+.stk-vf-ep-grid::-webkit-scrollbar-thumb:hover { background: var(--text-faint); }
+
+.stk-vf-ep-host-card { flex: 0 0 auto; width: calc((100% - 20px) / 3); min-width: 490px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-card); overflow: hidden; transition: box-shadow .15s; }
 
 .stk-vf-ep-host-card:hover { box-shadow: 0 2px 10px rgba(15,23,42,.07); }
 
@@ -60,11 +73,20 @@
 
 .stk-vf-ep-host-ip { font-size: 13px; font-weight: 600; color: var(--text-main); }
 
-.stk-vf-ep-host-eps { display: flex; flex-direction: column; gap: 4px; padding: 8px 12px; }
+/* 行内四列表格：服务名 | 协议 | 地址(弹性) | 按钮；列宽由内容决定，卡片内各行共享同一份列宽 */
+.stk-vf-ep-host-eps { display: grid; grid-template-columns: minmax(0, max-content) max-content minmax(0, 1fr) auto; column-gap: 6px; row-gap: 6px; align-items: center; padding: 10px 12px; }
 
-.stk-vf-ep-mini { display: flex; align-items: center; gap: 8px; }
+.stk-vf-ep-mini { display: contents; }
+.stk-vf-ep-acts { display: flex; align-items: center; gap: 6px; justify-self: end; }
 
-.stk-vf-ep-mini + .stk-vf-ep-mini { border: none; }
+/* 服务名称：底色按服务实例角色区分（主/备/平级），贴字宽左对齐，列宽由最宽的一项决定 */
+.stk-vf-ep-svc { justify-self: start; padding: 2px 7px; border-radius: 5px; font-size: 11px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.stk-vf-ep-svc.is-primary { background: var(--brand-soft); color: var(--brand); }
+
+.stk-vf-ep-svc.is-standby { background: var(--ok-soft); color: var(--ok); }
+
+.stk-vf-ep-svc.is-peer { background: var(--neutral-soft); color: var(--text-sub); }
 
 .stk-vf-ep-badge { flex-shrink: 0; min-width: 44px; padding: 3px 6px; border-radius: 6px; font-size: 9px; font-weight: 700; text-align: center; letter-spacing: .5px; color: #fff; }
 
@@ -86,9 +108,9 @@
 
 .stk-vf-ep-mini-url { flex: 1; min-width: 0; font-size: 12px; color: var(--text-sub); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-.stk-vf-ep-copy { flex-shrink: 0; width: 24px; height: 24px; border-radius: 5px; display: flex; align-items: center; justify-content: center; color: var(--text-faint); cursor: pointer; transition: background .15s, color .15s; }
+.stk-vf-ep-copy, .stk-vf-ep-open { flex-shrink: 0; width: 24px; height: 24px; border-radius: 5px; display: flex; align-items: center; justify-content: center; color: var(--text-faint); cursor: pointer; text-decoration: none; transition: background .15s, color .15s; }
 
-.stk-vf-ep-copy:hover { background: var(--bg-hover); color: var(--brand); }
+.stk-vf-ep-copy:hover, .stk-vf-ep-open:hover { background: var(--bg-hover); color: var(--brand); }
 
 
 /* ---- 访问密码 ---- */

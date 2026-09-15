@@ -1,0 +1,150 @@
+<!--
+  探活「接入地址」版式测量台（无头 Chrome，不用起服务）：
+  "C:/Program Files/Google/Chrome/Application/chrome.exe" --headless=new --disable-gpu --no-sandbox     --virtual-time-budget=4000 --dump-dom "file:///<abs>/script/measure_verify_layout.html?w=1021"
+  参数：w=容器宽度px（默认 1021 ≈ 1663 窗口下 65% 对话框的可用宽）；fix=1 额外注入一组候选 CSS 做对照。
+  输出：<pre id="report"> 里每行的「服务名/协议/地址/按钮」x 坐标 + 地址是否截断 + 列对齐判据。
+  用途：改 .stk-vf-ep-* 布局前先量，别靠估算（宽度估错过两次）。
+-->
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>measure</title>
+<link rel="stylesheet" href="../template/static/style.css">
+<link rel="stylesheet" href="../template/static/stacks/common/common.css">
+<link rel="stylesheet" href="../template/static/stacks/common/verify.css">
+<style>
+  body { margin: 0; padding: 0; background: var(--bg-page); }
+  #stage { padding: 0; }
+</style>
+</head>
+<body>
+<div id="stage"></div>
+<pre id="report" style="font:12px/1.5 monospace; padding:8px; white-space:pre"></pre>
+<script>
+// 真实端点数据（实例 13 / 截图同源）
+const CARDS = [
+  ['192.168.3.40', 'master', [
+    ['HDFS NameNode', 'http://192.168.3.40:9870'],
+    ['HDFS JournalNode', 'http://192.168.3.40:8485'],
+    ['HDFS DataNode', 'http://192.168.3.40:9864'],
+    ['ZooKeeper', 'zookeeper://192.168.3.40:2181'],
+    ['YARN RM', 'http://192.168.3.40:8088'],
+    ['Spark Master', 'http://192.168.3.40:8080'],
+    ['Flink JM', 'http://192.168.3.40:8081'],
+    ['Hive Metastore', 'thrift://192.168.3.40:9083'],
+    ['HiveServer2', 'jdbc:hive2://192.168.3.40:10000'],
+    ['HBase Master', 'http://192.168.3.40:16010'],
+    ['Trino Coord', 'http://192.168.3.40:8083'],
+  ]],
+  ['192.168.3.41', 'worker', [
+    ['HDFS NameNode-2', 'http://192.168.3.41:9870'],
+    ['HDFS JournalNode', 'http://192.168.3.41:8485'],
+    ['HDFS DataNode', 'http://192.168.3.41:9864'],
+    ['ZooKeeper', 'zookeeper://192.168.3.41:2181'],
+    ['YARN RM-2', 'http://192.168.3.41:8088'],
+    ['Spark Master-2', 'http://192.168.3.41:8081'],
+    ['Flink JM-2', 'http://192.168.3.41:8081'],
+    ['Hive Metastore-2', 'thrift://192.168.3.41:9083'],
+    ['HiveServer2-2', 'jdbc:hive2://192.168.3.41:10000'],
+    ['HBase Backup Master', 'http://192.168.3.41:16010'],
+    ['Trino Worker', 'http://192.168.3.41:8083'],
+  ]],
+  ['192.168.3.42', 'worker', [
+    ['HDFS JournalNode', 'http://192.168.3.42:8485'],
+    ['HDFS DataNode', 'http://192.168.3.42:9864'],
+    ['ZooKeeper', 'zookeeper://192.168.3.42:2181'],
+    ['YARN NM', 'http://192.168.3.42:8042'],
+    ['Spark Worker', 'http://192.168.3.42:8081'],
+    ['HBase RS', 'http://192.168.3.42:16030'],
+    ['Trino Worker', 'http://192.168.3.42:8083'],
+  ]],
+]
+const OPEN_SVG = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>'
+const COPY_SVG = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>'
+const proto = u => u.startsWith('http') ? 'HTTP' : u.startsWith('zookeeper') ? 'ZK' : u.startsWith('jdbc') ? 'TCP' : 'TCP'
+const protoCls = u => u.startsWith('http') ? 'proto-http' : u.startsWith('zookeeper') ? 'proto-zk' : 'proto-tcp'
+const isWeb = u => /^https?:\/\//i.test(u)
+const epRole = (n, hr) => /[-_\s]2$|backup|standby/i.test(n) ? 'standby'
+  : /datanode|journalnode|zookeeper|\bnm$|worker|\brs$/i.test(n) ? 'peer'
+  : /namenode|master$|metastore|hiveserver2|coord|\brm$/i.test(n) ? 'primary' : (hr === 'master' ? 'primary' : 'peer')
+
+const q = new URLSearchParams(location.search)
+const gridW = parseInt(q.get('w') || '1021', 10)
+
+// 候选修法：卡片加宽到一行内容可容 + 行内改 grid（max-content 列）保证列对齐
+const FIX_CSS = `
+.stk-vf-ep-host-card { width: calc((100% - 20px) / 3); min-width: 490px; }
+.stk-vf-ep-host-eps { display: grid; grid-template-columns: minmax(0, max-content) max-content minmax(0, 1fr) auto; column-gap: 6px; row-gap: 6px; align-items: center; }
+.stk-vf-ep-mini { display: contents; }
+.stk-vf-ep-svc { max-width: none; justify-self: start; }
+.stk-vf-ep-acts { display: flex; align-items: center; gap: 6px; justify-self: end; }
+`
+const OVERRIDE = q.get('fix') === '1' ? FIX_CSS : ''
+if (OVERRIDE) { const s = document.createElement('style'); s.textContent = OVERRIDE; document.head.appendChild(s) }
+
+const stage = document.getElementById('stage')
+stage.innerHTML = '<div class="stk-vf-section"><div class="stk-vf-section-title">接入地址 <span class="stk-vf-section-count">' + CARDS.length + ' 台主机</span></div>'
+  + '<div class="stk-vf-ep-box" style="width:' + gridW + 'px;box-sizing:border-box"><div class="stk-vf-ep-grid">'
+  + CARDS.map(([ip, role, eps]) => '<div class="stk-vf-ep-host-card"><div class="stk-vf-ep-host-header">'
+    + '<span class="stk-vf-ep-host-role ' + (role === 'master' ? 'is-master' : 'is-replica') + '">' + (role === 'master' ? '主' : '从') + '</span>'
+    + '<span class="mono stk-vf-ep-host-ip">' + ip + '</span>'
+    + '<span class="stk-vf-section-count">' + eps.length + ' 个端口</span></div>'
+    + '<div class="stk-vf-ep-host-eps">' + eps.map(([n, u]) => '<div class="stk-vf-ep-mini">'
+      + '<span class="stk-vf-ep-svc is-' + epRole(n, role) + '" title="' + n + '">' + n + '</span>'
+      + '<span class="stk-vf-ep-badge ' + protoCls(u) + '">' + proto(u) + '</span>'
+      + '<span class="mono stk-vf-ep-mini-url" title="' + u + '">' + u + '</span>'
+      + '<span class="stk-vf-ep-acts">'
+      + (isWeb(u) ? '<a class="stk-vf-ep-open" href="' + u + '">' + OPEN_SVG + '</a>' : '')
+      + '<span class="stk-vf-ep-copy">' + COPY_SVG + '</span>'
+      + '</span>'
+      + '</div>').join('')
+    + '</div></div>').join('')
+  + '</div></div></div>'
+
+requestAnimationFrame(() => requestAnimationFrame(() => {
+  const lines = []
+  const cards = [...document.querySelectorAll('.stk-vf-ep-host-card')]
+  lines.push('容器宽 ' + gridW + 'px | 卡片数 ' + cards.length + ' | 卡片实测宽 ' + cards.map(c => c.getBoundingClientRect().width.toFixed(1)).join('/'))
+  lines.push('')
+  cards.forEach((card, ci) => {
+    const rows = [...card.querySelectorAll('.stk-vf-ep-mini')]
+    lines.push('--- 卡片 ' + (ci + 1) + ' ' + card.querySelector('.stk-vf-ep-host-ip').textContent + ' (行 ' + rows.length + ') ---')
+    rows.forEach(r => {
+      const svc = r.querySelector('.stk-vf-ep-svc')
+      const badge = r.querySelector('.stk-vf-ep-badge')
+      const url = r.querySelector('.stk-vf-ep-mini-url')
+      const copy = r.querySelector('.stk-vf-ep-copy')
+      const open = r.querySelector('.stk-vf-ep-open')
+      const rb = r.getBoundingClientRect()
+      const g = e => { if (!e) return ['-', '-']; const b = e.getBoundingClientRect(); return [b.left.toFixed(1), b.right.toFixed(1)] }
+      const s = g(svc), b = g(badge), u = g(url), c = g(copy)
+      const trunc = url.scrollWidth > url.clientWidth + 1
+      lines.push('  行左' + rb.left.toFixed(0) + ' | 服务名 ' + svc.textContent.padEnd(19)
+        + ' x[' + s[0] + '→' + s[1] + ' w' + (s[1] - s[0]).toFixed(1) + ']'
+        + ' 协议 x[' + b[0] + '→' + b[1] + ']'
+        + ' 地址 x[' + u[0] + '→' + u[1] + ' w' + (u[1] - u[0]).toFixed(1) + ']'
+        + ' 按钮 x[' + c[0] + '→' + c[1] + ']'
+        + (open ? ' 开' : ' 　')
+        + (trunc ? '  ⚠地址截断(需' + url.scrollWidth + ')' : '  ✓完整'))
+    })
+    lines.push('')
+  })
+  lines.push('对齐判据（同卡片内各行右边界是否一致）：')
+  cards.forEach((card, ci) => {
+    const pick = sel => [...card.querySelectorAll(sel)].map(e => Math.round(e.getBoundingClientRect().right * 10) / 10)
+    const rect = card.getBoundingClientRect()
+    const over = Math.max(0, ...['.stk-vf-ep-badge', '.stk-vf-ep-mini-url', '.stk-vf-ep-copy'].flatMap(s => pick(s))) - (rect.right - 13)
+    lines.push('  卡' + (ci + 1)
+      + ' 服务名左 ' + [...new Set([...card.querySelectorAll('.stk-vf-ep-svc')].map(e => Math.round(e.getBoundingClientRect().left * 10) / 10))].length + ' 种'
+      + ' / 协议右 ' + [...new Set(pick('.stk-vf-ep-badge'))].length + ' 种'
+      + ' / 地址左 ' + [...new Set(pick('.stk-vf-ep-mini-url'))].length + ' 种'
+      + ' / 复制按钮右 ' + [...new Set(pick('.stk-vf-ep-copy'))].length + ' 种'
+      + ' | 溢出 ' + over.toFixed(1) + 'px')
+  })
+  document.getElementById('report').textContent = lines.join('\n')
+  document.title = 'MEASURED'
+}))
+</script>
+</body>
+</html>
