@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"infra-ops/model"
 )
@@ -143,7 +144,9 @@ func (c *escClient) nodes(ctx context.Context) ([]model.ESNode, error) {
 }
 
 func (c *escClient) indices(ctx context.Context) ([]model.ESIndex, error) {
-	const path = "/_cat/indices?format=json&h=index,health,status,pri,rep,docs.count,docs.deleted,store.size&expand_wildcards=all"
+	// expand_wildcards 去掉 hidden（仅 open,closed），并在下面剔除 . 开头系统索引，
+	// 使列表只展示业务索引，不展示隐藏与系统索引。
+	const path = "/_cat/indices?format=json&h=index,health,status,pri,rep,docs.count,docs.deleted,store.size&expand_wildcards=open,closed"
 	status, body, err := c.do(ctx, http.MethodGet, path, nil)
 	if err != nil {
 		return nil, err
@@ -157,8 +160,12 @@ func (c *escClient) indices(ctx context.Context) ([]model.ESIndex, error) {
 	}
 	indices := make([]model.ESIndex, 0, len(list))
 	for _, m := range list {
+		name := strOf(m["index"])
+		if strings.HasPrefix(name, ".") {
+			continue
+		}
 		indices = append(indices, model.ESIndex{
-			Index:       strOf(m["index"]),
+			Index:       name,
 			Health:      strOf(m["health"]),
 			Status:      strOf(m["status"]),
 			Primaries:   strOf(m["pri"]),

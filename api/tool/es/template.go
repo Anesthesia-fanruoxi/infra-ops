@@ -12,7 +12,7 @@ import (
 	"infra-ops/common/resp"
 )
 
-// ListIndexTemplates 索引模板列表。
+// ListIndexTemplates 索引模板列表（展示业务模板，剔除 ES 管理系统默认）。
 func (h *Handler) ListIndexTemplates(c *gin.Context) {
 	client, code, msg := h.resolve(shared.ParseID(c))
 	if client == nil {
@@ -28,9 +28,24 @@ func (h *Handler) ListIndexTemplates(c *gin.Context) {
 		resp.Fail(c, resp.CodeInternal, esErr(status, body, "获取索引模板失败").Error())
 		return
 	}
-	var m map[string]interface{}
-	json.Unmarshal(body, &m)
-	resp.OK(c, m)
+	var m struct {
+		IndexTemplates []struct {
+			Name          string          `json:"name"`
+			IndexTemplate json.RawMessage `json:"index_template"`
+		} `json:"index_templates"`
+	}
+	if err := json.Unmarshal(body, &m); err != nil {
+		resp.Fail(c, resp.CodeInternal, "解析索引模板失败")
+		return
+	}
+	list := make([]gin.H, 0, len(m.IndexTemplates))
+	for _, t := range m.IndexTemplates {
+		if isManaged(t.Name, t.IndexTemplate) {
+			continue
+		}
+		list = append(list, gin.H{"name": t.Name, "index_template": t.IndexTemplate})
+	}
+	resp.OK(c, gin.H{"index_templates": list})
 }
 
 // GetIndexTemplate 模板详情（原始 JSON，含 composed_of）。
@@ -132,9 +147,24 @@ func (h *Handler) ListComponentTemplates(c *gin.Context) {
 		resp.Fail(c, resp.CodeInternal, esErr(status, body, "获取组件模板失败").Error())
 		return
 	}
-	var m map[string]interface{}
-	json.Unmarshal(body, &m)
-	resp.OK(c, m)
+	var m struct {
+		ComponentTemplates []struct {
+			Name              string          `json:"name"`
+			ComponentTemplate json.RawMessage `json:"component_template"`
+		} `json:"component_templates"`
+	}
+	if err := json.Unmarshal(body, &m); err != nil {
+		resp.Fail(c, resp.CodeInternal, "解析组件模板失败")
+		return
+	}
+	list := make([]gin.H, 0, len(m.ComponentTemplates))
+	for _, t := range m.ComponentTemplates {
+		if isManaged(t.Name, t.ComponentTemplate) {
+			continue
+		}
+		list = append(list, gin.H{"name": t.Name, "component_template": t.ComponentTemplate})
+	}
+	resp.OK(c, gin.H{"component_templates": list})
 }
 
 // PutComponentTemplate 新建 / 覆盖组件模板（W7）。

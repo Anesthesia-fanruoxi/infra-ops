@@ -93,9 +93,13 @@ func (h *Handler) ListILMPolicies(c *gin.Context) {
 	}
 	var policies map[string]json.RawMessage
 	json.Unmarshal(body, &policies)
+	// 只展示业务策略，剔除 ES 管理系统默认（managed 或 . 开头）策略。
 	list := make([]gin.H, 0, len(policies))
 	for name, raw := range policies {
-		list = append(list, gin.H{"name": name, "managed": isManaged(name, raw), "policy": json.RawMessage(raw)})
+		if isManaged(name, raw) {
+			continue
+		}
+		list = append(list, gin.H{"name": name, "policy": json.RawMessage(raw)})
 	}
 	resp.OK(c, gin.H{"list": list})
 }
