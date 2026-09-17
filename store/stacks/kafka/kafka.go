@@ -64,9 +64,16 @@ func (d *Driver) Blueprint() model.StackBlueprint {
 			{Name: "cluster_id", Label: "集群 ID（留空自动生成）", Default: "", Modes: []string{"kraft"}},
 			{Name: "zk_image", Label: "ZooKeeper 镜像", Default: "zookeeper:3.9", Required: true, Modes: []string{"zk"}},
 			{Name: "zk_port", Label: "ZK 客户端端口", Default: "2181", Required: true, Modes: []string{"zk"}},
-			{Name: "enable_ui", Label: "附带部署 KafkaUI（yes/no）", Default: "no", Required: true},
+			// KafkaUI 开关：布尔型由骨架渲染为开关（tpl-wizard.js 的 v.type==='bool'），
+			// 提交 "true"/"false"；脚本侧对历史值（yes/no）做了归一化，见 scripts/*-node.sh。
+			// 呈现位置在第一步卡片区（template/static/stacks/kafka/select.js），
+			// 故第三步参数页用 visibleSharedVars 过滤掉本项，避免同一开关出现两处。
+			{Name: "enable_ui", Label: "附带部署 KafkaUI", Default: "false", Type: "bool"},
 			{Name: "ui_image", Label: "KafkaUI 镜像", Default: "provectuslabs/kafka-ui:v0.7.2", Required: true},
 			{Name: "ui_port", Label: "KafkaUI 端口", Default: "8080", Required: true},
+			// 自建镜像仓库（选填）：前端渲染「自建仓库」下拉，与部署中心 hub 镜像源同源；
+			// 选中后平台统一预热并改写全部镜像参数（引擎 privatizeImages 消费本键）
+			{Name: "image_registry", Label: "镜像仓库（自建，选填）", Type: "registry", Default: ""},
 		},
 		HostVars: []model.StackVar{
 			{Name: "port", Label: "Broker 端口", Default: "9092", Required: true},

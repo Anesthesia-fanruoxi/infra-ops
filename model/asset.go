@@ -10,7 +10,7 @@ type StackAsset struct {
 	FileName  string `json:"file_name"` // 落盘文件名
 	SizeBytes int64  `json:"size_bytes"`
 	SHA256    string `json:"sha256"`
-	Source    string `json:"source"` // upload=本地上传 / fetch=服务端代下
+	Source    string `json:"source"` // upload=本地上传 / fetch=服务端代下 / local=本地目录已有（检查时补登记）
 	CreatedAt string `json:"created_at"`
 	UpdatedAt string `json:"updated_at"`
 }
@@ -28,6 +28,6 @@ type StackAssetNeed struct {
 // StackAssetStatus 资产需求的就绪状态（检查接口返回：需求 + 本地是否已就绪）。
 type StackAssetStatus struct {
 	StackAssetNeed
-	Satisfied bool        `json:"satisfied"` // 服务端已有该 key+version 的资产文件
+	Satisfied bool        `json:"satisfied"` // 本地确实存在该文件（文件缺失即未就绪，与是否登记在册无关）
 	Asset     *StackAsset `json:"asset,omitempty"`
 }

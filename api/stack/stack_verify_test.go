@@ -89,14 +89,17 @@ __IO_CLUSTER_END__
 	}
 }
 
-// 未实现 ProbePlugin 的套件（如 kafka）走通用 compose 兜底。
+// 未实现 ProbePlugin 的套件（如 elfk）走通用 compose 兜底。
+// 注：kafka / nacos / powerjob 曾先后用作本例，它们先后实现了 ProbePlugin（自带容器/专属检查），
+// 故换为纯脚本套件（elfk：es-n<seq> / kibana / logstash / filebeat，容器名带运行期序号）。
 func TestParseStackVerifyOutputComposeFallback(t *testing.T) {
 	raw := `__IO_COMPOSE_BEGIN__
-kafka=running
+es-n1=running
+kibana=running
 __IO_COMPOSE_END__
 `
 	row := stackVerifyHost{}
-	parseStackVerifyOutput("kafka", "kraft", model.StackInstanceHost{Role: "node"}, nil, raw, &row)
+	parseStackVerifyOutput("elfk", "standard", model.StackInstanceHost{Role: "node"}, nil, raw, &row)
 	if !row.OK {
 		t.Fatalf("compose running should pass: %+v", row.Checks)
 	}

@@ -3,9 +3,13 @@ set -e
 
 # RocketMQ 集群一步成型节点部署脚本：
 #   - 首节点（is_bootstrap=true，即指定 Master）部署 NameServer + Broker Master（brokerId=0）
-#   - 其余节点自动作为同一 brokerName 组的 Broker Slave（brokerId=__seq）加入，
+#   - 其余节点自动作为同一 brokerName 组的 Broker Slave（brokerId=__broker_id）加入，
 #     并自动以「首节点 IP:ns_port」作为 namesrvAddr（无需手工分两步部署）
 #   - 全部容器使用 host 网络：brokerIP1 取本机 ip，确保跨主机客户端/主备可寻址
+#   - **全部服务收敛进单一 compose 文件 ${HOME_DIR}/compose.yml**：引擎探活只 glob
+#     compose.yml / docker-compose.yml / */compose.yml 三个约定名，停服/清理也只 down
+#     ${HOME_DIR}/compose.yml。曾拆成 namesrv-compose.yml + broker-compose.yml，
+#     导致「探活恒假红 + 缩容/卸载不停容器」；故 namesrv 改为同一文件内的条件服务。
 #   - 监督校验：轮询 namesrv/broker 端口就绪，并经 mqadmin clusterList 验证本 broker 已注册到 namesrv
 # 模板参数: {{image}} {{cluster_name}} {{broker_name}} {{ns_port}} {{broker_port}} {{home_dir}}
 # 内置变量: {{__ip}} {{__seq}} {{__role}} {{__master_ip}} {{__is_bootstrap}} {{__broker_id}}
@@ -39,6 +43,11 @@ BROKER_ID="{{__broker_id}}"
 # 首节点（is_bootstrap=true）的 brokerId 恒为 0
 if [ "${IS_BOOTSTRAP}" = "true" ]; then BROKER_ID="0"; fi
 
+NS_CONTAINER="rmq-namesrv-${CLUSTER_NAME}"
+BROKER_CONTAINER="rmq-broker-${BROKER_NAME}-${BROKER_ID}"
+COMPOSE="${HOME_DIR}/compose.yml"
+NAMESRV_ENDPOINT="${MASTER_IP}:${NS_PORT}"
+
 echo "=== RocketMQ 集群一节点: 集群=${CLUSTER_NAME}/组=${BROKER_NAME} 本机=${SELF_IP} master=${IS_BOOTSTRAP} brokerId=${BROKER_ID} ==="
 mkdir -p "${HOME_DIR}/conf" "${HOME_DIR}/store/namesrv" "${HOME_DIR}/logs/namesrv" "${HOME_DIR}/logs/broker"
 # apache/rocketmq 镜像以 uid 3000 运行
@@ -68,36 +77,18 @@ wait_tcp() { # wait_tcp <ip> <port> <容器> <名称> <次数>
   fi
 }
 
-# ================= NameServer（仅首节点） =================
-if [ "${IS_BOOTSTRAP}" = "true" ]; then
-  NS_CONTAINER="rmq-namesrv-${CLUSTER_NAME}"
-  migrate_old "${NS_CONTAINER}"
-  cat > "${HOME_DIR}/namesrv-compose.yml" <<YAMLEOF
-name: rmq-${CLUSTER_NAME}-namesrv
-services:
-  namesrv:
-    image: ${IMAGE}
-    container_name: ${NS_CONTAINER}
-    restart: always
-    network_mode: host
-    environment:
-      - JAVA_OPT_EXT=-server -Xms512m -Xmx512m -Xmn256m
-    volumes:
-      - ${HOME_DIR}/logs/namesrv:/home/rocketmq/logs
-      - ${HOME_DIR}/store/namesrv:/home/rocketmq/store
-    command: ["sh", "mqnamesrv"]
-YAMLEOF
-  echo "拉取镜像 ${IMAGE}"
-  docker compose -f "${HOME_DIR}/namesrv-compose.yml" pull
-  docker compose -f "${HOME_DIR}/namesrv-compose.yml" up -d
-  wait_tcp 127.0.0.1 "${NS_PORT}" "${NS_CONTAINER}" "NameServer" 40
-  echo "[NameServer] 已就绪: ${SELF_IP}:${NS_PORT}"
-fi
-
-# ================= Broker（所有节点：首节点 master / 其余 slave） =================
-BROKER_CONTAINER="rmq-broker-${BROKER_NAME}-${BROKER_ID}"
+# ==== 迁移旧版多文件 compose（namesrv-compose.yml / broker-compose.yml -> compose.yml） ====
+# 容器名保持不变，若不先 down 旧项目，新 compose 会因 container_name 冲突而启动失败
+for legacy in "${HOME_DIR}/namesrv-compose.yml" "${HOME_DIR}/broker-compose.yml"; do
+  [ -f "${legacy}" ] || continue
+  echo "检测到旧版 compose: ${legacy}，停止后并入 ${COMPOSE}"
+  docker compose -f "${legacy}" down --remove-orphans &>/dev/null || true
+  rm -f "${legacy}"
+done
+migrate_old "${NS_CONTAINER}"
 migrate_old "${BROKER_CONTAINER}"
 
+# ================= Broker 配置（所有节点：首节点 master / 其余 slave） =================
 umask 077
 if [ "${IS_BOOTSTRAP}" = "true" ]; then
   cat > "${HOME_DIR}/conf/broker.conf" <<'CONFEOF'
@@ -112,12 +103,29 @@ umask 022
 chown 3000:3000 "${HOME_DIR}/conf/broker.conf" 2>/dev/null || true
 chmod 644 "${HOME_DIR}/conf/broker.conf"
 
-# 自动把素材中的 {{namesrv_addr}} 替换为「首节点 IP:NS_PORT」
-sed -i "s|{{namesrv_addr}}|${MASTER_IP}:${NS_PORT}|g" "${HOME_DIR}/conf/broker.conf"
+# 把素材中的 {{namesrv_addr}} 替换为「首节点 IP:NS_PORT」（首节点即本机时同样成立）
+sed -i "s|{{namesrv_addr}}|${NAMESRV_ENDPOINT}|g" "${HOME_DIR}/conf/broker.conf"
 
-cat > "${HOME_DIR}/broker-compose.yml" <<YAMLEOF
-name: rmq-${CLUSTER_NAME}-broker
-services:
+# ================= 生成单一 compose 文件（NameServer 仅首节点，作为条件服务） =================
+{
+  echo "name: rmq-${CLUSTER_NAME}"
+  echo "services:"
+  if [ "${IS_BOOTSTRAP}" = "true" ]; then
+    cat <<YAMLEOF
+  namesrv:
+    image: ${IMAGE}
+    container_name: ${NS_CONTAINER}
+    restart: always
+    network_mode: host
+    environment:
+      - JAVA_OPT_EXT=-server -Xms512m -Xmx512m -Xmn256m
+    volumes:
+      - ${HOME_DIR}/logs/namesrv:/home/rocketmq/logs
+      - ${HOME_DIR}/store/namesrv:/home/rocketmq/store
+    command: ["sh", "mqnamesrv"]
+YAMLEOF
+  fi
+  cat <<YAMLEOF
   broker:
     image: ${IMAGE}
     container_name: ${BROKER_CONTAINER}
@@ -131,23 +139,28 @@ services:
       - ${HOME_DIR}/conf/broker.conf:/home/rocketmq/conf/broker.conf:ro
     command: ["sh", "mqbroker", "-c", "/home/rocketmq/conf/broker.conf"]
 YAMLEOF
-
-# 首节点若与 namesrv 同机，broker 的 namesrvAddr 指向本机（与上面 sed 目标一致）
-if [ "${IS_BOOTSTRAP}" = "true" ]; then
-  sed -i "s|{{namesrv_addr}}|${MASTER_IP}:${NS_PORT}|g" "${HOME_DIR}/conf/broker.conf"
-fi
+} > "${COMPOSE}"
 
 echo "拉取镜像 ${IMAGE}"
-docker compose -f "${HOME_DIR}/broker-compose.yml" pull
-docker compose -f "${HOME_DIR}/broker-compose.yml" up -d
+docker compose -f "${COMPOSE}" pull
+
+# ================= NameServer（仅首节点；先起 namesrv 再起 broker，保证注册时序） =================
+if [ "${IS_BOOTSTRAP}" = "true" ]; then
+  docker compose -f "${COMPOSE}" up -d namesrv
+  wait_tcp 127.0.0.1 "${NS_PORT}" "${NS_CONTAINER}" "NameServer" 40
+  echo "[NameServer] 已就绪: ${SELF_IP}:${NS_PORT}"
+fi
+
+# ================= Broker（所有节点） =================
+docker compose -f "${COMPOSE}" up -d broker
 wait_tcp 127.0.0.1 "${BROKER_PORT}" "${BROKER_CONTAINER}" "Broker" 50
 
 # ================= 监督校验：broker 是否成功注册到 namesrv =================
-NAMESRV_ENDPOINT="${MASTER_IP}:${NS_PORT}"
 echo "[BROKER] 经 mqadmin clusterList 校验注册状态（namesrv=${NAMESRV_ENDPOINT}）..."
 REG_OK=0
 for _ in $(seq 1 20); do
-  LIST=$(docker exec "${BROKER_CONTAINER}" sh /home/rocketmq/bin/mqadmin clusterList -n "${NAMESRV_ENDPOINT}" 2>/dev/null || true)
+  # mqadmin 在镜像内位于 $ROCKETMQ_HOME/bin（/home/rocketmq/bin 不存在，实测坑），须经容器内 bash 展开
+  LIST=$(docker exec "${BROKER_CONTAINER}" bash -c "sh \$ROCKETMQ_HOME/bin/mqadmin clusterList -n ${NAMESRV_ENDPOINT}" 2>/dev/null || true)
   if echo "${LIST}" | grep -q "${SELF_IP}:${BROKER_PORT}"; then REG_OK=1; break; fi
   sleep 3
 done
@@ -161,4 +174,4 @@ if [ "${IS_BOOTSTRAP}" = "true" ]; then
 else
   echo "[Broker-Slave] ${SELF_IP}:${BROKER_PORT}（brokerId=${BROKER_ID}，组=${BROKER_NAME}，namesrvAddr=${NAMESRV_ENDPOINT}）"
 fi
-echo "compose: ${HOME_DIR}/namesrv-compose.yml / ${HOME_DIR}/broker-compose.yml"
+echo "compose: ${COMPOSE}"

@@ -264,3 +264,54 @@ func TestStackDriverPlanRolesDeterministic(t *testing.T) {
 		t.Fatal("没有任何套件产出角色计划，断言已失效")
 	}
 }
+
+// TestDockerStacksDeclareRegistryPicker 所有 Docker 套件（RequiresDocker=true）都必须声明
+// 自建仓库选择器变量 image_registry（Type=registry），且恰好声明一次、出现在共享变量里。
+//
+// 口径（2026-09-16 拍板）：套件选仓库的逻辑必须与基础建设部署 Docker 完全一致——前端第 3 步
+// 渲染为「自建仓库」下拉（候选=已登记 Docker Registry 的在线主机，与部署中心同源），提交
+// hub_host_id；后端 injectHubParams 把仓库地址写入每台主机参数，渲染期 privatizeImages 统一
+// 改写全部镜像参数（isImageParam：image / image_* / *_image），并接入 hub 预热与 insecure 预检。
+//
+// 变量名固定为 image_registry 的原因：它就是引擎注入与消费的键，套件无需自带前缀拼接逻辑。
+// 新增 Docker 套件漏声明时在此失败，而不是等部署期镜像前缀静默不生效。
+func TestDockerStacksDeclareRegistryPicker(t *testing.T) {
+	const regVar = "image_registry"
+	dockerStacks := 0
+	for _, d := range ListStackDrivers() {
+		bp := d.Blueprint()
+		if !bp.RequiresDocker {
+			continue
+		}
+		dockerStacks++
+		declared := 0
+		for _, v := range bp.SharedVars {
+			if v.Name != regVar {
+				continue
+			}
+			declared++
+			if v.Type != "registry" {
+				t.Fatalf("套件 %s 的 %s 类型为 %q，期望 registry（前端据此渲染自建仓库下拉）", bp.Key, regVar, v.Type)
+			}
+			if v.Required {
+				t.Fatalf("套件 %s 的 %s 不应为必填：仓库是选填项，留空即直连官方源", bp.Key, regVar)
+			}
+		}
+		if declared == 0 {
+			t.Fatalf("Docker 套件 %s 未声明自建仓库选择器 %s（需 Docker 的套件必须能选自建仓库）", bp.Key, regVar)
+		}
+		if declared > 1 {
+			t.Fatalf("套件 %s 重复声明了 %d 次 %s", bp.Key, declared, regVar)
+		}
+		// 主机级变量不得占用该名：它是全局注入键（injectHubParams 写入每台主机参数），
+		// 主机级同名声明会与注入值互相覆盖。
+		for _, v := range bp.HostVars {
+			if v.Name == regVar {
+				t.Fatalf("套件 %s 在主机级变量里声明了 %s，会与 hub 注入值冲突", bp.Key, regVar)
+			}
+		}
+	}
+	if dockerStacks == 0 {
+		t.Fatal("没有任何 RequiresDocker 的套件，断言已失效")
+	}
+}

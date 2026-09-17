@@ -5,6 +5,10 @@ set -e
 #   - 首节点（is_bootstrap=true）额外部署 MySQL 容器并初始化 nacos 库（幂等），供全集群共享
 #   - 每个节点以 MODE=cluster + NACOS_SERVERS（全节点 ip:port）组集群，统一 NACOS_AUTH_TOKEN
 #   - host 网络，HTTP 8848 / gRPC 9848/9849 直通宿主机，客户端直接连任一节点 ip:8848
+#   - **全部服务收敛进单一 compose 文件 ${HOME_DIR}/compose.yml**：引擎探活只 glob
+#     compose.yml / docker-compose.yml / */compose.yml 三个约定名，停服/清理也只 down
+#     ${HOME_DIR}/compose.yml。曾把 MySQL 写进独立的 mysql-compose.yml，
+#     ⇒ 卸载/缩容时主 compose 停了、MySQL 容器残留。故 MySQL 改为同文件内的条件服务。
 # 模板参数: {{image}} {{cluster_name}} {{port}} {{nacos_token}} {{db_username}} {{db_password}} {{home_dir}} {{mysql_image}}
 # 内置变量: {{__ip}} {{__seq}} {{__role}} {{__is_bootstrap}} {{__node_ips}} {{__master_ip}}
 
@@ -30,6 +34,8 @@ NODE_IPS="{{__node_ips}}"
 MASTER_IP="{{__master_ip}}"
 CONTAINER="nacos-${SELF_ID}"
 MYSQL_CONTAINER="nacos-mysql"
+COMPOSE="${HOME_DIR}/compose.yml"
+PROJECT="nacos-${CLUSTER_NAME}"
 GRPC_PORT=$((PORT + 1000))
 
 [ -n "${IMAGE}" ] || IMAGE="nacos/nacos-server:v2.3.2"
@@ -60,6 +66,9 @@ fi
 if [ "${IS_BOOTSTRAP}" != "true" ] && [ "${ROLE}" = "master" ]; then IS_BOOTSTRAP="true"; fi
 if [ "${IS_BOOTSTRAP}" != "true" ] && [ "${SELF_ID}" = "1" ]; then IS_BOOTSTRAP="true"; fi
 [ -n "${GRPC_PORT}" ] || GRPC_PORT=9848
+# 是否在本机拉起 MySQL：首节点且未指定外部库
+LOCAL_DB="false"
+if [ "${IS_BOOTSTRAP}" = "true" ] && [ -z "${DB_HOST}" ]; then LOCAL_DB="true"; fi
 
 # 生成 NACOS_SERVERS：全节点 ip:port（空格分隔）
 NACOS_SERVERS=""
@@ -85,6 +94,16 @@ migrate_old() {
     fi
   fi
 }
+# 容器已被别的 compose 项目接管时移除，避免 container_name 冲突（旧版 MySQL 单独一个项目）
+adopt_own_project() {
+  local C="$1"
+  docker ps -a --format '{{.Names}}' | grep -qx "${C}" || return 0
+  local PROJ="$(docker inspect --format='{{index .Config.Labels "com.docker.compose.project"}}' "${C}" 2>/dev/null || true)"
+  if [ -n "${PROJ}" ] && [ "${PROJ}" != "${PROJECT}" ]; then
+    echo "容器 ${C} 属于旧 compose 项目 ${PROJ}，移除后并入 ${PROJECT}"
+    docker rm -f "${C}" &>/dev/null || true
+  fi
+}
 wait_tcp_host() { # wait_tcp_host <ip> <port> <名称> <次数>
   local IP="$1" PORT="$2" NAME="$3" TIMES="$4" READY=0
   for _ in $(seq 1 "${TIMES}"); do
@@ -98,12 +117,24 @@ wait_tcp_host() { # wait_tcp_host <ip> <port> <名称> <次数>
   fi
 }
 
-# ================= 首节点：部署 MySQL + 初始化 nacos 库（仅在未指定外部 MySQL 时） =================
-if [ "${IS_BOOTSTRAP}" = "true" ] && [ -z "${DB_HOST}" ]; then
-  migrate_old "${MYSQL_CONTAINER}"
-  cat > "${HOME_DIR}/mysql-compose.yml" <<YAMLEOF
-name: nacos-mysql
-services:
+# ==== 迁移旧版 compose 文件（mysql-compose.yml -> compose.yml） ====
+for legacy in "${HOME_DIR}/mysql-compose.yml"; do
+  [ -f "${legacy}" ] || continue
+  echo "检测到旧版 compose: ${legacy}，停止后并入 ${COMPOSE}"
+  docker compose -f "${legacy}" down --remove-orphans &>/dev/null || true
+  rm -f "${legacy}"
+done
+migrate_old "${CONTAINER}"
+migrate_old "${MYSQL_CONTAINER}"
+adopt_own_project "${CONTAINER}"
+adopt_own_project "${MYSQL_CONTAINER}"
+
+# ================= 生成单一 compose 文件（MySQL 仅首节点且未指定外部库时，作为条件服务） =================
+{
+  echo "name: ${PROJECT}"
+  echo "services:"
+  if [ "${LOCAL_DB}" = "true" ]; then
+    cat <<YAMLEOF
   mysql:
     image: ${MYSQL_IMAGE}
     container_name: ${MYSQL_CONTAINER}
@@ -119,9 +150,41 @@ services:
     volumes:
       - ${HOME_DIR}/mysql-data:/var/lib/mysql
 YAMLEOF
-  echo "拉取 MySQL 镜像 ${MYSQL_IMAGE}"
-  docker compose -f "${HOME_DIR}/mysql-compose.yml" pull
-  docker compose -f "${HOME_DIR}/mysql-compose.yml" up -d
+  fi
+  cat <<YAMLEOF
+  nacos:
+    image: ${IMAGE}
+    container_name: ${CONTAINER}
+    restart: always
+    network_mode: host
+    environment:
+      - MODE=cluster
+      - PREFER_HOST_MODE=ip
+      - NACOS_SERVERS=${NACOS_SERVERS}
+      - NACOS_AUTH_ENABLE=true
+      - NACOS_AUTH_TOKEN=${NACOS_TOKEN}
+      - NACOS_AUTH_IDENTITY_KEY=serverIdentity
+      - NACOS_AUTH_IDENTITY_VALUE=security
+      - SPRING_DATASOURCE_PLATFORM=mysql
+      - MYSQL_SERVICE_HOST=${MYSQL_HOST}
+      - MYSQL_SERVICE_PORT=${DB_PORT}
+      - MYSQL_SERVICE_USER=${DB_USER}
+      - MYSQL_SERVICE_PASSWORD=${DB_PASS}
+      - MYSQL_SERVICE_DB_NAME=nacos
+      - JVM_XMS=512m
+      - JVM_XMX=512m
+      - JVM_XMN=256m
+    volumes:
+      - ${HOME_DIR}/data:/home/nacos/data
+YAMLEOF
+} > "${COMPOSE}"
+
+echo "拉取镜像 ${IMAGE}"
+docker compose -f "${COMPOSE}" pull
+
+# ================= 首节点：启动 MySQL + 初始化 nacos 库（仅在未指定外部 MySQL 时） =================
+if [ "${LOCAL_DB}" = "true" ]; then
+  docker compose -f "${COMPOSE}" up -d mysql
   wait_tcp_host 127.0.0.1 3306 "MySQL" 45
 
   # 初始化 nacos 库（幂等：有表则跳过）
@@ -167,48 +230,7 @@ if [ -n "${DB_HOST}" ]; then
 fi
 
 # ================= 部署 Nacos 节点 =================
-migrate_old "${CONTAINER}"
-cat > "${HOME_DIR}/compose.yml" <<YAMLEOF
-name: nacos-${CLUSTER_NAME}
-services:
-  nacos:
-    image: ${IMAGE}
-    container_name: ${CONTAINER}
-    restart: always
-    network_mode: host
-    environment:
-      - MODE=cluster
-      - PREFER_HOST_MODE=ip
-      - NACOS_SERVERS=${NACOS_SERVERS}
-      - NACOS_AUTH_ENABLE=true
-      - NACOS_AUTH_TOKEN=${NACOS_TOKEN}
-      - NACOS_AUTH_IDENTITY_KEY=serverIdentity
-      - NACOS_AUTH_IDENTITY_VALUE=security
-      - SPRING_DATASOURCE_PLATFORM=mysql
-      - MYSQL_SERVICE_HOST=${MYSQL_HOST}
-      - MYSQL_SERVICE_PORT=${DB_PORT}
-      - MYSQL_SERVICE_USER=${DB_USER}
-      - MYSQL_SERVICE_PASSWORD=${DB_PASS}
-      - MYSQL_SERVICE_DB_NAME=nacos
-      - JVM_XMS=512m
-      - JVM_XMX=512m
-      - JVM_XMN=256m
-    volumes:
-      - ${HOME_DIR}/data:/home/nacos/data
-  mysql_probe:
-    image: ${IMAGE}
-    container_name: ${CONTAINER}-probe
-    restart: "no"
-    network_mode: host
-    entrypoint: [""]
-    command: ["sh", "-c", "exit 0"]
-YAMLEOF
-# 移除探测服务（仅占位，防 YAML 结构校验问题）
-sed -i '/^  mysql_probe:/,/^  #/d' "${HOME_DIR}/compose.yml"
-
-echo "拉取镜像 ${IMAGE}"
-docker compose -f "${HOME_DIR}/compose.yml" pull
-docker compose -f "${HOME_DIR}/compose.yml" up -d
+docker compose -f "${COMPOSE}" up -d nacos
 
 # ================= 就绪检查（控制台 + 集群成员） =================
 READY=0
@@ -228,4 +250,4 @@ if [ -n "${DB_HOST}" ]; then
 else
   echo "数据库: ${MASTER_IP}:3306/nacos（root/${DB_PASS}，自动部署）"
 fi
-echo "compose: ${HOME_DIR}/compose.yml（改后 docker compose -f ${HOME_DIR}/compose.yml up -d 生效）"
+echo "compose: ${COMPOSE}（改后 docker compose -f ${COMPOSE} up -d 生效）"

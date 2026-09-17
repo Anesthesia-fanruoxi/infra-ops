@@ -48,16 +48,18 @@ func (d *Driver) Phase(mode, phase string) (stackkit.PhaseFile, bool) {
 }
 
 // Pipeline 冷热温模式主脑流水线：reset（清残留）→ masters → coords → data → verify（leader 校验）。
-// reset 标 FullOnly 故扩容/加装时绝不清空既有数据。集群模式无流水线（nil = 传统单步流程）。
+// reset 标 FullOnly 故扩容/加装时绝不清空既有数据；masters/coords/data 标 Component 供
+// 加装裁剪与运行视图芯片状态聚合（verify 校验阶段无组件产出，与 bigdata 口径一致不标）。
+// 集群模式无流水线（nil = 传统单步流程）。
 func (d *Driver) Pipeline(mode string) []model.StackPhase {
 	if mode != "cold_warm_hot" {
 		return nil
 	}
 	return []model.StackPhase{
 		{Key: "reset", Label: "清理旧环境与残留容器", Target: "all", FullOnly: true},
-		{Key: "masters", Label: "启动 master 候选节点", Target: "all"},
-		{Key: "coords", Label: "启动纯协调节点", Target: "all"},
-		{Key: "data", Label: "启动数据节点（hot/warm/cold）", Target: "all"},
+		{Key: "masters", Label: "启动 master 候选节点", Target: "all", Component: "elasticsearch"},
+		{Key: "coords", Label: "启动纯协调节点", Target: "all", Component: "elasticsearch"},
+		{Key: "data", Label: "启动数据节点（hot/warm/cold）", Target: "all", Component: "elasticsearch"},
 		{Key: "verify", Label: "校验集群健康与各分层", Target: "leader", Always: true},
 	}
 }
@@ -68,7 +70,7 @@ func (d *Driver) Blueprint() model.StackBlueprint {
 		Key:            "elasticsearch",
 		Name:           "Elasticsearch",
 		Category:       "service",
-		Description:    "一次成型部署 Elasticsearch 集群。双模式：原「集群」模式（指定一台引导主节点，其余 seed_hosts 加入）；新增「冷热温」模式（按主机勾选 master/纯协调/数据层角色，主脑流水线阶段编排，支持 SSL 自签）。host 网络直连，默认关闭 xpack 安全。",
+		Description:    "一次成型部署 Elasticsearch 集群。双模式：原「集群」模式（单容器，指定一台引导主节点）；「冷热温」模式（一机多容器：矩阵勾选即部署，每格一个对应角色的 ES 容器，数据层与 master/协调互斥，master 与协调可同机多容器；对外仅暴露协调/master 入口）。host 网络直连，xpack 安全保持关闭。规格由三档内部预设决定（小额尝鲜 / 标准使用 / 大力出奇迹），不需要逐节点填 JVM 参数；档位只定义每角色 JVM 参数与参考数量，机器数量与硬件由用户自定。",
 		RequiresDocker: true,
 		Modes: []model.StackMode{
 			{
@@ -79,29 +81,35 @@ func (d *Driver) Blueprint() model.StackBlueprint {
 			},
 			{
 				Key: "cold_warm_hot", Label: "冷热温",
-				Description: "按数据热度分层：每台多选 master/纯协调/数据-hot/warm/cold 角色；master 不与数据层混部；生产建议 master ≥3 台（奇数）。SSL 可自签。",
-				MinHosts:    4, HostHint: "至少 4 台；建议 1+ master（≥3，奇数）+ ≥2 纯协调 + 数据层（按 tier）",
+				Description: "一机多容器：矩阵勾选即部署，每格一个对应角色的 ES 容器（master 与协调可同机叠加，数据层 hot/warm/cold 可叠加；数据层与 master/协调互斥）。行清空自动归冷热温数据层；端口按角色固定偏移（master 9200/协调 9210/hot 9220/warm 9230/cold 9240），对外仅登记协调或 master 入口。",
+				MinHosts:    4, HostHint: "至少 4 台；建议 ≥3 master（奇数）+ ≥2 纯协调 + 数据层（按 tier）",
 				HasBootstrap: true, DefaultHomeDir: "/data/elasticsearch",
 			},
 		},
+		// 规格档位表（三档内部预设）：随蓝图下发给套件自己的第 2 步组件渲染，
+		// 与部署期堆内存注入同源（sizing.go 是唯一事实源，前端不再重复维护数字）。
+		Extras: map[string]any{"sizing": esSizingTable()},
 		SharedVars: []model.StackVar{
 			{Name: "cluster_name", Label: "集群名", Default: "es-cluster", Required: true},
 			{Name: "image", Label: "镜像", Default: "elasticsearch:9.5.3", Required: true},
-			{Name: "java_opts", Label: "堆内存", Default: "-Xms1g -Xmx1g", Required: true, Modes: []string{"cluster"}},
-			{Name: "transport_port", Label: "Transport 端口", Default: "9300", Required: true},
-			// 冷热温模式级变量：SSL 开关、纯协调数量、JVM 堆与额外参数
-			{Name: "ssl_enabled", Label: "启用 SSL（节点自签证书）", Default: "false", Type: "bool", Required: false, Modes: []string{"cold_warm_hot"}},
-			{Name: "coordinator_count", Label: "纯协调节点数", Default: "2", Required: false, Modes: []string{"cold_warm_hot"}},
-			{Name: "heap_xms", Label: "JVM 初始堆", Default: "1g", Required: false, Modes: []string{"cold_warm_hot"}},
-			{Name: "heap_xmx", Label: "JVM 最大堆", Default: "1g", Required: false, Modes: []string{"cold_warm_hot"}},
-			{Name: "jvm_opts", Label: "JVM 额外参数（追加进 ES_JAVA_OPTS）", Default: "-XX:+UseG1GC", Required: false, Modes: []string{"cold_warm_hot"}},
+			// 规格档位：mini(小额尝鲜) / standard(标准使用) / full(大力出奇迹)，两模式通用。
+			// 由套件自己的第 2 步组件选择（第 3 步经 visibleSharedVars 过滤，不重复展示）；
+			// JVM 堆与内存建议由 sizing.go 按「档位 × 角色」给出，用户不再手填 JVM 参数。
+			{Name: "sizing", Label: "规格档位", Default: esSizingStandard, Required: true},
+			// 冷热温多容器：端口按角色固定偏移（9200/9210/9220/9230/9240，transport +100），
+			// transport_port 仅集群模式可填；冷热温对外只登记协调/master 入口。
+			// （原 java_opts / heap_xms / heap_xmx / jvm_opts 四个 JVM 变量已由 sizing 档位取代。）
+			{Name: "transport_port", Label: "Transport 端口", Default: "9300", Required: true, Modes: []string{"cluster"}},
+			// 自建镜像仓库（选填）：前端渲染「自建仓库」下拉，与部署中心 hub 镜像源同源；
+			// 选中后平台统一预热并改写全部镜像参数（引擎 privatizeImages 消费本键）
+			{Name: "image_registry", Label: "镜像仓库（自建，选填）", Type: "registry", Default: ""},
 		},
 		HostVars: []model.StackVar{
-			{Name: "port", Label: "HTTP 端口", Default: "9200", Required: true},
+			{Name: "port", Label: "HTTP 端口", Default: "9200", Required: true, Modes: []string{"cluster"}},
 			{Name: "home_dir", Label: "服务主目录", Default: "/data/elasticsearch", Required: true},
 			// 冷热温：每台主机的角色勾选（逗号分隔 master/coordinator/data_hot,data_warm,data_cold），
-			// 声明为 HostVar 以便 mergeStackParams 持久化到主机 ParamsJSON，后端与脚本据此派生 node.roles。
-			{Name: "roles", Label: "节点角色", Default: "coordinator", Required: false, Modes: []string{"cold_warm_hot"}},
+			// 每个勾选角色 = 该主机一个独立 ES 容器；空值由后端兜底为冷热温全数据层。
+			{Name: "roles", Label: "节点角色", Default: "", Required: false, Modes: []string{"cold_warm_hot"}},
 		},
 	}
 }

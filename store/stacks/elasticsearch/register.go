@@ -1,53 +1,41 @@
 package elasticsearch
 
 import (
-	"strings"
-
 	"infra-ops/model"
 	"infra-ops/store/stackkit"
 )
 
-// register.go：Elasticsearch 服务登记（原 api/stack.registerStackService 的 elasticsearch 分支原样迁入）。
+// register.go：Elasticsearch 服务登记（docs/新增套件说明.md · ServiceRegistrar）。
 //
 //	cluster       —— 主 / 工作节点均登记 Elasticsearch 入口（http://<ip>:<port>）；
-//	cold_warm_hot —— 按每台主机勾选的 roles 逐条登记（携带 tier 标签，协议随 SSL 开关 http/https）；
-//	其余（未知模式）—— 回落引擎通用角色投影（与拆分前的 default 分支一致）。
+//	cold_warm_hot —— 一机多容器：数据节点端口仅供内部通信，不对外登记；每台主机仅登记
+//	                 协调入口（优先）或 master 入口，纯数据主机不产生接入台账；
+//	其余（未知模式）—— 回落引擎通用角色投影。
 func (d *Driver) RegisterServices(ctx stackkit.RegisterCtx) {
 	ip := ctx.Host.HostIP
 	switch ctx.Mode {
 	case "cold_warm_hot":
-		scheme := "http"
-		if strings.EqualFold(strings.TrimSpace(ctx.Params["ssl_enabled"]), "true") {
-			scheme = "https"
+		port, label := "", ""
+		for _, r := range cwhHostRoles(ctx.Params) {
+			if r == "coordinator" {
+				port, label = cwhRolePort(r), "协调"
+				break
+			}
 		}
-		bind := func(label string) {
+		if port == "" {
+			for _, r := range cwhHostRoles(ctx.Params) {
+				if r == "master" {
+					port, label = cwhRolePort(r), "master"
+					break
+				}
+			}
+		}
+		if port != "" {
 			ctx.Emit(model.HostService{
 				HostID: ctx.Host.HostID, HostIP: ip, ServiceName: "Elasticsearch-" + label,
-				URL: scheme + "://" + ip + ":" + stackkit.PickParam(ctx.Params, "port", "9200"), Web: true,
+				URL: "http://" + ip + ":" + port, Web: true,
 				TemplateID: 0, InstanceID: ctx.InstanceID,
 			})
-		}
-		registered := false
-		for _, r := range strings.Split(ctx.Params["roles"], ",") {
-			r = strings.TrimSpace(r)
-			switch r {
-			case "master":
-				bind("master")
-			case "coordinator":
-				bind("协调")
-			case "data_hot":
-				bind("数据-hot")
-			case "data_warm":
-				bind("数据-warm")
-			case "data_cold":
-				bind("数据-cold")
-			}
-			if r != "" {
-				registered = true
-			}
-		}
-		if !registered {
-			bind("节点")
 		}
 	case "cluster":
 		switch ctx.Host.Role {

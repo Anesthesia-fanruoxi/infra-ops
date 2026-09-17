@@ -57,6 +57,9 @@ func (d *Driver) Blueprint() model.StackBlueprint {
 			{Name: "db_password", Label: "数据库密码", Required: true},
 			{Name: "db_host", Label: "外部 MySQL 地址（host[:port]，留空自动在首节点部署）", Default: ""},
 			{Name: "mysql_image", Label: "MySQL 镜像（自动部署时用）", Default: "mysql:8.0", Required: true},
+			// 自建镜像仓库（选填）：前端渲染「自建仓库」下拉，与部署中心 hub 镜像源同源；
+			// 选中后平台统一预热并改写全部镜像参数（引擎 privatizeImages 消费本键）
+			{Name: "image_registry", Label: "镜像仓库（自建，选填）", Type: "registry", Default: ""},
 		},
 		HostVars: []model.StackVar{
 			{Name: "port", Label: "Nacos HTTP 端口", Default: "8848", Required: true},

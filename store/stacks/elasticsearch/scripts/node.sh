@@ -1,4 +1,7 @@
 #!/bin/bash
+# Elasticsearch「集群」模式 —— 单容器节点（1 引导 master + N data）。
+# JVM 堆由「规格档位」预设给出（后端按 sizing.go 注入 __es_heap，节点即数据节点档），
+# 不再接受任何自由文本 JVM 入参；启动参数固定为 -Xms/-Xmx（取自档位）+ G1。
 set -e
 
 command -v docker &>/dev/null || { echo "未检测到 Docker"; exit 1; }
@@ -8,7 +11,11 @@ docker compose version &>/dev/null || { echo "未检测到 docker compose 插件
 CLUSTER_NAME="{{cluster_name}}"
 PORT="{{port}}"
 TRANSPORT_PORT="{{transport_port}}"
-JAVA_OPTS="{{java_opts}}"
+# 规格档位决定单节点堆（集群模式节点即数据节点，与冷热温 data_hot 同档）：
+# 后端按 sizing.go 的三档预设注入，用户不再填写堆内存与 GC 参数。
+SIZING="{{__es_sizing}}"
+SIZING_LABEL="{{__es_sizing_label}}"
+HEAP="{{__es_heap}}"
 HOME_DIR="{{home_dir}}"
 IMAGE="{{image}}"
 IS_BOOTSTRAP="{{__is_bootstrap}}"
@@ -20,9 +27,9 @@ CONTAINER="es-${NODE_NAME}"
 [ -n "${NODE_NAME}" ] || { echo "节点名称不能为空"; exit 1; }
 [ -n "${PORT}" ] || PORT=9200
 [ -n "${TRANSPORT_PORT}" ] || TRANSPORT_PORT=9300
-[ -n "${JAVA_OPTS}" ] || JAVA_OPTS="-Xms1g -Xmx1g"
+[ -n "${HEAP}" ] || HEAP=1g
 [ -n "${HOME_DIR}" ] || { echo "服务主目录不能为空"; exit 1; }
-[ -n "${IMAGE}" ] || IMAGE="elasticsearch:8.17.0"
+[ -n "${IMAGE}" ] || IMAGE="elasticsearch:9.5.3"
 
 mkdir -p "${HOME_DIR}/data" "${HOME_DIR}/logs"
 chown -R 1000:0 "${HOME_DIR}/data" "${HOME_DIR}/logs" 2>/dev/null || chmod -R 777 "${HOME_DIR}/data" "${HOME_DIR}/logs"
@@ -59,7 +66,7 @@ services:
     restart: always
     network_mode: host
     environment:
-      - ES_JAVA_OPTS={{java_opts}}
+      - ES_JAVA_OPTS=-Xms{{__es_heap}} -Xmx{{__es_heap}} -XX:+UseG1GC
       - bootstrap.memory_lock=true
     ulimits:
       memlock:
@@ -89,6 +96,7 @@ if [ "${READY}" != "1" ]; then
 fi
 
 echo "Elasticsearch 节点已就绪: ${NODE_NAME} / 集群 ${CLUSTER_NAME}"
+echo "规格档位: ${SIZING_LABEL}(${SIZING})，堆 -Xms${HEAP} -Xmx${HEAP}（数据节点档，堆不超过宿主内存 50%）"
 echo "HTTP: http://${SELF_IP}:${PORT}（Transport ${SELF_IP}:${TRANSPORT_PORT}，host 网络）"
 if [ "${IS_BOOTSTRAP}" = "true" ]; then
   echo "本机为引导节点；集群成形后建议删除 elasticsearch.yml 中的 cluster.initial_master_nodes"

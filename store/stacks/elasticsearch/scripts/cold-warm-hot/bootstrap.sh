@@ -1,23 +1,43 @@
 #!/bin/bash
 # Elasticsearch 冷热温 / verify 阶段 —— 在引导 master（leader）上校验集群健康与各分层就绪。
+# 一机多容器：入口端口从本机角色清单推导（协调 9210 > master 9200 > 数据层 9220 兜底）。
 set -e
 
 CLUSTER_NAME="{{cluster_name}}"
-PORT="{{port}}"
-SSL="{{ssl_enabled}}"
 CLUSTER_SIZE="{{__cluster_size}}"
 SELF_IP="{{__ip}}"
 NODE_NAME="{{__node_name}}"
+ES_NODES="{{__es_nodes}}"
 
 [ -n "${CLUSTER_NAME}" ] || { echo "集群名称不能为空"; exit 1; }
-[ -n "${PORT}" ] || PORT=9200
 [ -n "${CLUSTER_SIZE}" ] || CLUSTER_SIZE=1
 
-SCHEME="http"
-[ "${SSL}" = "true" ] && SCHEME="https"
+# 本机入口端口（与 node.sh / 后端 vars.go 的角色固定偏移同表）
+entry_port() {
+  local ROLE
+  for ROLE in ${ES_NODES//,/ }; do
+    case "${ROLE}" in
+      coordinator) echo 9210; return;;
+    esac
+  done
+  for ROLE in ${ES_NODES//,/ }; do
+    case "${ROLE}" in
+      master) echo 9200; return;;
+    esac
+  done
+  echo 9220
+}
+# 本机首个容器的名称（日志兑底用）
+first_container() {
+  local ROLE
+  for ROLE in ${ES_NODES//,/ }; do
+    [ -n "${ROLE}" ] && { echo "es-${NODE_NAME}-${ROLE}"; return; }
+  done
+  echo "es-${NODE_NAME}-master"
+}
+
 CURL=(curl -sf)
-[ "${SSL}" = "true" ] && CURL=(curl -sfk)
-BASE="${SCHEME}://${SELF_IP}:${PORT}"
+BASE="http://${SELF_IP}:$(entry_port)"
 
 HEALTH=""
 for _ in $(seq 1 40); do
@@ -37,7 +57,7 @@ NODES="$(echo "${HEALTH}" | sed -n 's/.*"number_of_nodes"[^:]*:[[:space:]]*\([0-
 echo "集群健康: ${STATUS} / 节点数 ${NODES}（期望 ≥${CLUSTER_SIZE}）"
 if [ -z "${STATUS}" ]; then
   echo "无法解析健康状态，最近主节点日志:"
-  docker logs "es-${NODE_NAME}" --tail 30 2>&1 || true
+  docker logs "$(first_container)" --tail 30 2>&1 || true
   exit 1
 fi
 if [ "${STATUS}" = "red" ]; then

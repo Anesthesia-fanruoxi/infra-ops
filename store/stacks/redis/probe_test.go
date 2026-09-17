@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"infra-ops/model"
 	"infra-ops/store/stackkit"
 )
 
@@ -131,4 +132,87 @@ func contains(xs []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// 组件归属（探活对话框的页签来源）：哨兵模式下 Redis 实体与 Sentinel 各自归位，
+// 容器名含 sentinel 的 redis-sentinel-data 属于 Redis 本体，不能按子串误判。
+func TestParseSuiteSentinelComponents(t *testing.T) {
+	raw := `__IO_CTR__redis-sentinel-data__=running|1|healthy
+__IO_CTR__redis-sentinel__=running|1|healthy
+__IO_PING__=PONG
+__IO_REPL_BEGIN__
+role:master
+__IO_REPL_END__
+__IO_SENT_PING__=PONG
+__IO_SENT_BEGIN__
+name
+mymaster
+ip
+10.0.0.1
+port
+6379
+flags
+master
+__IO_SENT_END__
+`
+	out := New().ParseSuite(stackkit.ProbeCtx{Mode: "sentinel", Role: "master"}, raw,
+		[]string{"redis-sentinel-data", "redis-sentinel"})
+	want := map[string]string{
+		"容器 redis-sentinel-data": "redis",
+		"容器 redis-sentinel":      "sentinel",
+		"PING":                     "redis",
+		"角色":                      "redis",
+		"哨兵":                      "sentinel",
+	}
+	for name, comp := range want {
+		found := false
+		for _, c := range out.Checks {
+			if c.Name != name {
+				continue
+			}
+			found = true
+			if c.Component != comp {
+				t.Errorf("%s component=%q want %q", name, c.Component, comp)
+			}
+		}
+		if !found {
+			t.Errorf("缺少检查项 %s", name)
+		}
+	}
+}
+
+// 端点归属：redis:// 归 Redis 本体、redis-sentinel:// 归 Sentinel。
+func TestEndpointsComponent(t *testing.T) {
+	eps := New().Endpoints(stackkit.EndpointCtx{
+		Mode:   "sentinel",
+		Host:   model.StackInstanceHost{HostIP: "10.0.0.1", Role: "master"},
+		Params: map[string]string{"sentinel_port": "26379"},
+	})
+	if len(eps) != 2 {
+		t.Fatalf("endpoints=%+v", eps)
+	}
+	if eps[0].Component != "redis" || eps[1].Component != "sentinel" {
+		t.Fatalf("component 归属错误: %+v", eps)
+	}
+	if eps[1].URL != "redis-sentinel://10.0.0.1:26379" {
+		t.Fatalf("哨兵端点=%q", eps[1].URL)
+	}
+}
+
+// 哨兵主名参数化：探活脚本与接入提示都跟随 master_name（默认值仍为 mymaster）。
+func TestSentinelMasterNameParam(t *testing.T) {
+	d := New()
+	tail := d.ScriptTail(stackkit.ProbeCtx{Mode: "sentinel", Params: map[string]string{"master_name": "biz-redis"}})
+	if !strings.Contains(tail, `SENT_MASTER='biz-redis'`) || !strings.Contains(tail, `SENTINEL master "$SENT_MASTER"`) {
+		t.Fatalf("脚本尾片段未参数化:\n%s", tail)
+	}
+	def := d.ScriptTail(stackkit.ProbeCtx{Mode: "sentinel", Params: map[string]string{}})
+	if !strings.Contains(def, `SENT_MASTER='mymaster'`) {
+		t.Fatalf("默认主名应为 mymaster:\n%s", def)
+	}
+	_, hint := d.Summary(stackkit.ProbeCtx{Mode: "sentinel", Params: map[string]string{"master_name": "biz-redis"}},
+		[]stackkit.ProbeHostRow{{HostIP: "10.0.0.1", Role: "master"}})
+	if !strings.Contains(hint, "get-master-addr-by-name biz-redis") {
+		t.Fatalf("接入提示未跟随主名: %s", hint)
+	}
 }

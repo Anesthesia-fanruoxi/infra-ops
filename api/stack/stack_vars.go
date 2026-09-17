@@ -53,6 +53,26 @@ func trimRegistryPrefix(img string) string {
 	return img
 }
 
+// applyRuntimeVars 补齐「未在蓝图变量里声明」的运行期占位符（{{key}} 字面量替换）。
+//
+// 与 applyStackVars 的分工：后者注入引擎生成的集群变量（__ip / __role / …）供节点阶段使用；
+// 本函数服务于缩容软下线这类运行期脚本——其参数（self_ip、套件给出的 remove_nodes / remove_masters）
+// 是引擎在运行期算出来的，蓝图里没有声明，deploy.RenderScript 因此不会替换它们。
+// 空键与空值一律跳过：宁可把占位符留在脚本里暴露问题，也不要静默替换成空参数。
+func applyRuntimeVars(script string, extra map[string]string) string {
+	pairs := make([]string, 0, len(extra)*2)
+	for k, v := range extra {
+		if k == "" || v == "" {
+			continue
+		}
+		pairs = append(pairs, "{{"+k+"}}", v)
+	}
+	if len(pairs) == 0 {
+		return script
+	}
+	return strings.NewReplacer(pairs...).Replace(script)
+}
+
 // applyStackVars 依次注入通用主机变量与 extra 提供的集群变量（{{key}} 字面量替换）。
 func applyStackVars(script string, seq int, host model.StackRunHost, extra map[string]string) string {
 	rec := repo.HostRecord{DeployTaskHost: model.DeployTaskHost{

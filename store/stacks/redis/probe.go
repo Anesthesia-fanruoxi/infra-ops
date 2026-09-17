@@ -12,6 +12,23 @@ import (
 // 原 api/stack 的 stack_verify_script.go（redis 分支）、stack_verify_parse.go（redis 分支）、
 // stack_verify_redis.go 原样迁入，检查项顺序与文案逐字节一致。
 
+// 组件归属（探活对话框按组件分页签，骨架 common/verify-dialog.js 的 probeAttributed 据此过滤）：
+// 哨兵模式下 Redis 本体与 Sentinel 是两个独立容器/进程，各占一个页签；
+// 主从与集群模式只有 Redis 本体，前端 verifyTabbed 因此只对哨兵返回 true。
+const (
+	compRedis    = "redis"
+	compSentinel = "sentinel"
+)
+
+// containerComponent 容器名 → 组件键。哨兵容器固定叫 redis-sentinel，
+// 数据容器叫 redis-sentinel-data（名字里含 sentinel 但属于 Redis 本体），故按精确名判断。
+func containerComponent(name string) string {
+	if name == "redis-sentinel" {
+		return compSentinel
+	}
+	return compRedis
+}
+
 // Containers 本机期望容器名。
 func (d *Driver) Containers(ctx stackkit.ProbeCtx) []string {
 	switch ctx.Mode {
@@ -57,11 +74,13 @@ echo __IO_NODES_END__
 	}
 	if ctx.Mode == "sentinel" {
 		sPort := stackkit.PickParam(ctx.Params, "sentinel_port", "26379")
+		mName := stackkit.PickParam(ctx.Params, "master_name", "mymaster")
 		b.WriteString("SENT_CTR=redis-sentinel\n")
 		b.WriteString("SENT_PORT=" + stackkit.ShellQuote(sPort) + "\n")
+		b.WriteString("SENT_MASTER=" + stackkit.ShellQuote(mName) + "\n")
 		b.WriteString(`echo "__IO_SENT_PING__=$(redis_cli "$SENT_CTR" -p "$SENT_PORT" PING | tr -d '\r')"
 echo __IO_SENT_BEGIN__
-redis_cli "$SENT_CTR" -p "$SENT_PORT" SENTINEL master mymaster
+redis_cli "$SENT_CTR" -p "$SENT_PORT" SENTINEL master "$SENT_MASTER"
 echo __IO_SENT_END__
 `)
 	}
@@ -75,7 +94,7 @@ func (d *Driver) ParseSuite(ctx stackkit.ProbeCtx, raw string, containers []stri
 	for _, name := range containers {
 		st := stackkit.ExtractLine(raw, "__IO_CTR__"+name+"__=")
 		ok, detail := stackkit.ParseCtrState(name, st)
-		out.Checks = append(out.Checks, stackkit.Check{Name: "容器 " + name, OK: ok, Detail: detail})
+		out.Checks = append(out.Checks, stackkit.Check{Name: "容器 " + name, Component: containerComponent(name), OK: ok, Detail: detail})
 	}
 
 	ping := strings.TrimSpace(stackkit.ExtractLine(raw, "__IO_PING__="))
@@ -84,7 +103,7 @@ func (d *Driver) ParseSuite(ctx stackkit.ProbeCtx, raw string, containers []stri
 	if ping == "" {
 		pingDetail = "无响应"
 	}
-	out.Checks = append(out.Checks, stackkit.Check{Name: "PING", OK: pingOK, Detail: pingDetail})
+	out.Checks = append(out.Checks, stackkit.Check{Name: "PING", Component: compRedis, OK: pingOK, Detail: pingDetail})
 
 	repl := stackkit.ExtractBlock(raw, "__IO_REPL_BEGIN__", "__IO_REPL_END__")
 	info := parseRedisInfo(repl)
@@ -100,20 +119,20 @@ func (d *Driver) ParseSuite(ctx stackkit.ProbeCtx, raw string, containers []stri
 		if mh := strings.TrimSpace(info["master_host"]); live != "master" && mh != "" {
 			detail += " · 跟随 " + mh
 		}
-		out.Checks = append(out.Checks, stackkit.Check{Name: "角色", OK: roleOK, Detail: detail})
+		out.Checks = append(out.Checks, stackkit.Check{Name: "角色", Component: compRedis, OK: roleOK, Detail: detail})
 	}
 	if live == "slave" || live == "replica" {
 		link := strings.TrimSpace(info["master_link_status"])
-		out.Checks = append(out.Checks, stackkit.Check{Name: "复制", OK: link == "up", Detail: "master_link_status=" + stackkit.Nz(link, "未知")})
+		out.Checks = append(out.Checks, stackkit.Check{Name: "复制", Component: compRedis, OK: link == "up", Detail: "master_link_status=" + stackkit.Nz(link, "未知")})
 	}
 	if live == "master" {
 		if slaves := parseConnectedSlaves(info); len(slaves) > 0 {
-			out.Checks = append(out.Checks, stackkit.Check{Name: "复制", OK: true, Detail: strings.Join(slaves, "; ")})
+			out.Checks = append(out.Checks, stackkit.Check{Name: "复制", Component: compRedis, OK: true, Detail: strings.Join(slaves, "; ")})
 		}
 	}
 
 	if ver := redisVersion(stackkit.ExtractBlock(raw, "__IO_SRV_BEGIN__", "__IO_SRV_END__")); ver != "" {
-		out.Checks = append(out.Checks, stackkit.Check{Name: "版本", OK: true, Detail: ver})
+		out.Checks = append(out.Checks, stackkit.Check{Name: "版本", Component: compRedis, OK: true, Detail: ver})
 	}
 
 	if ctx.Mode == "cluster" {
@@ -126,7 +145,7 @@ func (d *Driver) ParseSuite(ctx stackkit.ProbeCtx, raw string, containers []stri
 		if v := ci["cluster_known_nodes"]; v != "" {
 			detail += " · nodes " + v
 		}
-		out.Checks = append(out.Checks, stackkit.Check{Name: "集群", OK: state == "ok", Detail: detail})
+		out.Checks = append(out.Checks, stackkit.Check{Name: "集群", Component: compRedis, OK: state == "ok", Detail: detail})
 	}
 	if ctx.Mode == "sentinel" {
 		sp := strings.TrimSpace(stackkit.ExtractLine(raw, "__IO_SENT_PING__="))
@@ -141,7 +160,7 @@ func (d *Driver) ParseSuite(ctx stackkit.ProbeCtx, raw string, containers []stri
 		if sm["ip"] != "" {
 			detail += " · 主 " + sm["ip"] + ":" + sm["port"]
 		}
-		out.Checks = append(out.Checks, stackkit.Check{Name: "哨兵", OK: sentOK, Detail: detail})
+		out.Checks = append(out.Checks, stackkit.Check{Name: "哨兵", Component: compSentinel, OK: sentOK, Detail: detail})
 	}
 	return out
 }
@@ -167,8 +186,9 @@ func (d *Driver) Summary(ctx stackkit.ProbeCtx, hosts []stackkit.ProbeHostRow) (
 		hint = "redis-cli -c -h " + ip + " -p " + port
 	case "sentinel":
 		sp := stackkit.PickParam(ctx.Params, "sentinel_port", "26379")
+		mName := stackkit.PickParam(ctx.Params, "master_name", "mymaster")
 		notes = []string{"应用侧连 Sentinel，主从地址以 SENTINEL 查询为准。"}
-		hint = "redis-cli -h " + ip + " -p " + sp + " SENTINEL get-master-addr-by-name mymaster"
+		hint = "redis-cli -h " + ip + " -p " + sp + " SENTINEL get-master-addr-by-name " + mName
 	default:
 		notes = []string{"业务请连主节点；从库默认只读。"}
 		hint = "redis-cli -h " + ip + " -p " + port
@@ -236,6 +256,7 @@ func topologyNotes(mode string, hosts []stackkit.ProbeHostRow) []string {
 }
 
 // Endpoints Redis 接入端点（原 stackVerifyEndpoints 的 redis 分支）。
+// Component 决定探活对话框里的页签归属：哨兵模式下 redis:// 与 redis-sentinel:// 分属两个页签。
 func (d *Driver) Endpoints(ctx stackkit.EndpointCtx) []stackkit.Endpoint {
 	h := ctx.Host
 	p := stackkit.PickParam(ctx.Params, "port", "6379")
@@ -248,36 +269,12 @@ func (d *Driver) Endpoints(ctx stackkit.EndpointCtx) []stackkit.Endpoint {
 			name = "Redis 从"
 		}
 	}
-	out = append(out, stackkit.Endpoint{Name: name, URL: "redis://" + h.HostIP + ":" + p, Role: h.Role})
+	out = append(out, stackkit.Endpoint{Name: name, Component: compRedis, URL: "redis://" + h.HostIP + ":" + p, Role: h.Role})
 	if ctx.Mode == "sentinel" {
 		sp := stackkit.PickParam(ctx.Params, "sentinel_port", "26379")
-		out = append(out, stackkit.Endpoint{Name: "Sentinel", URL: "redis-sentinel://" + h.HostIP + ":" + sp, Role: h.Role})
+		out = append(out, stackkit.Endpoint{Name: "Sentinel", Component: compSentinel, URL: "redis-sentinel://" + h.HostIP + ":" + sp, Role: h.Role})
 	}
 	return out
-}
-
-// ScaleGuard 缩容保护（原 stack_instance_validate.go 的 redis 分支）：
-// 主从/哨兵不得移除唯一主节点；集群至少保留 3 节点。
-func (d *Driver) ScaleGuard(ctx stackkit.ScaleCtx) error {
-	if ctx.Mode == "replication" || ctx.Mode == "sentinel" {
-		removeSet := stackkit.IDSet(ctx.RemoveIDs)
-		remainMaster := 0
-		for _, h := range ctx.Active {
-			if removeSet[h.HostID] {
-				continue
-			}
-			if h.Role == "master" {
-				remainMaster++
-			}
-		}
-		if remainMaster == 0 {
-			return fmt.Errorf("不能移除唯一主节点")
-		}
-	}
-	if ctx.Mode == "cluster" && ctx.Remain < 3 {
-		return fmt.Errorf("Redis 集群至少保留 3 个节点")
-	}
-	return nil
 }
 
 // ---------- Redis INFO / SENTINEL 解析（原 stack_verify_redis.go） ----------

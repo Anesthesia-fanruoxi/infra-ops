@@ -18,7 +18,8 @@ func New() *Driver { return &Driver{} }
 // Key 套件唯一键（与蓝图 key 一致）。
 func (d *Driver) Key() string { return "redis" }
 
-// Phase 阶段脚本：三模式各一枚 node 脚本；集群模式另有 bootstrap（CLUSTER CREATE）与扩容加槽脚本。
+// Phase 阶段脚本：三模式各一枚 node 脚本；集群模式另有 bootstrap（CLUSTER CREATE）、
+// 扩容加槽（cluster-add.sh）与缩容软下线（cluster-del.sh）。
 func (d *Driver) Phase(mode, phase string) (stackkit.PhaseFile, bool) {
 	switch phase {
 	case stackkit.PhaseNode:
@@ -55,6 +56,13 @@ func (d *Driver) Phase(mode, phase string) (stackkit.PhaseFile, bool) {
 	case stackkit.PhaseScaleOut:
 		if mode == "cluster" {
 			return stackkit.PhaseFile{Path: "stacks/redis/scripts/cluster-add.sh"}, true
+		}
+	case stackkit.PhaseScaleIn:
+		// 集群缩容软下线：在存活成员上先把待移除节点的槽迁走、再 del-node，
+		// 之后主流程才停容器。缺此脚本时引擎降级为「直接停服」，
+		// 会让哈希槽指向已消失的节点（cluster_state 可能变 fail）。
+		if mode == "cluster" {
+			return stackkit.PhaseFile{Path: "stacks/redis/scripts/cluster-del.sh"}, true
 		}
 	}
 	return stackkit.PhaseFile{}, false
@@ -96,6 +104,12 @@ func (d *Driver) Blueprint() model.StackBlueprint {
 			{Name: "image", Label: "镜像", Default: "redis:7", Required: true},
 			{Name: "replicas", Label: "从节点倍数", Default: "0", Required: true, Modes: []string{"cluster"}},
 			{Name: "sentinel_port", Label: "哨兵端口", Default: "26379", Required: true, Modes: []string{"sentinel"}},
+			// 哨兵主名参数化（默认与旧值一致）：同主机部署第二个哨兵实例时，
+			// 两套哨兵若共用 mymaster 会互相干扰监控对象，改成不同主名即可隔离。
+			{Name: "master_name", Label: "哨兵主名", Default: "mymaster", Required: true, Modes: []string{"sentinel"}},
+			// 自建镜像仓库（选填）：前端渲染「自建仓库」下拉，与部署中心 hub 镜像源同源；
+			// 选中后平台统一预热并改写全部镜像参数（引擎 privatizeImages 消费本键）
+			{Name: "image_registry", Label: "镜像仓库（自建，选填）", Type: "registry", Default: ""},
 		},
 		HostVars: []model.StackVar{
 			{Name: "port", Label: "端口", Default: "6379", Required: true},

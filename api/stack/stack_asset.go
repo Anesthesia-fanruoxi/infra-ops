@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -77,6 +78,8 @@ func (h *assetHandler) List(c *gin.Context) {
 }
 
 // Check POST /api/stacks/assets/check：给定套件+模式+参数，返回资产需求与就绪状态（向导第二步渲染）。
+// 就绪判定以「本地文件是否真的存在」为准（见 localAsset）：登记表只是元数据缓存，
+// 用户直接把离线包装进 data/assets/<key>/<version>/ 也应被认，反之登记在册但文件被删即未就绪。
 func (h *assetHandler) Check(c *gin.Context) {
 	var req struct {
 		StackKey string            `json:"stack_key"`
@@ -95,15 +98,68 @@ func (h *assetHandler) Check(c *gin.Context) {
 	items := make([]model.StackAssetStatus, 0, len(needs))
 	for _, need := range needs {
 		st := model.StackAssetStatus{StackAssetNeed: need}
-		if a, err := h.assetRepo.GetByKeyVersion(need.Key, need.Version); err == nil && a != nil {
-			if _, ferr := os.Stat(assetFilePath(a)); ferr == nil {
-				st.Satisfied = true
-				st.Asset = a
-			}
+		if a := h.localAsset(need); a != nil {
+			st.Satisfied = true
+			st.Asset = a
 		}
 		items = append(items, st)
 	}
 	resp.OK(c, gin.H{"items": items})
+}
+
+// assetBaseDir 资产文件根目录（与 assetDir 同源）。
+func assetBaseDir() string { return filepath.Join("data", "assets") }
+
+// localAsset 判定一条资产需求在服务端是否已就绪，返回可用元数据（未就绪返回 nil）。
+// 判据是文件本体本身：
+//   - 登记与文件对得上（同名同大小）→ 直接复用登记，避免每次打开开关都重算哈希（驱动 jar 可达数十 MB）；
+//   - 文件在但没登记（或登记与文件不符）→ 现场按文件补齐 size + sha256 并登记，
+//     这样手工放进 data/assets 的离线包同样能被部署分发（provisionAssets 走登记取件）。
+func (h *assetHandler) localAsset(need model.StackAssetNeed) *model.StackAsset {
+	if prev, err := h.assetRepo.GetByKeyVersion(need.Key, need.Version); err == nil && prev != nil {
+		if fi, ferr := os.Stat(assetFilePath(prev)); ferr == nil && !fi.IsDir() && fi.Size() == prev.SizeBytes {
+			return prev
+		}
+	}
+	a, err := scanLocalAsset(assetBaseDir(), need)
+	if err != nil {
+		return nil
+	}
+	if err := h.assetRepo.Upsert(a); err != nil {
+		return nil // 登记不上则部署分发取不到，宁可判未就绪
+	}
+	return a
+}
+
+// scanLocalAsset 按套件声明探测资产目录里的同名文件：命中返回元数据（含现场计算的 sha256），
+// 未命中或文件不可用返回错误。base 参数化便于单测。
+func scanLocalAsset(base string, need model.StackAssetNeed) (*model.StackAsset, error) {
+	for _, s := range []string{need.Key, need.Version, need.FileName} {
+		if err := assetNameOK(s); err != nil {
+			return nil, err
+		}
+	}
+	p := filepath.Join(base, need.Key, need.Version, need.FileName)
+	fi, err := os.Stat(p)
+	if err != nil {
+		return nil, fmt.Errorf("本地缺少 %s: %w", need.FileName, err)
+	}
+	if fi.IsDir() || fi.Size() <= 0 {
+		return nil, fmt.Errorf("本地 %s 不是有效文件", need.FileName)
+	}
+	f, err := os.Open(p)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	hasher := sha256.New()
+	if _, err := io.Copy(hasher, f); err != nil {
+		return nil, err
+	}
+	return &model.StackAsset{
+		AssetKey: need.Key, Version: need.Version, FileName: need.FileName,
+		SizeBytes: fi.Size(), SHA256: hex.EncodeToString(hasher.Sum(nil)), Source: "local",
+	}, nil
 }
 
 // Upload POST /api/stacks/assets/upload：本地上传入库（multipart：asset_key/version/file_name/file）。
@@ -307,8 +363,18 @@ func fetchAssetURLs(key, version, fileName string, urls []string, source string)
 	return nil, lastErr
 }
 
+// assetHTTPClient 服务端代下的 HTTP 客户端：整体 10 分钟上限，但建连 8s、响应头 30s 即放弃。
+// 只设 Client.Timeout 是不够的——它是「整笔事务」预算，遇到不可达的镜像地址时建连会一路
+// 吃满系统级超时，表现为点了下载长时间无响应。保留 DefaultTransport（含 ProxyFromEnvironment）。
+var assetHTTPClient = func() *http.Client {
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.DialContext = (&net.Dialer{Timeout: 8 * time.Second, KeepAlive: 30 * time.Second}).DialContext
+	tr.ResponseHeaderTimeout = 30 * time.Second
+	return &http.Client{Timeout: 10 * time.Minute, Transport: tr}
+}()
+
 func fetchOneURL(key, version, fileName, rawURL, source string) (*model.StackAsset, error) {
-	client := &http.Client{Timeout: 10 * time.Minute}
+	client := assetHTTPClient
 	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, err

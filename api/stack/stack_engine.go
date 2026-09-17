@@ -57,7 +57,14 @@ func (h *stackHandler) execute(runID int64) {
 
 	// 步骤清单一次性物化（在 prereq 之前，Docker 环境步骤的状态推进才有载体）
 	installPhases := selectPipelinePhases(d, run, op)
-	_ = h.repo.CreateRunSteps(runID, buildRunSteps(op, d, mode, installPhases, h.runStepComponents(run)))
+	runSteps := buildRunSteps(op, d, mode, installPhases, h.runStepComponents(run))
+	// hub 镜像源模式：Docker 套件且参数带 __hub_host_id 时，prereq 之后插入镜像源预热步骤
+	hubHostID, _ := hubCfgFromRun(run.ParamsJSON)
+	useHub := hubHostID > 0 && d.Blueprint().RequiresDocker && hubInstallOps[op]
+	if useHub {
+		runSteps = insertHubStep(runSteps)
+	}
+	_ = h.repo.CreateRunSteps(runID, runSteps)
 
 	if d.Blueprint().RequiresDocker {
 		h.stepRunning(runID, "prereq")
@@ -72,6 +79,21 @@ func (h *stackHandler) execute(runID int64) {
 	} else {
 		h.skipPhasePrereq(runID, hosts)
 		hosts, _ = h.repo.RunHosts(runID)
+	}
+
+	// hub 镜像源阶段：hub 健康校验 → 镜像预热 → 目标机 insecure 信任预检（串行，
+	// 复用部署模板引擎的台账解析与脚本口径）；任一失败严格中止，不回退直连拉取
+	if useHub {
+		h.stepRunning(runID, "hub")
+		h.appendLog(runID, "hub", 0, "", "开始 hub 镜像源校验与预热")
+		ok := h.runPhaseHub(runID, run, hosts)
+		h.stepDone(runID, "hub", ok)
+		hosts, _ = h.repo.RunHosts(runID)
+		if !ok {
+			h.skipRemaining(runID, hosts, true, true)
+			h.finish(runID)
+			return
+		}
 	}
 
 	// 主脑编排的流水线：套件声明了 ordered 多阶段时，逐阶段调度主机（替代 node→bootstrap 单步）。

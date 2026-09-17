@@ -5,6 +5,10 @@ set -e
 #   - 首节点（is_bootstrap=true）额外部署 MySQL 容器并初始化 powerjob 库（幂等），供全集群共享
 #   - 每个节点部署一个 powerjob-server，经 JDBC 连接首节点 MySQL（对等集群，worker 连任一节点即可）
 #   - host 网络，控制台 7700 / akka 10086 等端口直通宿主机
+#   - **全部服务收敛进单一 compose 文件 ${HOME_DIR}/compose.yml**：引擎探活只 glob
+#     compose.yml / docker-compose.yml / */compose.yml 三个约定名，停服/清理也只 down
+#     ${HOME_DIR}/compose.yml。曾写 compose.yml.${SELF_ID}（server）+ mysql-compose.yml（MySQL），
+#     二者都不在约定名内 ⇒ 探活恒假红、缩容/卸载不停容器。故 MySQL 改为同文件内的条件服务。
 # 模板参数: {{image}} {{db_username}} {{db_password}} {{home_dir}} {{mysql_image}} {{akka_port}} {{server_port}}
 # 内置变量: {{__ip}} {{__seq}} {{__role}} {{__is_bootstrap}} {{__node_ips}} {{__master_ip}}
 
@@ -29,6 +33,8 @@ NODE_IPS="{{__node_ips}}"
 MASTER_IP="{{__master_ip}}"
 CONTAINER="powerjob-server-${SELF_ID}"
 MYSQL_CONTAINER="powerjob-mysql"
+COMPOSE="${HOME_DIR}/compose.yml"
+PROJECT="powerjob-node-${SELF_ID}"
 
 [ -n "${IMAGE}" ] || IMAGE="powerjob/powerjob-server:latest"
 [ -n "${DB_USER}" ] && [ -n "${DB_PASS}" ] || { echo "数据库用户名/密码不能为空"; exit 1; }
@@ -56,6 +62,12 @@ fi
 # 首节点：is_bootstrap 或 role=master 或 seq==1
 if [ "${IS_BOOTSTRAP}" != "true" ] && [ "${ROLE}" = "master" ]; then IS_BOOTSTRAP="true"; fi
 if [ "${IS_BOOTSTRAP}" != "true" ] && [ "${SELF_ID}" = "1" ]; then IS_BOOTSTRAP="true"; fi
+# 是否在本机拉起 MySQL：首节点且未指定外部库
+LOCAL_DB="false"
+if [ "${IS_BOOTSTRAP}" = "true" ] && [ -z "${DB_HOST}" ]; then LOCAL_DB="true"; fi
+
+# PowerJob 首个 server 首次启动会自动初始化表结构（JPA ddl + 内置权限），无需手工 SQL
+JDBC_URL="jdbc:mysql://${MYSQL_HOST}:${DB_PORT}/powerjob?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai&lower_case_table_names=1"
 
 echo "=== PowerJob 节点: ${SELF_IP} (bootstrap=${IS_BOOTSTRAP}) 数据库=${MYSQL_HOST}:${DB_PORT} ==="
 mkdir -p "${HOME_DIR}"
@@ -68,6 +80,16 @@ migrate_old() {
       echo "检测到旧容器（非 compose 管理）: ${C}，移除后重建"
       docker rm -f "${C}" &>/dev/null || true
     fi
+  fi
+}
+# 容器已被别的 compose 项目接管时移除，避免 container_name 冲突（旧版 MySQL 单独一个项目）
+adopt_own_project() {
+  local C="$1"
+  docker ps -a --format '{{.Names}}' | grep -qx "${C}" || return 0
+  local PROJ="$(docker inspect --format='{{index .Config.Labels "com.docker.compose.project"}}' "${C}" 2>/dev/null || true)"
+  if [ -n "${PROJ}" ] && [ "${PROJ}" != "${PROJECT}" ]; then
+    echo "容器 ${C} 属于旧 compose 项目 ${PROJ}，移除后并入 ${PROJECT}"
+    docker rm -f "${C}" &>/dev/null || true
   fi
 }
 wait_tcp_host() { # wait_tcp_host <ip> <port> <名称> <次数>
@@ -83,12 +105,24 @@ wait_tcp_host() { # wait_tcp_host <ip> <port> <名称> <次数>
   fi
 }
 
-# ================= 首节点：部署 MySQL + 初始化 powerjob 库（仅在未指定外部 MySQL 时） =================
-if [ "${IS_BOOTSTRAP}" = "true" ] && [ -z "${DB_HOST}" ]; then
-  migrate_old "${MYSQL_CONTAINER}"
-  cat > "${HOME_DIR}/mysql-compose.yml" <<YAMLEOF
-name: powerjob-mysql
-services:
+# ==== 迁移旧版 compose 文件（compose.yml.<seq> / mysql-compose.yml -> compose.yml） ====
+for legacy in "${HOME_DIR}"/compose.yml.* "${HOME_DIR}/mysql-compose.yml"; do
+  [ -f "${legacy}" ] || continue
+  echo "检测到旧版 compose: ${legacy}，停止后并入 ${COMPOSE}"
+  docker compose -f "${legacy}" down --remove-orphans &>/dev/null || true
+  rm -f "${legacy}"
+done
+migrate_old "${CONTAINER}"
+migrate_old "${MYSQL_CONTAINER}"
+adopt_own_project "${CONTAINER}"
+adopt_own_project "${MYSQL_CONTAINER}"
+
+# ================= 生成单一 compose 文件（MySQL 仅首节点且未指定外部库时，作为条件服务） =================
+{
+  echo "name: ${PROJECT}"
+  echo "services:"
+  if [ "${LOCAL_DB}" = "true" ]; then
+    cat <<YAMLEOF
   mysql:
     image: ${MYSQL_IMAGE}
     container_name: ${MYSQL_CONTAINER}
@@ -106,9 +140,27 @@ services:
     volumes:
       - ${HOME_DIR}/mysql-data:/var/lib/mysql
 YAMLEOF
-  echo "拉取 MySQL 镜像 ${MYSQL_IMAGE}"
-  docker compose -f "${HOME_DIR}/mysql-compose.yml" pull
-  docker compose -f "${HOME_DIR}/mysql-compose.yml" up -d
+  fi
+  cat <<YAMLEOF
+  server:
+    image: ${IMAGE}
+    container_name: ${CONTAINER}
+    restart: always
+    network_mode: host
+    environment:
+      - JVMOPTIONS=-Xmx512m
+      - PARAMS=--oms.mongodb.enable=false --spring.datasource.core.jdbc-url=${JDBC_URL} --spring.datasource.core.username=${DB_USER} --spring.datasource.core.password=${DB_PASS} --oms.local.remote-endpoint=${SELF_IP}:${AKKA_PORT}
+    volumes:
+      - ${HOME_DIR}/server-${SELF_ID}:/root/powerjob/server/
+YAMLEOF
+} > "${COMPOSE}"
+
+echo "拉取镜像 ${IMAGE}"
+docker compose -f "${COMPOSE}" pull
+
+# ================= 首节点：启动 MySQL + 初始化 powerjob 库（仅在未指定外部 MySQL 时） =================
+if [ "${LOCAL_DB}" = "true" ]; then
+  docker compose -f "${COMPOSE}" up -d mysql
   wait_tcp_host 127.0.0.1 3306 "MySQL" 45
 
   # 授权业务库用户（幂等）
@@ -138,29 +190,7 @@ if [ -n "${DB_HOST}" ]; then
 fi
 
 # ================= 部署 PowerJob server 节点 =================
-migrate_old "${CONTAINER}"
-
-# PowerJob 首个 server 首次启动会自动初始化表结构（JPA ddl + 内置权限），无需手工 SQL
-JDBC_URL="jdbc:mysql://${MYSQL_HOST}:${DB_PORT}/powerjob?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai&lower_case_table_names=1"
-
-cat > "${HOME_DIR}/compose.yml.${SELF_ID}" <<YAMLEOF
-name: powerjob-node-${SELF_ID}
-services:
-  server:
-    image: ${IMAGE}
-    container_name: ${CONTAINER}
-    restart: always
-    network_mode: host
-    environment:
-      - JVMOPTIONS=-Xmx512m
-      - PARAMS=--oms.mongodb.enable=false --spring.datasource.core.jdbc-url=${JDBC_URL} --spring.datasource.core.username=${DB_USER} --spring.datasource.core.password=${DB_PASS} --oms.local.remote-endpoint=${SELF_IP}:${AKKA_PORT}
-    volumes:
-      - ${HOME_DIR}/server-${SELF_ID}:/root/powerjob/server/
-YAMLEOF
-
-echo "拉取镜像 ${IMAGE}"
-docker compose -f "${HOME_DIR}/compose.yml.${SELF_ID}" pull
-docker compose -f "${HOME_DIR}/compose.yml.${SELF_ID}" up -d
+docker compose -f "${COMPOSE}" up -d server
 
 # ================= 就绪检查（控制台端口） =================
 READY=0
@@ -181,4 +211,4 @@ if [ -n "${DB_HOST}" ]; then
 else
   echo "数据库: ${MASTER_IP}:3306/powerjob（root/${DB_PASS}，自动部署）"
 fi
-echo "compose: ${HOME_DIR}/compose.yml.${SELF_ID}（改后 docker compose -f ${HOME_DIR}/compose.yml.${SELF_ID} up -d 生效）"
+echo "compose: ${COMPOSE}（改后 docker compose -f ${COMPOSE} up -d 生效）"

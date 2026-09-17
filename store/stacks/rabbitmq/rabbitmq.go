@@ -17,20 +17,28 @@ func New() *Driver { return &Driver{} }
 // Key 套件唯一键（与蓝图 key 一致）。
 func (d *Driver) Key() string { return "rabbitmq" }
 
-// Phase 阶段脚本：cluster 一枚 node 脚本（注入 rabbitmq.conf 素材）。
+// Phase 阶段脚本：cluster 模式的 node 脚本（注入 rabbitmq.conf 素材）
+// 与 scale_in 软下线脚本（Q2：缩容前在存活节点上 stop_app → forget_cluster_node）。
 //
-// 注：该 node.sh 同时被「基础建设 · 部署 RabbitMQ」模板直接复用，
-// 模板侧经 store.readAsset 前缀路由读到同一份资源，不重复内嵌。
+// 注：node.sh 同时被「基础建设 · 部署 RabbitMQ」模板直接复用，
+// 模板侧经 store.readAsset 前缀路由读到同一份资源，不重复内嵌；
+// scale-in.sh 仅由缩容软下线链路（api/stack/stack_drain.go）渲染执行。
 func (d *Driver) Phase(mode, phase string) (stackkit.PhaseFile, bool) {
-	if phase != stackkit.PhaseNode || mode != "cluster" {
+	if mode != "cluster" {
 		return stackkit.PhaseFile{}, false
 	}
-	return stackkit.PhaseFile{
-		Path: "stacks/rabbitmq/scripts/node.sh",
-		Assets: map[string]string{
-			"RABBITMQ_CONF": "stacks/rabbitmq/configs/rabbitmq.conf",
-		},
-	}, true
+	switch phase {
+	case stackkit.PhaseNode:
+		return stackkit.PhaseFile{
+			Path: "stacks/rabbitmq/scripts/node.sh",
+			Assets: map[string]string{
+				"RABBITMQ_CONF": "stacks/rabbitmq/configs/rabbitmq.conf",
+			},
+		}, true
+	case stackkit.PhaseScaleIn:
+		return stackkit.PhaseFile{Path: "stacks/rabbitmq/scripts/scale-in.sh"}, true
+	}
+	return stackkit.PhaseFile{}, false
 }
 
 // Pipeline RabbitMQ 无多阶段流水线（空 = 走传统 node→bootstrap 单步流程）。
@@ -42,7 +50,7 @@ func (d *Driver) Blueprint() model.StackBlueprint {
 		Key:            "rabbitmq",
 		Name:           "RabbitMQ",
 		Category:       "service",
-		Description:    "一次成型部署 RabbitMQ 集群。指定一台初始化节点，其余自动 join；host 网络 + 节点名 rabbit@宿主机IP，Erlang cookie 留空则自动生成。",
+		Description:    "一次成型部署 RabbitMQ 集群。指定一台初始化节点，其余自动 join；host 网络 + 节点名 rabbit@宿主机IP，Erlang cookie 留空则自动生成。可选延迟队列插件（delayed_plugin 开启后优先使用平台资产分发，缺失时从 GitHub 官方源下载 .ez 并启用，扩容新节点自动同步）；可选自建镜像仓库（选中后全部镜像改为该仓库前缀，并接入 hub 预热与 insecure 预检）。",
 		RequiresDocker: true,
 		Modes: []model.StackMode{
 			{
@@ -59,6 +67,10 @@ func (d *Driver) Blueprint() model.StackBlueprint {
 			{Name: "erlang_cookie", Label: "Erlang Cookie（留空自动生成）"},
 			{Name: "amqp_port", Label: "AMQP 端口", Default: "5672", Required: true},
 			{Name: "mgmt_port", Label: "管理端口", Default: "15672", Required: true},
+			{Name: "delayed_plugin", Label: "安装延迟队列插件", Default: "false", Type: "bool"},
+			// 自建镜像仓库（选填）：前端渲染「自建仓库」下拉，与部署中心 hub 镜像源同源；
+			// 选中后平台统一预热并改写全部镜像参数（引擎 privatizeImages 消费本键）
+			{Name: "image_registry", Label: "镜像仓库（自建，选填）", Type: "registry", Default: ""},
 		},
 		HostVars: []model.StackVar{
 			{Name: "home_dir", Label: "服务主目录", Default: "/data/rabbitmq", Required: true},

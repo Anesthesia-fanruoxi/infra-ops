@@ -58,23 +58,25 @@ var snapCases = []snapCase{
 	},
 
 	// ---------- kafka ----------
+	// enable_ui 为布尔开关（Type=bool），真实提交值是 "true"/"false"；
+	// 历史实例里的 "yes"/"no" 仍由 stackkit.IsYes 与脚本归一化兼容。
 	{
 		Name: "kafka_kraft_ui", Stack: "kafka", Mode: "kraft",
-		Params: map[string]string{"enable_ui": "yes"},
+		Params: map[string]string{"enable_ui": "true"},
 		Hosts: []model.StackRunHost{
 			snHost(1, "10.0.1.1", "node", 1, ""), snHost(2, "10.0.1.2", "node", 2, ""), snHost(3, "10.0.1.3", "node", 3, ""),
 		},
 	},
 	{
 		Name: "kafka_kraft", Stack: "kafka", Mode: "kraft",
-		Params: map[string]string{"enable_ui": "no"},
+		Params: map[string]string{"enable_ui": "false"},
 		Hosts: []model.StackRunHost{
 			snHost(1, "10.0.1.1", "node", 1, ""), snHost(2, "10.0.1.2", "node", 2, ""), snHost(3, "10.0.1.3", "node", 3, ""),
 		},
 	},
 	{
 		Name: "kafka_zk_ui", Stack: "kafka", Mode: "zk",
-		Params: map[string]string{"enable_ui": "yes"},
+		Params: map[string]string{"enable_ui": "true"},
 		Hosts: []model.StackRunHost{
 			snHost(1, "10.0.1.1", "node", 1, ""), snHost(2, "10.0.1.2", "node", 2, ""), snHost(3, "10.0.1.3", "node", 3, ""),
 		},
@@ -129,11 +131,12 @@ var snapCases = []snapCase{
 	},
 	{
 		Name: "elasticsearch_cwh", Stack: "elasticsearch", Mode: "cold_warm_hot", ManualMaster: true,
+		// 一机多容器：master+协调同机叠加、单数据层、自动模式（空 roles → 自动分配落点）、数据层叠加
 		Hosts: []model.StackRunHost{
-			snHost(1, "10.0.6.1", "master", 1, esParams("master,data_hot")),
+			snHost(1, "10.0.6.1", "master", 1, esParams("master,coordinator")),
 			snHost(2, "10.0.6.2", "worker", 2, esParams("data_hot")),
-			snHost(3, "10.0.6.3", "worker", 3, esParams("data_warm")),
-			snHost(4, "10.0.6.4", "worker", 4, esParams("data_cold,coordinator")),
+			snHost(3, "10.0.6.3", "worker", 3, esParams("")),
+			snHost(4, "10.0.6.4", "worker", 4, esParams("data_warm,data_cold")),
 		},
 	},
 

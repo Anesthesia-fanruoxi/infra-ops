@@ -84,6 +84,9 @@ func (d *Driver) Blueprint() model.StackBlueprint {
 			{Name: "logstash_beats_port", Label: "Logstash Beats 端口", Default: "5044", Required: true},
 			{Name: "logstash_host", Label: "Logstash 所在主机 IP（留空自动落第 2 台）", Default: ""},
 			{Name: "es_heap", Label: "ES JVM 堆", Default: "-Xms1g -Xmx1g", Required: true},
+			// 自建镜像仓库（选填）：前端渲染「自建仓库」下拉，与部署中心 hub 镜像源同源；
+			// 选中后平台统一预热并改写全部镜像参数（引擎 privatizeImages 消费本键）
+			{Name: "image_registry", Label: "镜像仓库（自建，选填）", Type: "registry", Default: ""},
 		},
 		HostVars: []model.StackVar{
 			{Name: "port", Label: "ES HTTP 端口", Default: "9200", Required: true},

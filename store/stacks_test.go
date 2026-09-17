@@ -51,11 +51,19 @@ func TestRedisStackScriptsEmbed(t *testing.T) {
 	if strings.Contains(sent, "@@REDIS_SENTINEL_") {
 		t.Fatal("sentinel assets not injected")
 	}
-	if !strings.Contains(sent, "sentinel monitor mymaster {{__master_ip}}") {
+	if !strings.Contains(sent, "sentinel monitor {{master_name}} {{__master_ip}}") {
 		t.Fatal("sentinel conf missing monitor")
 	}
 	if !strings.Contains(sent, "replicaof {{__master_ip}}") {
 		t.Fatal("sentinel replica conf missing")
+	}
+	// 集群缩容软下线：scale_in 阶段必须有摘除节点的脚本（否则槽会残留在已移除节点上）
+	del, err := LoadStackPhase(s, "cluster", "scale_in")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(del, "--cluster del-node") {
+		t.Fatal("scale-in script missing del-node")
 	}
 	for _, name := range []string{"replication", "cluster", "sentinel"} {
 		node, err := LoadStackPhase(s, name, "node")

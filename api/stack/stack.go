@@ -62,6 +62,10 @@ type stackRunReq struct {
 	MasterHostID int64                        `json:"master_host_id"`
 	Params       map[string]string            `json:"params"`
 	HostParams   map[string]map[string]string `json:"host_params"`
+	// hub 镜像主机（可选）：>0 表示从该主机的 Docker Registry 拉取镜像，
+	// 引擎在执行前做健康校验与镜像预热；0=直连拉取。
+	HubHostID       int64 `json:"hub_host_id"`
+	HubAutoInsecure bool  `json:"hub_auto_insecure"`
 }
 
 // List GET /api/stacks

@@ -5,7 +5,7 @@ type StackVar struct {
 	Name     string   `json:"name"`
 	Label    string   `json:"label"`
 	Default  string   `json:"default"`        // bool 型为 "true"/"false"
-	Type     string   `json:"type,omitempty"` // "bool"=前端渲染开关，空=文本输入
+	Type     string   `json:"type,omitempty"` // "bool"=前端渲染开关；"registry"=自建仓库选择器（候选见部署中心，选中接入 hub 镜像源）；空=文本输入
 	Required bool     `json:"required"`
 	Modes    []string `json:"modes,omitempty"` // 空=所有模式
 }
@@ -48,6 +48,10 @@ type StackBlueprint struct {
 	Modes          []StackMode `json:"modes"`
 	SharedVars     []StackVar  `json:"shared_vars"`
 	HostVars       []StackVar  `json:"host_vars"`
+	// Extras 套件自定义的只读声明式元数据，原样下发给前端供套件自己的展示 UI 消费
+	// （如 ES 的三档规格表）。骨架不认识其中任何键、不做任何分支：套件写什么、前端读什么。
+	// 与部署期注入同源（同一份 Go 表），避免「界面一套数字、实际部署另一套」的漂移。
+	Extras map[string]any `json:"extras,omitempty"`
 }
 
 // StackRun 一次套件部署运行（挂在集群实例上的一条流程）。
@@ -103,12 +107,12 @@ type StackRunStep struct {
 	ID         int64   `json:"id"`
 	RunID      int64   `json:"run_id"`
 	Seq        int     `json:"seq"`
-	Key        string  `json:"key"`                // 步骤键（prereq/流水线阶段键/node/bootstrap/scale_out/remove）
-	Label      string  `json:"label"`              // 展示名（取自蓝图流水线或引擎通用文案）
-	Target     string  `json:"target"`             // all=全部主机 / leader=仅主节点
-	Component  string  `json:"component"`          // 归属组件（逗号分隔，空=不隶属）
-	Phase      string  `json:"phase"`              // 日志阶段归属：prereq/node/bootstrap
-	Status     string  `json:"status"`             // pending/running/success/failed/skipped
+	Key        string  `json:"key"`       // 步骤键（prereq/流水线阶段键/node/bootstrap/scale_out/remove）
+	Label      string  `json:"label"`     // 展示名（取自蓝图流水线或引擎通用文案）
+	Target     string  `json:"target"`    // all=全部主机 / leader=仅主节点
+	Component  string  `json:"component"` // 归属组件（逗号分隔，空=不隶属）
+	Phase      string  `json:"phase"`     // 日志阶段归属：prereq/node/bootstrap
+	Status     string  `json:"status"`    // pending/running/success/failed/skipped
 	Error      string  `json:"error"`
 	StartedAt  *string `json:"started_at"`
 	FinishedAt *string `json:"finished_at"`

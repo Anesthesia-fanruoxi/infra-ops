@@ -7,10 +7,11 @@ import (
 	"infra-ops/store/stackkit"
 )
 
-// validate.go：冷热温模式的角色组合校验（原 api/stack/stack_topo.go 的 validateCWHRoles 原样迁入）。
+// validate.go：冷热温模式的角色组合校验（一机多容器口径）。
 //
-// 逐条硬性非法组合返回 400：master 与数据层互斥、coordinator 不与数据层共存、缺 master 候选、
-// 未知角色、单台角色重复；master 数量为偶数时返回引导提示（非错误）。
+// 逐条硬性非法组合返回 400：数据层（hot/warm/cold）与 master/纯协调互斥（不混部）、
+// 缺 master 候选、未知角色、单台角色重复；master 与纯协调可同机叠加（两容器，合法）；
+// 空 roles 兜底冷热温全数据层（与 vars.go / 脚本口径一致）；master 偶数返回引导提示（非错误）。
 
 // ValidateCreate 实现 stackkit.CreateValidator：仅冷热温模式的创建请求需要角色组合校验。
 func (d *Driver) ValidateCreate(ctx stackkit.ValidateCtx) error {
@@ -31,12 +32,8 @@ func validateCWHRoles(hostRoles map[string]map[string]string) (string, error) {
 	}
 	masterCnt := 0
 	for hostID, hp := range hostRoles {
-		raw := strings.TrimSpace(hp["roles"])
-		if raw == "" {
-			raw = "coordinator"
-		}
 		var roles []string
-		for _, r := range strings.Split(raw, ",") {
+		for _, r := range strings.Split(strings.TrimSpace(hp["roles"]), ",") {
 			r = strings.TrimSpace(r)
 			if r == "" {
 				continue
@@ -50,17 +47,15 @@ func validateCWHRoles(hostRoles map[string]map[string]string) (string, error) {
 			roles = append(roles, r)
 		}
 		if len(roles) == 0 {
-			roles = []string{"coordinator"}
+			roles = cwhDataRoles // 未分配主机自动归冷热温全数据层
 		}
 		isMaster := stackkit.Contains(roles, "master")
 		hasCoord := stackkit.Contains(roles, "coordinator")
 		hasData := stackkit.Contains(roles, "data_hot") || stackkit.Contains(roles, "data_warm") || stackkit.Contains(roles, "data_cold")
-		switch {
-		case isMaster && (hasCoord || hasData || len(roles) > 1):
-			return "", fmt.Errorf("主机 %s: master 不能与数据层/协调角色共存（master 与数据层互斥）", hostID)
-		case hasCoord && hasData:
-			return "", fmt.Errorf("主机 %s: 纯协调（coordinator）不能同时承担数据层角色", hostID)
-		case isMaster:
+		if hasData && (isMaster || hasCoord) {
+			return "", fmt.Errorf("主机 %s: 数据层节点不能与 master/纯协调混部（数据层与两者互斥）", hostID)
+		}
+		if isMaster {
 			masterCnt++
 		}
 	}

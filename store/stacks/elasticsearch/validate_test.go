@@ -6,8 +6,8 @@ import (
 	"testing"
 )
 
-// validate_test.go：冷热温角色组合校验用例（原 api/stack/stack_cwh_validate_test.go 整体迁入，
-// 用例与断言逐条保留）。
+// validate_test.go：冷热温角色组合校验用例（一机多容器口径：master 与协调可同机叠加，
+// 数据层与两者互斥，空 roles 兜底冷热温全数据层）。
 func TestValidateCWHRoles(t *testing.T) {
 	auth := func(hosts map[string]map[string]string) (string, error) { return validateCWHRoles(hosts) }
 	wr := func(roles ...string) map[string]string {
@@ -31,19 +31,27 @@ func TestValidateCWHRoles(t *testing.T) {
 			hosts: hosts(map[int64]string{1: "master", 2: "master", 3: "master", 4: "coordinator", 5: "coordinator", 6: "data_hot", 7: "data_warm", 8: "data_cold"}),
 		},
 		{
-			name:    "master 与数据层互斥（单机混合）",
+			name:  "master 与协调同机叠加合法",
+			hosts: hosts(map[int64]string{1: "master,coordinator", 2: "master,coordinator", 3: "master,coordinator", 4: "data_hot"}),
+		},
+		{
+			name:  "空 roles 兜底冷热温数据层",
+			hosts: hosts(map[int64]string{1: "master", 2: "", 3: "", 4: ""}),
+		},
+		{
+			name:    "数据层与 master 混部拒绝",
 			hosts:   hosts(map[int64]string{1: "master,data_hot", 2: "coordinator"}),
-			wantErr: "master 不能与",
+			wantErr: "数据层节点不能与",
+		},
+		{
+			name:    "数据层与协调混部拒绝",
+			hosts:   hosts(map[int64]string{1: "master", 2: "coordinator,data_warm"}),
+			wantErr: "数据层节点不能与",
 		},
 		{
 			name:    "缺 master 候选",
 			hosts:   hosts(map[int64]string{1: "coordinator", 2: "coordinator", 3: "data_hot"}),
 			wantErr: "至少需要 1 台 master",
-		},
-		{
-			name:    "协调与数据层共存拒绝",
-			hosts:   hosts(map[int64]string{1: "master", 2: "coordinator,data_hot"}),
-			wantErr: "纯协调",
 		},
 		{
 			name:    "角色重复拒绝",
@@ -54,11 +62,6 @@ func TestValidateCWHRoles(t *testing.T) {
 			name:    "未知角色拒绝",
 			hosts:   hosts(map[int64]string{1: "master", 2: "data_hot", 3: "funny_role"}),
 			wantErr: "未知角色",
-		},
-		{
-			name:    "合成单主机 master 混数据",
-			hosts:   hosts(map[int64]string{1: "master,data_hot"}),
-			wantErr: "master 不能与",
 		},
 		{
 			name:  "master 4 台偶数给出提示",

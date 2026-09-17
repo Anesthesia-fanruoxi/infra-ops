@@ -57,6 +57,9 @@ func (d *Driver) Blueprint() model.StackBlueprint {
 			{Name: "cluster_name", Label: "集群名", Default: "rmq-cluster", Required: true},
 			{Name: "broker_name", Label: "Broker 组名（主备同组同名）", Default: "broker-a", Required: true},
 			{Name: "broker_port", Label: "Broker 端口", Default: "10911", Required: true},
+			// 自建镜像仓库（选填）：前端渲染「自建仓库」下拉，与部署中心 hub 镜像源同源；
+			// 选中后平台统一预热并改写全部镜像参数（引擎 privatizeImages 消费本键）
+			{Name: "image_registry", Label: "镜像仓库（自建，选填）", Type: "registry", Default: ""},
 		},
 		HostVars: []model.StackVar{
 			{Name: "ns_port", Label: "NameServer 端口", Default: "9876", Required: true},

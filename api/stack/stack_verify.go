@@ -3,7 +3,6 @@ package stack
 
 import (
 	"fmt"
-	"net/http"
 	"strconv"
 	"strings"
 	"sync"
@@ -128,37 +127,7 @@ func (h *stackHandler) verifyInstanceHost(inst *model.StackInstance, host model.
 	return row
 }
 
-// CaCert GET /api/stacks/instances/:id/ca
-// 下载 Elasticsearch 冷热温自签 SSL 的 CA 公钥（PEM）。任一在役节点均可（全员证书一致）。
-func (h *stackHandler) CaCert(c *gin.Context) {
-	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
-	inst, err := h.repo.GetInstanceFull(id)
-	if err != nil || inst == nil {
-		resp.Fail(c, resp.CodeNotFound, "集群实例不存在")
-		return
-	}
-	if inst.StackKey != "elasticsearch" || inst.Mode != "cold_warm_hot" {
-		resp.Fail(c, resp.CodeBadRequest, "仅冷热温模式支持 SSL CA 下载")
-		return
-	}
-	if !strings.EqualFold(strings.TrimSpace(parseJSONMap(inst.ParamsJSON)["ssl_enabled"]), "true") {
-		resp.Fail(c, resp.CodeBadRequest, "当前未启用 SSL，无 CA 证书")
-		return
-	}
-	hosts := activeInstanceHosts(inst)
-	if len(hosts) == 0 {
-		resp.Fail(c, resp.CodeBadRequest, "集群没有在役成员")
-		return
-	}
-	hp := parseJSONMap(hosts[0].ParamsJSON)
-	home := strings.TrimSpace(hp["home_dir"])
-	if home == "" {
-		home = "/data/elasticsearch"
-	}
-	raw, _ := deploy.ExecHostWith(h.hostRepo, h.credRepo, h.cryptoS, h.sshC, hosts[0].HostID,
-		"cat '"+home+"/certs/ca.crt' 2>/dev/null || true", nil)
-	c.Data(http.StatusOK, "application/x-pem-file", []byte(raw))
-}
+// CaCert 已随 ES 套件 SSL 功能整体移除（2026-09 重设计：所有模式不再提供 SSL）。
 
 func assembleStackVerify(inst *model.StackInstance, params map[string]string, hosts []stackVerifyHost) stackVerifyResult {
 	okN := 0

@@ -97,8 +97,9 @@ func (d *Driver) Blueprint() model.StackBlueprint {
 			{Name: "jn_rpc_port", Label: "JournalNode RPC 端口", Default: "8485"},
 			{Name: "hive_db_image", Label: "Hive HA · 元数据库镜像", Default: "mysql:8.4"},
 			{Name: "hive_db_password", Label: "Hive HA · 元数据库密码", Default: ""},
-			// 选填：填入内网/私有镜像仓库前缀（如 192.168.7.13:5000）后，下方所有镜像参数会自动改写为 <前缀>/<原镜像>，无需逐个修改
-			{Name: "image_registry", Label: "私有镜像仓库前缀（选填，填后自动应用到下列全部镜像）", Default: ""},
+			// 自建镜像仓库（选填）：前端渲染「自建仓库」下拉，与部署中心 hub 镜像源同源；
+			// 选中后平台统一预热并改写全部镜像参数（引擎 privatizeImages 消费本键）
+			{Name: "image_registry", Label: "镜像仓库（自建，选填）", Type: "registry", Default: ""},
 			{Name: "image", Label: "Hadoop 镜像", Default: "apache/hadoop:3.3.6", Required: true},
 			{Name: "nn_rpc_port", Label: "NameNode RPC 端口", Default: "9000", Required: true},
 			{Name: "replication", Label: "HDFS 副本数", Default: "2", Required: true},

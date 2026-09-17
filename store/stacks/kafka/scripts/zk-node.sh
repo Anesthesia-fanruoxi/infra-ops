@@ -60,6 +60,15 @@ for ip in "${IPS[@]}"; do
 done
 [ -n "${ZK_SERVERS}" ] || { echo "生成 ZK 成员列表失败"; exit 1; }
 
+# ==== KafkaUI 开关归一化 ====
+# 前端为布尔开关（提交 true/false），历史实例里可能存着 yes/no；
+# 统一折算成 yes / 空，使下面的判断只有一种口径（与后端 IsYes 一致）。
+ENABLE_UI="$(echo "${ENABLE_UI}" | xargs | tr '[:upper:]' '[:lower:]')"
+case "${ENABLE_UI}" in
+  yes|true|1|on) ENABLE_UI="yes" ;;
+  *) ENABLE_UI="" ;;
+esac
+
 # ==== KafkaUI bootstrap 列表：所有节点 ip:PORT（首节点可选部署） ====
 BOOTSTRAP_LIST=""
 if [ "${ENABLE_UI}" = "yes" ]; then

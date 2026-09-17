@@ -1,25 +1,30 @@
 #!/bin/bash
-# Elasticsearch 冷热温 / 缩容安全下线 —— 在存活 leader 上先排空分片、再让被缩节点安全退场，
-# 集群回 green 后由主流程对该主机 docker compose down（本脚本不含停容器动作）。
+# Elasticsearch 冷热温 / 缩容安全下线 —— 在存活 leader 上先排空分片、再让被缩容器安全退场，
+# 集群回 green 后由主流程对相应容器 docker compose down（本脚本不含停容器动作）。
+# 一机多容器：待下线节点名为容器粒度（n<seq>-<角色>）；入口端口按本机实际监听探测
+#（scale_in 脚本仅渲染蓝图声明变量与运行期 drainParams，不注入 __es_*，故用探测而非变量）。
 # 由平台在 scale_in 时于某个存活 master/协作节点注入 {__remove_nodes}/{__remove_masters} 后渲染执行。
 set -e
 
 CLUSTER_NAME="{{cluster_name}}"
-PORT="{{port}}"
-SSL="{{ssl_enabled}}"
 SELF_IP="{{self_ip}}"
 REMOVE_NODES="{{remove_nodes}}"
 REMOVE_MASTERS="{{remove_masters}}"
 
 [ -n "${REMOVE_NODES}" ] || { echo "未指定待下线节点"; exit 1; }
-[ -n "${PORT}" ] || PORT=9200
 [ -n "${SELF_IP}" ] || { echo "缺少本机 IP，无法执行下线"; exit 1; }
 
-SCHEME="http"
-[ "${SSL}" = "true" ] && SCHEME="https"
+# 本机入口端口探测：协调 9210 > master 9200 > 数据层 9220/9230/9240（与固定偏移同表）
+entry_port() {
+  local P
+  for P in 9210 9200 9220 9230 9240; do
+    if curl -sf "http://127.0.0.1:${P}/" >/dev/null 2>&1; then echo "${P}"; return; fi
+  done
+  echo 9200
+}
+
 CURL=(curl -sf)
-[ "${SSL}" = "true" ] && CURL=(curl -sfk)
-BASE="${SCHEME}://${SELF_IP}:${PORT}"
+BASE="http://${SELF_IP}:$(entry_port)"
 NODES="$(echo "${REMOVE_NODES}" | tr ',' ' ')"
 
 echo "目标集群: ${BASE}  待下线节点: ${NODES}"

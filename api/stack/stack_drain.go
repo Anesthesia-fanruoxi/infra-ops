@@ -79,6 +79,14 @@ func (h *stackHandler) runScaleInDrain(runID int64, run *model.StackRun, removed
 		h.appendLog(runID, "node", leader.HostID, leader.HostIP, "缩容下线脚本渲染失败: "+rerr.Error())
 		return false
 	}
+	// 运行期占位符补齐：self_ip 与套件给出的 remove_nodes 等不在蓝图变量声明里，
+	// RenderScript 不会替换它们（历史缺陷：冷热温缩容脚本里的 {{remove_nodes}} 一直是字面量，
+	// 导致排空对象为空名、等待回绿超时后缩容被中止）。套件只需在 scale_in 脚本里写占位符即可。
+	runtimeVars := map[string]string{"self_ip": leader.HostIP}
+	for k, v := range drainParams {
+		runtimeVars[k] = v
+	}
+	rendered = applyRuntimeVars(rendered, runtimeVars)
 	h.appendLog(runID, "node", leader.HostID, leader.HostIP,
 		fmt.Sprintf("软下线开始：在 %s 排空节点 %s", leader.HostIP, params["remove_nodes"]))
 	target := *leader

@@ -3,6 +3,7 @@ package stack
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"infra-ops/api/deploy"
@@ -85,6 +86,23 @@ func (h *stackHandler) createAndRun(req stackRunReq, remoteIP string) (int64, er
 		}
 	}
 
+	// hub 镜像主机（与部署模板引擎同一台账与校验口径）：建单早期解析，失败快速返回；
+	// __hub_* 标记无条件写入参数（直连时置 0），防止实例基础参数把上一次的 hub 配置带回来。
+	hubAddr := ""
+	if req.HubHostID > 0 {
+		if !hubInstallOps[op] {
+			return 0, fmt.Errorf("当前操作不支持 hub 镜像源")
+		}
+		hr, herr := deploy.ResolveHubRegistry(h.hubDeps(), req.HubHostID)
+		if herr != nil {
+			return 0, herr
+		}
+		hubAddr = hr.Remote()
+		params["image_registry"] = hubAddr
+	}
+	params["__hub_host_id"] = strconv.FormatInt(req.HubHostID, 10)
+	params["__hub_auto_insecure"] = map[bool]string{true: "1", false: "0"}[req.HubAutoInsecure]
+
 	if op == "create" {
 		if err := validateStackTopology(d, mode, len(ids), req.MasterHostID, ids, params); err != nil {
 			return 0, err
@@ -138,6 +156,15 @@ func (h *stackHandler) createAndRun(req stackRunReq, remoteIP string) (int64, er
 	hosts, err := h.buildHostSetForOp(op, d, mode, inst, req, ids, params)
 	if err != nil {
 		return 0, err
+	}
+	// hub 模式：镜像仓库前缀写入每台主机参数（渲染期 privatizeImages 消费），
+	// 并收集全部主机的原始镜像引用作为预热清单落进运行参数（审计可溯）
+	hubImages := []string{}
+	if hubAddr != "" {
+		hubImages = injectHubParams(hosts, hubAddr)
+		if len(hubImages) > 0 {
+			params["__hub_images"] = strings.Join(hubImages, ",")
+		}
 	}
 
 	// 部署前物化角色计划（docs/角色物化设计.md §3.1 时机矩阵，全部套件适用）。
