@@ -148,6 +148,9 @@ window.ESPage = {
           </div>
           <div class="mono reg-whd-url">{{current.url}}</div>
         </div>
+        <nav class="reg-whd-tabs">
+          <button v-for="tb in tabs" :key="tb.name" type="button" class="rwt" :class="{active: activeTab===tb.name}" @click="activeTab=tb.name">{{tb.label}}</button>
+        </nav>
         <div class="header-extra">
           <el-button text type="primary" :loading="loadingOverview" @click="reloadAll"><el-icon style="margin-right:4px"><Refresh /></el-icon>刷新</el-button>
         </div>
@@ -155,47 +158,51 @@ window.ESPage = {
 
       <el-tabs v-model="activeTab" class="reg-es-tabs">
         <!-- 概览 -->
-        <el-tab-pane label="集群概览" name="overview">
-          <div v-loading="loadingOverview">
-            <template v-if="overview">
-              <div class="reg-statbar es-statbar">
-                <div class="reg-stat"><span class="reg-stat-num mono" :style="'color:'+healthColor(overview.status)">{{overview.nodes}}</span><span class="reg-stat-label">节点 / 数据{{overview.data_nodes}}</span></div>
-                <div class="reg-stat"><span class="reg-stat-num mono">{{overview.active_shards}}</span><span class="reg-stat-label">活跃分片（主{{overview.active_primary_shards}}）</span></div>
-                <div class="reg-stat"><span class="reg-stat-num mono" :class="{muted:overview.unassigned_shards===0}">{{overview.unassigned_shards}}</span><span class="reg-stat-label">未分配分片</span></div>
-                <div class="reg-stat"><span class="reg-stat-num mono">{{overview.initializing_shards}} / {{overview.relocating_shards}}</span><span class="reg-stat-label">恢复中 / 重定位</span></div>
-              </div>
-              <div class="es-overview-cards">
-                <div class="es-ov-card"><span class="es-ov-label">集群状态</span><span class="es-ov-value"><span class="health-dot" :style="{background:healthColor(overview.status)}"></span><b style="margin-left:6px">{{statusLabel(overview.status)}}</b></span></div>
-                <div class="es-ov-card"><span class="es-ov-label">集群名称</span><span class="es-ov-value mono">{{overview.cluster_name}}</span></div>
-                <div class="es-ov-card"><span class="es-ov-label">版本</span><span class="es-ov-value mono">{{overview.version}}</span></div>
-                <div class="es-ov-card"><span class="es-ov-label">节点构成</span><span class="es-ov-value"><b>{{overview.nodes}}</b> 节点 / <b>{{overview.data_nodes}}</b> 数据</span></div>
-              </div>
-            </template>
+        <el-tab-pane label="集群概览" name="overview" class="es-pane-overview">
+          <div class="es-overview-wrap">
+            <div class="es-overview-top" v-loading="loadingOverview">
+              <template v-if="overview">
+                <div class="reg-statbar es-statbar">
+                  <div class="reg-stat"><span class="reg-stat-num mono" :style="'color:'+healthColor(overview.status)">{{overview.nodes}}</span><span class="reg-stat-label">节点 / 数据{{overview.data_nodes}}</span></div>
+                  <div class="reg-stat"><span class="reg-stat-num mono">{{overview.active_shards}}</span><span class="reg-stat-label">活跃分片（主{{overview.active_primary_shards}}）</span></div>
+                  <div class="reg-stat"><span class="reg-stat-num mono" :class="{muted:overview.unassigned_shards===0}">{{overview.unassigned_shards}}</span><span class="reg-stat-label">未分配分片</span></div>
+                  <div class="reg-stat"><span class="reg-stat-num mono">{{overview.initializing_shards}} / {{overview.relocating_shards}}</span><span class="reg-stat-label">恢复中 / 重定位</span></div>
+                </div>
+                <div class="es-overview-cards">
+                  <div class="es-ov-card"><span class="es-ov-label">集群状态</span><span class="es-ov-value"><span class="health-dot" :style="{background:healthColor(overview.status)}"></span><b style="margin-left:6px">{{statusLabel(overview.status)}}</b></span></div>
+                  <div class="es-ov-card"><span class="es-ov-label">集群名称</span><span class="es-ov-value mono">{{overview.cluster_name}}</span></div>
+                  <div class="es-ov-card"><span class="es-ov-label">版本</span><span class="es-ov-value mono">{{overview.version}}</span></div>
+                  <div class="es-ov-card"><span class="es-ov-label">节点构成</span><span class="es-ov-value"><b>{{overview.nodes}}</b> 节点 / <b>{{overview.data_nodes}}</b> 数据</span></div>
+                </div>
+              </template>
+            </div>
+            <div class="es-sub-head">节点（{{nodes.length}}）</div>
+            <div class="es-nodes-table-wrap">
+              <el-table class="hosts-table" :data="nodes" height="100%" style="width:100%" size="small" v-loading="loadingNodes">
+                <el-table-column label="节点" min-width="150">
+                  <template #default="{row}"><span style="font-weight:600">{{row.name}}</span></template>
+                </el-table-column>
+                <el-table-column label="版本" width="90">
+                  <template #default="{row}"><span class="mono">{{row.version}}</span></template>
+                </el-table-column>
+                <el-table-column label="角色" min-width="190">
+                  <template #default="{row}"><span class="es-role-list"><span v-for="r in row.roles" :key="r" class="action-badge info">{{roleShort(r)}}</span><span v-if="!row.roles||!row.roles.length" style="color:#9CA3AF">-</span></span></template>
+                </el-table-column>
+                <el-table-column label="CPU" width="130">
+                  <template #default="{row}"><div class="metric" v-if="row.cpu_percent>=0"><div class="metric-bar"><div class="fill" :style="{width:row.cpu_percent+'%',background:usageColor(row.cpu_percent)}"></div></div><span class="metric-value mono">{{row.cpu_percent}}%</span></div><span v-else style="color:#9CA3AF">-</span></template>
+                </el-table-column>
+                <el-table-column label="堆内存" width="130">
+                  <template #default="{row}"><div class="metric" v-if="row.heap_percent>=0"><div class="metric-bar"><div class="fill" :style="{width:row.heap_percent+'%',background:usageColor(row.heap_percent)}"></div></div><span class="metric-value mono">{{row.heap_percent}}%</span></div><span v-else style="color:#9CA3AF">-</span></template>
+                </el-table-column>
+                <el-table-column label="磁盘" width="140">
+                  <template #default="{row}"><span class="mono" style="font-size:12px">{{fmtBytes(row.disk_available)}} / {{fmtBytes(row.disk_total)}}</span></template>
+                </el-table-column>
+                <el-table-column label="文档数" width="100">
+                  <template #default="{row}"><span class="mono">{{row.docs_count>=0?row.docs_count:'-'}}</span></template>
+                </el-table-column>
+              </el-table>
+            </div>
           </div>
-          <div class="es-sub-head">节点（{{nodes.length}}）</div>
-          <el-table class="hosts-table" :data="nodes" style="width:100%" size="small" v-loading="loadingNodes">
-            <el-table-column label="节点" min-width="150">
-              <template #default="{row}"><span style="font-weight:600">{{row.name}}</span></template>
-            </el-table-column>
-            <el-table-column label="版本" width="90">
-              <template #default="{row}"><span class="mono">{{row.version}}</span></template>
-            </el-table-column>
-            <el-table-column label="角色" min-width="190">
-              <template #default="{row}"><span class="es-role-list"><span v-for="r in row.roles" :key="r" class="action-badge info">{{roleShort(r)}}</span><span v-if="!row.roles||!row.roles.length" style="color:#9CA3AF">-</span></span></template>
-            </el-table-column>
-            <el-table-column label="CPU" width="130">
-              <template #default="{row}"><div class="metric" v-if="row.cpu_percent>=0"><div class="metric-bar"><div class="fill" :style="{width:row.cpu_percent+'%',background:usageColor(row.cpu_percent)}"></div></div><span class="metric-value mono">{{row.cpu_percent}}%</span></div><span v-else style="color:#9CA3AF">-</span></template>
-            </el-table-column>
-            <el-table-column label="堆内存" width="130">
-              <template #default="{row}"><div class="metric" v-if="row.heap_percent>=0"><div class="metric-bar"><div class="fill" :style="{width:row.heap_percent+'%',background:usageColor(row.heap_percent)}"></div></div><span class="metric-value mono">{{row.heap_percent}}%</span></div><span v-else style="color:#9CA3AF">-</span></template>
-            </el-table-column>
-            <el-table-column label="磁盘" width="140">
-              <template #default="{row}"><span class="mono" style="font-size:12px">{{fmtBytes(row.disk_available)}} / {{fmtBytes(row.disk_total)}}</span></template>
-            </el-table-column>
-            <el-table-column label="文档数" width="100">
-              <template #default="{row}"><span class="mono">{{row.docs_count>=0?row.docs_count:'-'}}</span></template>
-            </el-table-column>
-          </el-table>
         </el-tab-pane>
 
         <el-tab-pane label="索引" name="indices" lazy>
@@ -229,7 +236,16 @@ window.ESPage = {
     }
   },
   computed: {
-    onlineCount() { return this.conns.filter(c => c._st === 1).length }
+    onlineCount() { return this.conns.filter(c => c._st === 1).length },
+    tabs() {
+      return [
+        { name: 'overview', label: '集群概览' },
+        { name: 'indices', label: '索引' },
+        { name: 'views', label: '数据视图' },
+        { name: 'lifecycle', label: '生命周期' },
+        { name: 'templates', label: '索引模板' }
+      ]
+    }
   },
   watch: { viewMode(v) { localStorage.setItem('es-view-mode', v) } },
   mounted() { this.loadConns() },

@@ -15,6 +15,8 @@ const (
 	esCacheMaxBytes = 64 << 20 // 64MB（按序列化长度估算）
 	esCacheTTL      = 30 * time.Minute
 	esPageMaxSize   = 1000
+	// esSearchDefaultPageSize search 响应携带的第一页条数；增量加载走 /search/page，每次 100。
+	esSearchDefaultPageSize = 100
 )
 
 // cachedHit 结果集中的一条命中（已整形，供分页直接切片返回）。
@@ -134,7 +136,7 @@ func cacheGet(connID, viewID int64) *resultSet {
 // result_id 不匹配 → 4011(409)；越界 → 4005(400)。
 func cachePage(connID, viewID int64, resultID string, from, size int) ([]cachedHit, int64, *dslErr) {
 	if size <= 0 || size > esPageMaxSize {
-		size = 20
+		size = esSearchDefaultPageSize
 	}
 	rs := cacheGet(connID, viewID)
 	if rs == nil || rs.ResultID != resultID {

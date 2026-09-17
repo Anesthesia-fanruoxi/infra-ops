@@ -40,10 +40,11 @@ func (h *Handler) ListIndexTemplates(c *gin.Context) {
 	}
 	list := make([]gin.H, 0, len(m.IndexTemplates))
 	for _, t := range m.IndexTemplates {
-		if isManaged(t.Name, t.IndexTemplate) {
+		sys := isSystemResource("index", t.Name, t.IndexTemplate)
+		if sys && !wantSystem(c) {
 			continue
 		}
-		list = append(list, gin.H{"name": t.Name, "index_template": t.IndexTemplate})
+		list = append(list, gin.H{"name": t.Name, "managed": sys, "index_template": t.IndexTemplate})
 	}
 	resp.OK(c, gin.H{"index_templates": list})
 }
@@ -159,10 +160,11 @@ func (h *Handler) ListComponentTemplates(c *gin.Context) {
 	}
 	list := make([]gin.H, 0, len(m.ComponentTemplates))
 	for _, t := range m.ComponentTemplates {
-		if isManaged(t.Name, t.ComponentTemplate) {
+		sys := isSystemResource("comp", t.Name, t.ComponentTemplate)
+		if sys && !wantSystem(c) {
 			continue
 		}
-		list = append(list, gin.H{"name": t.Name, "component_template": t.ComponentTemplate})
+		list = append(list, gin.H{"name": t.Name, "managed": sys, "component_template": t.ComponentTemplate})
 	}
 	resp.OK(c, gin.H{"component_templates": list})
 }

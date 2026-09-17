@@ -5,9 +5,9 @@ window.EsIndexTab = {
   template: `
 <div>
   <div class="reg-statbar es-statbar">
-    <div class="reg-stat"><span class="reg-stat-num mono">{{indices.length}}</span><span class="reg-stat-label">索引总数</span></div>
+    <div class="reg-stat"><span class="reg-stat-num mono">{{indices.length}}</span><span class="reg-stat-label">展示索引<span v-if="indices.length>=100" style="color:#9CA3AF;font-weight:400">（已达前100上限）</span></span></div>
     <div class="reg-stat"><span class="reg-stat-num mono" :class="{muted:idxKw&&!filteredIndices.length}">{{filteredIndices.length}}</span><span class="reg-stat-label">当前过滤</span></div>
-    <div class="reg-stat"><span class="reg-stat-num mono">{{idxSummary.docs>=0?idxSummary.docs:'-'}}</span><span class="reg-stat-label">文档总数</span></div>
+    <div class="reg-stat"><span class="reg-stat-num mono">{{idxSummary.docs>=0?idxSummary.docs:'-'}}</span><span class="reg-stat-label">文档数（展示）</span></div>
   </div>
   <div class="es-toolbar">
     <el-input v-model="idxKw" placeholder="过滤索引..." clearable prefix-icon="Search" style="width:220px" @input="applyIdxFilter" />
@@ -41,7 +41,7 @@ window.EsIndexTab = {
     <template #footer><el-button @click="createDialog=false">取消</el-button><el-button type="primary" :loading="creating" @click="doCreateIndex">创建</el-button></template>
   </el-dialog>
 
-  <el-drawer v-model="mappingDrawer" :title="'原始 mapping · ' + mappingIndex" size="55%">
+  <el-drawer v-model="mappingDrawer" :title="'原始 mapping · ' + mappingIndex" size="55%" class="es-raw-drawer">
     <div class="es-mapping-hint">实时拉取的真实映射（排障用），与视图的合并字段表相互独立</div>
     <pre class="es-source" v-loading="loadingMapping">{{mappingText}}</pre>
   </el-drawer>

@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>索引模板 · 可视化创建 渲染台</title>
+<link rel="stylesheet" href="../template/static/vendor/element-plus.css">
+<link rel="stylesheet" href="../template/static/style.css">
+<style>
+  body { margin: 0; background: #F5F7FA; }
+  #out { position: fixed; left: 8px; bottom: 8px; z-index: 99999; margin: 0; padding: 8px 10px;
+         background: #fff; border: 1px solid #E5E7EB; border-radius: 6px; font: 12px/1.5 monospace;
+         white-space: pre-wrap; max-width: 640px; max-height: 44vh; overflow: auto; color: #1F2937; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<pre id="out">running…</pre>
+<script src="../template/static/vendor/vue.global.prod.js"></script>
+<script src="../template/static/vendor/element-plus.min.js"></script>
+<script src="../template/static/vendor/element-plus-icons-vue.min.js"></script>
+<script src="../template/static/vendor/element-plus-zh-cn.min.js"></script>
+<script src="../template/static/pages/es_template_build.js"></script>
+<script src="../template/static/pages/es_template_quick.js"></script>
+<script>
+// 单组件渲染台：只挂「可视化创建 · 索引模板」对话框，用桩数据驱动，不连后端。
+// 目的：拿真实 CSS + 真实组件出渲染证据（版式别估算），并让布局断言有可注入的缺陷开关。
+// 参数：?filled=false 不预填表单（看首开空态）
+//       ?nobase=true  关掉公共层（预览应只剩 1 条请求）
+//       ?stack=true   注入布局缺陷（.es-qc-body 改纵向堆叠）——「左右并排」必须翻成 NO
+//       ?fixedprev=true 回退到修复前的整套写法（body 自滚 + 预览框固定 380px）——「右列铺满」必须翻成 NO
+//       ?clean=true   藏掉左下角的结论面板，方便截图留证
+var QS = new URLSearchParams(location.search)
+if (QS.get('clean') === 'true') {
+  var stc = document.createElement('style')
+  stc.textContent = '#out { display: none !important; }'
+  document.head.appendChild(stc)
+}
+
+var POLICY = { policy: { phases: {
+  hot: { min_age: '0ms', actions: { set_priority: { priority: 50 } } },
+  warm: { min_age: '7d', actions: { allocate: { include: { _tier_preference: 'data_warm' } } } },
+  cold: { min_age: '30d', actions: { allocate: { include: { _tier_preference: 'data_cold' } } } },
+  delete: { min_age: '180d', actions: { delete: { delete_searchable_snapshot: true } } } } } }
+
+var INDICES = ['xafq_credit_api_access_log-2026.09.17', 'xafq_credit_api_access_log-2026.09.16', 'xafq_credit_api_access_log-2026.09.15']
+
+// 只桩一个业务策略：与线上集群一致，同时验证「只有一个策略时自动选中」这条默认值。
+function route(method, url) {
+  if (method === 'GET' && /\/ilm\/policies$/.test(url))
+    return { code: 0, data: { list: [{ name: 'hot-warm-cold-180days', managed: false, policy: POLICY }] } }
+  if (method === 'GET' && /\/nodes$/.test(url))
+    return { code: 0, data: { list: [
+      { name: 'es-master-1', roles: ['master', 'data_hot', 'data_content'] },
+      { name: 'es-warm-1', roles: ['data_warm'] },
+      { name: 'es-cold-1', roles: ['data_cold'] }] } }
+  if (method === 'GET' && /\/component-templates$/.test(url))
+    return { code: 0, data: { component_templates: [
+      { name: 'xafq-logs-base', component_template: { template: { settings: { index: { refresh_interval: '10s' } } } } }] } }
+  if (method === 'GET' && /\/index-templates$/.test(url))
+    return { code: 0, data: { index_templates: [
+      { name: 'es-default-index', index_template: { index_patterns: ['xafq_*'], priority: 20, composed_of: [] } },
+      { name: 'sendtimestamp-index', index_template: { index_patterns: ['xafq_sms_sending_record*'], priority: 21, composed_of: ['xafq-logs-base'] } },
+      { name: 'big-es-default-index', index_template: { index_patterns: ['xafq_credit_api_access_log*'], priority: 21, composed_of: ['xafq-logs-base'] } }] } }
+  if (method === 'POST' && /index-pattern\/probe$/.test(url))
+    return { code: 0, data: { indices: INDICES, aliases: [], data_streams: [], docs_count: 1284567,
+      time_fields: ['timestamp'], truncated: false, field_count: 12,
+      fields: [{ path: 'timestamp', types: ['date'], format: 'epoch_millis' },
+        { path: '@timestamp', types: ['date'], format: 'strict_date_optional_time' },
+        { path: 'cost', types: ['long'] }] } }
+  if (method === 'POST' && /_simulate$/.test(url))
+    return { code: 0, data: { template: { settings: { index: { number_of_shards: '3', lifecycle: { name: 'hot-warm-cold-180days' } } },
+      mappings: { properties: { timestamp: { type: 'date', format: 'epoch_millis' } } }, aliases: {} } } }
+  if (method === 'PUT') return { code: 0 }
+  return { code: 1, msg: '未桩住的请求 ' + method + ' ' + url }
+}
+
+window.api = {
+  get: function (url) { return Promise.resolve(route('GET', url)) },
+  post: function (url) { return Promise.resolve(route('POST', url)) },
+  put: function (url) { return Promise.resolve(route('PUT', url)) },
+  delete: function (url) { return Promise.resolve(route('DELETE', url)) }
+}
+
+if (QS.get('stack') === 'true') {
+  var st = document.createElement('style')
+  st.textContent = '.es-qc-body { display: block !important; } .es-qc-divider { display: none !important; }'
+  document.head.appendChild(st)
+}
+// ?fixedprev=true 回退到修复前的整套写法（body 自滚 + 预览框固定 380px）——「右列铺满」必须翻成 NO。
+// 只把预览框塞回 380px 是不够的：body 不再自滚后右列只有可见那么高，溢出被右列自己的滚动条吃掉，
+// 量出来只是「比之前矮 64px」，复现不出原来那690px的死白。两处必须一起回退。
+if (QS.get('fixedprev') === 'true') {
+  var st2 = document.createElement('style')
+  st2.textContent = '.es-tqc-dialog > .el-dialog__body { display: block !important; overflow-y: auto !important; }'
+    + '.es-tqc-dialog .es-qc-body { flex: none !important; }'
+    + '.es-tqc-dialog .es-qc-left { overflow-y: visible !important; }'
+    + '.es-tqc-dialog .es-qc-right { overflow-y: visible !important; }'
+    + '.es-tqc-dialog .es-qc-right > .es-qc-preview { flex: none !important; height: 380px !important; max-height: 420px !important; }'
+  document.head.appendChild(st2)
+}
+
+var app = Vue.createApp(window.EsTemplateQuickDialog, { conn: { id: 1, name: '测试集群' } })
+app.use(ElementPlus)
+app.use(ElementPlusIconsVue)
+var vm = app.mount('#app')
+vm.open()
+if (QS.get('nobase') === 'true') vm.f.useBase = false
+if (QS.get('filled') !== 'false') {
+  vm.f.name = 'xafq_credit_api_access_log_tpl'
+  vm.f.patterns = ['xafq_credit_api_access_log*']
+  vm.f.timeField = 'timestamp'
+  vm.doProbe()
+}
+
+function rect(sel) {
+  var el = document.querySelector(sel)
+  if (!el) return null
+  var r = el.getBoundingClientRect()
+  return { w: Math.round(r.width), h: Math.round(r.height), top: Math.round(r.top), bottom: Math.round(r.bottom), left: Math.round(r.left) }
+}
+function txt(sel) { var e = document.querySelector(sel); return e ? e.textContent.trim() : '' }
+
+setTimeout(function () {
+  var L = []
+  var body = rect('.es-qc-body')
+  var left = rect('.es-qc-left')
+  var right = rect('.es-qc-right')
+  var prev = document.querySelector('.es-qc-preview')
+  var dlg = rect('.el-dialog')
+  var footer = rect('.el-dialog__footer')
+  var dlgBody = document.querySelector('.es-tqc-dialog .el-dialog__body')
+  var chain = [].map.call(document.querySelectorAll('.es-tc-node'), function (e) { return e.textContent.trim() })
+  var hints = [].map.call(document.querySelectorAll('.es-qc-left .es-qc-hint'), function (e) { return e.textContent.trim() })
+
+  L.push('== 渲染 ==')
+  L.push('对话框挂载 = ' + !!body)
+  L.push('左列表单项 = ' + document.querySelectorAll('.es-qc-left .el-form-item').length + '（期望 8）')
+  L.push('pattern 标签 = ' + [].map.call(document.querySelectorAll('.es-tc-chips .el-tag'), function (e) { return e.textContent.trim() }).join(' | '))
+  L.push('阶段链 = ' + chain.join(' → ') + '（期望 hot → warm 7d → cold 30d → delete 180d）')
+  L.push('策略自动选中 = ' + JSON.stringify(vm.f.policyName) + '（桩里只有一个业务策略）')
+  L.push('预览标题 = ' + txt('.es-area-label'))
+  L.push('预览里 PUT 条数 = ' + ((prev ? prev.textContent : '').match(/PUT /g) || []).length + '（期望 ' + vm.requests.length + '）')
+  L.push('探测摘要已渲染 = ' + (txt('.es-qc-left').indexOf('探测命中') >= 0))
+  L.push('重叠告警已渲染 = ' + (txt('.es-qc-right').indexOf('重叠') >= 0))
+  L.push('')
+  L.push('== 几何 ==')
+  L.push('可见视口 = ' + window.innerWidth + '×' + window.innerHeight)
+  L.push('.es-qc-body = ' + JSON.stringify(body))
+  L.push('.es-qc-left = ' + JSON.stringify(left))
+  L.push('.es-qc-right = ' + JSON.stringify(right))
+  L.push('左右并排 = ' + (!!left && !!right && right.left > left.left + 100 ? 'YES' : 'NO'))
+  L.push('左右同高 = ' + (!!left && !!right && Math.abs(left.h - right.h) <= 2 ? 'YES' : 'NO ' + (left && right ? left.h + ' vs ' + right.h : '')))
+  L.push('预览区滚动 = ' + (prev ? prev.scrollHeight > prev.clientHeight + 1 : '—')
+    + '（scrollH ' + (prev ? prev.scrollHeight : 0) + ' / clientH ' + (prev ? prev.clientHeight : 0) + '）')
+  L.push('.el-dialog = ' + JSON.stringify(dlg))
+  L.push('对话框未超出视口 = ' + (!!dlg && dlg.bottom <= window.innerHeight ? 'YES' : 'NO') + '（bottom ' + (dlg ? dlg.bottom : '—') + ' vs 视口 ' + window.innerHeight + '）')
+  L.push('底部按钮可见 = ' + (!!footer && footer.bottom <= window.innerHeight ? 'YES' : 'NO') + '（footer bottom ' + (footer ? footer.bottom : '—') + '）')
+  L.push('对话框 body 可滚 = ' + (dlgBody ? (dlgBody.scrollHeight > dlgBody.clientHeight + 1) : '—')
+    + '（' + (dlgBody ? dlgBody.scrollHeight + ' / ' + dlgBody.clientHeight : '') + '）')
+  // 「右列铺满」的可注入断言：右列最后一个子项的底边 == 右列的底边 ⇔ 下方没有死白。
+  // 口径用「末项底边」而不是「子项高度求和」——求和会把 margin 算漏，出厂态照样报 24px 假空。
+  // 改前实测右列被撑到 1232px（表单有多长它就有多长）、预览框固定 378px，下方空出690px；
+  // 注入 ?fixedprev=true 后末项底边会顶出右列底边。
+  var rightEl = document.querySelector('.es-qc-right')
+  var kidLast = rightEl && rightEl.children.length ? rightEl.children[rightEl.children.length - 1] : null
+  var gap = (rightEl && kidLast) ? Math.round(rightEl.getBoundingClientRect().bottom - kidLast.getBoundingClientRect().bottom) : NaN
+  var leftEl = document.querySelector('.es-qc-left')
+  L.push('右列末项底边 vs 右列底边 = ' + (kidLast ? Math.round(kidLast.getBoundingClientRect().bottom) : '—')
+    + ' vs ' + (right ? right.bottom : '—') + ' → 右列铺满 = ' + (gap === 0 ? 'YES' : 'NO（差 ' + gap + 'px）'))
+  L.push('左表单列可滚 = ' + (leftEl ? (leftEl.scrollHeight > leftEl.clientHeight + 1 ? 'YES（' + leftEl.scrollHeight + ' / ' + leftEl.clientHeight + '）' : 'NO（' + leftEl.scrollHeight + ' / ' + leftEl.clientHeight + '）') : '—'))
+  // 竖分隔线必须跟着两列一起铺满（改版后 body 有确定高度，靠 .es-qc-body 的 align-items:stretch 撑开）
+  var divR = rect('.es-qc-divider')
+  L.push('.es-qc-divider = ' + JSON.stringify(divR) + ' → 分隔线铺满 = '
+    + (divR && body && Math.abs(divR.h - body.h) <= 2 ? 'YES' : 'NO'))
+  L.push('')
+  L.push('== 组件状态（直接读 computed / 请求体）==')
+  L.push('请求条数 = ' + vm.requests.length + ' → ' + vm.requests.map(function (r) { return r.path }).join(' , '))
+  var cb = vm.requests[0].body.template.settings.index || {}
+  L.push('组件模板体 = ' + JSON.stringify(cb))
+  if (vm.requests.length === 2) {
+    L.push('索引模板 composed_of = ' + JSON.stringify(vm.requests[1].body.composed_of)
+      + ' / 设置项 = ' + JSON.stringify(vm.requests[1].body.template.settings.index))
+  }
+  L.push('phaseChain = ' + JSON.stringify(vm.phaseChain.map(function (p) { return p.label }))
+    + ' 无 delete 提示 = ' + JSON.stringify(vm.policyChainHint || '（无，策略有 delete 阶段）'))
+  L.push('分层候选 = ' + JSON.stringify(vm.tierOptions.map(function (t) { return t.value + (t.disabled ? '(禁用)' : '(' + t.count + '节点)') })))
+  L.push('缺层提示 = ' + (vm.missingTierHint || '（无）'))
+  L.push('时间字段候选 = ' + JSON.stringify(vm.timeCandidates) + ' 选中格式 = ' + vm.f.timeFormat)
+  L.push('重叠清单 = ' + JSON.stringify(vm.overlapList.map(function (o) { return o.name + ':' + (o.wins ? '本模板胜' : '对方胜') })))
+  L.push('公共层被引用 = ' + JSON.stringify(vm.baseRefNames) + '  已存在 = ' + vm.baseExists)
+  L.push('校验错误 = ' + JSON.stringify(window.EsTplBuild.validate(vm.f, vm.existingTemplates)))
+  L.push('')
+  L.push('注入 = ' + (QS.get('stack') === 'true' ? '.es-qc-body 改纵向堆叠（反向验证）'
+    : QS.get('fixedprev') === 'true' ? '预览框塞回固定 380px（反向验证）'
+    : QS.get('nobase') === 'true' ? '关掉公共层' : QS.get('filled') === 'false' ? '不预填（首开空态）' : '无（出厂状态）'))
+  L.push('提示语里残留 markdown 星号 = ' + hints.filter(function (h) { return h.indexOf('**') >= 0 }).length + '（必须为 0）')
+  L.push('关键提示命中 = ' + JSON.stringify(hints.filter(function (h) { return /公共层|translog|副本 0|新建时/.test(h) }).map(function (h) { return h.slice(0, 28) })))
+
+  document.getElementById('out').textContent = L.join('\n')
+  document.title = 'rendered:' + (body ? 'ok' : 'fail') + '|' + (left && right && right.left > left.left + 100 ? 'side' : 'stacked')
+    + '|fit:' + (!!dlg && dlg.bottom <= window.innerHeight ? 'yes' : 'no')
+}, 1600)
+</script>
+</body>
+</html>

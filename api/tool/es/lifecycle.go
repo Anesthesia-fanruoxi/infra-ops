@@ -59,6 +59,45 @@ func isManaged(name string, raw []byte) bool {
 	return false
 }
 
+// esCoreILMPolicies / esCoreIndexTemplates / esCoreComponentTemplates：
+// ES 核心内置、但既不以 . 开头也没有 _meta.managed 标记的资源（Watcher/SLM/ILM 历史等），
+// 列表默认一并视为系统资源隐藏，避免误当业务资源展示。
+var esCoreILMPolicies = map[string]bool{
+	"watch-history-ilm-policy": true,
+	"slm-history-ilm-policy":   true,
+	"ilm-history-ilm-policy":   true,
+}
+
+var esCoreIndexTemplates = map[string]bool{
+	"ilm-history":   true,
+	"watch-history": true,
+	"slm-history":   true,
+}
+
+var esCoreComponentTemplates = map[string]bool{}
+
+// isSystemResource 列表视角的系统资源判断（比 isManaged 更宽）：
+// managed 标记、. 前缀，或命中 ES 核心内置名。kind ∈ ilm/index/comp。
+func isSystemResource(kind, name string, raw []byte) bool {
+	if isManaged(name, raw) {
+		return true
+	}
+	switch kind {
+	case "ilm":
+		return esCoreILMPolicies[name]
+	case "index":
+		return esCoreIndexTemplates[name]
+	case "comp":
+		return esCoreComponentTemplates[name]
+	}
+	return false
+}
+
+// wantSystem 是否命中「显示系统资源」开关（?system=1）。
+func wantSystem(c *gin.Context) bool {
+	return c.Query("system") == "1"
+}
+
 // failWErr 写操作错误映射：4015/400 → 400，4013 → 403，4014 → 409。
 func failWErr(c *gin.Context, derr *dslErr) {
 	switch derr.code {
@@ -93,13 +132,16 @@ func (h *Handler) ListILMPolicies(c *gin.Context) {
 	}
 	var policies map[string]json.RawMessage
 	json.Unmarshal(body, &policies)
-	// 只展示业务策略，剔除 ES 管理系统默认（managed 或 . 开头）策略。
+	// 默认只展示业务策略，剔除系统默认（managed / . 前缀 / ES 核心内置名）；
+	// ?system=1 时全量返回并保留 managed 标记。
+	showSystem := wantSystem(c)
 	list := make([]gin.H, 0, len(policies))
 	for name, raw := range policies {
-		if isManaged(name, raw) {
+		sys := isSystemResource("ilm", name, raw)
+		if sys && !showSystem {
 			continue
 		}
-		list = append(list, gin.H{"name": name, "policy": json.RawMessage(raw)})
+		list = append(list, gin.H{"name": name, "managed": sys, "policy": json.RawMessage(raw)})
 	}
 	resp.OK(c, gin.H{"list": list})
 }

@@ -146,7 +146,7 @@ func (c *escClient) nodes(ctx context.Context) ([]model.ESNode, error) {
 func (c *escClient) indices(ctx context.Context) ([]model.ESIndex, error) {
 	// expand_wildcards 去掉 hidden（仅 open,closed），并在下面剔除 . 开头系统索引，
 	// 使列表只展示业务索引，不展示隐藏与系统索引。
-	const path = "/_cat/indices?format=json&h=index,health,status,pri,rep,docs.count,docs.deleted,store.size&expand_wildcards=open,closed"
+	const path = "/_cat/indices?format=json&h=index,health,status,pri,rep,docs.count,docs.deleted,store.size&expand_wildcards=open,closed&size=100"
 	status, body, err := c.do(ctx, http.MethodGet, path, nil)
 	if err != nil {
 		return nil, err
@@ -158,11 +158,14 @@ func (c *escClient) indices(ctx context.Context) ([]model.ESIndex, error) {
 	if err := json.Unmarshal(body, &list); err != nil {
 		return nil, fmt.Errorf("解析索引列表失败: %w", err)
 	}
-	indices := make([]model.ESIndex, 0, len(list))
+	indices := make([]model.ESIndex, 0, 100)
 	for _, m := range list {
 		name := strOf(m["index"])
 		if strings.HasPrefix(name, ".") {
 			continue
+		}
+		if len(indices) >= 100 {
+			break
 		}
 		indices = append(indices, model.ESIndex{
 			Index:       name,

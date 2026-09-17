@@ -160,3 +160,18 @@ func pathEscape(s string) string {
 	}
 	return safe.String()
 }
+
+// pathEscapePattern 同 pathEscape，额外保留通配符 * / ?，供 _resolve/index 使用。
+func pathEscapePattern(s string) string {
+	safe := strings.Builder{}
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9',
+			r == '_', r == '-', r == '+', r == '.', r == ',', r == '*', r == '?':
+			safe.WriteRune(r)
+		default:
+			safe.WriteString(fmt.Sprintf("%%%02X", int(r)))
+		}
+	}
+	return safe.String()
+}

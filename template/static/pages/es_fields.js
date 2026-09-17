@@ -1,11 +1,12 @@
-// ES 控制台 · 字段侧栏（F3）：Discover 左栏。字段表来自本地快照（视图详情）。
+// ES 控制台 · 字段侧栏（F3）：只做两件事——展示字段数、点击过滤右侧文档显示的字段。
+// 点击字段 = 右侧只显示该字段（时间字段恒显示在文档头），再点一次取消；选中项以底部高亮条标记。
 window.EsFieldsPanel = {
-  props: ['fields', 'syncedAt', 'syncStatus', 'syncError'],
-  emits: ['insert', 'analyze-distinct', 'analyze-dim', 'refresh'],
+  props: ['fields', 'syncedAt', 'syncStatus', 'syncError', 'selected'],
+  emits: ['select', 'refresh'],
   template: `
 <div class="es-fields-panel">
   <div class="es-fields-head">
-    <span class="es-fields-title">字段（{{fields.length}}）</span>
+    <span class="es-fields-title">字段列表（{{fields.length}}）</span>
     <el-button text size="small" @click="$emit('refresh')"><el-icon><Refresh /></el-icon></el-button>
   </div>
   <div class="es-fields-sync">
@@ -15,22 +16,10 @@ window.EsFieldsPanel = {
   </div>
   <el-input v-model="kw" placeholder="过滤字段..." clearable size="small" />
   <div class="es-fields-list">
-    <div v-for="f in filtered" :key="f.path" class="es-field-item">
-      <div class="es-field-main" @click="$emit('insert', f)">
-        <span class="es-field-name mono" :title="f.path">{{f.path}}</span>
-        <span class="es-field-type" :class="typeClass(f)">{{typeLabel(f)}}</span>
-      </div>
-      <div class="es-field-badges">
-        <span class="es-fcap" :class="{on: f.searchable}">可搜索</span>
-        <span class="es-fcap" :class="{on: f.aggregatable}">可聚合</span>
-        <span v-if="f.type_conflict" class="es-fwarn" title="同一字段在索引成员间存在多种类型，查询按最宽公共算子降级">多类型</span>
-        <span v-if="f.partial" class="es-fwarn" title="仅部分匹配成员存在该字段">部分存在</span>
-      </div>
-      <div class="es-field-ops">
-        <el-button v-if="f.searchable" text size="small" @click="$emit('insert', f)">插入查询</el-button>
-        <el-button v-if="f.aggregatable" text size="small" @click="$emit('analyze-distinct', f)">去重计数</el-button>
-        <el-button v-if="f.aggregatable" text size="small" @click="$emit('analyze-dim', f)">作为分析维度</el-button>
-      </div>
+    <div v-for="f in filtered" :key="f.path" class="es-field-item" :class="{'is-sel': f.path===selected}"
+         :title="f.path" @click="$emit('select', f.path)">
+      <span class="es-field-name mono">{{f.path}}</span>
+      <span class="es-field-type" :class="typeClass(f)">{{(f.types||[]).join('/')}}</span>
     </div>
     <div v-if="!filtered.length" class="es-fields-empty">无匹配字段</div>
   </div>
@@ -43,10 +32,6 @@ window.EsFieldsPanel = {
     }
   },
   methods: {
-    typeLabel(f) {
-      if (f.type_conflict) return f.types.join('/')
-      return f.types.join('/')
-    },
     typeClass(f) {
       if (f.type_conflict) return 't-conflict'
       const t = (f.types || [])[0] || ''

@@ -1,4 +1,4 @@
-// ES 控制台 · 数据视图 tab（F2）：视图列表 + 三步向导（名称 / 索引匹配 / 时间字段）+ 刷新/编辑/删除。
+// ES 控制台 · 数据视图 tab（F2）：视图列表 + 抽屉新建（左表单 / 右索引过滤）+ 编辑/删除。
 // 点视图名进入 Discover（es_discover.js，页面内展开，不新增路由）。
 window.EsViewsTab = {
   props: ['conn'],
@@ -42,48 +42,51 @@ window.EsViewsTab = {
       <template #empty><empty-state text="暂无数据视图：先创建一个视图（名称 / 索引匹配 / 时间字段），再进入检索" /></template>
     </el-table>
 
-    <!-- 三步向导 -->
-    <el-dialog v-model="wizard" title="新建数据视图" width="600px" append-to-body :close-on-click-modal="false">
-      <el-steps :active="step" finish-status="success" simple style="margin-bottom:16px">
-        <el-step title="名称" /><el-step title="索引匹配" /><el-step title="时间字段" />
-      </el-steps>
-
-      <div v-if="step===0">
-        <el-input v-model="form.name" maxlength="64" placeholder="视图名称（同一连接内唯一）" @input="checkDup" />
-        <div v-if="dupMsg" class="es-sync-fail" style="margin-top:6px">{{dupMsg}}</div>
-      </div>
-
-      <div v-else-if="step===1">
-        <el-input v-model="form.index_pattern" placeholder="如 logs-* 或 logs-2026.09.10,logs-2026.09.11"
-                  @input="debounceProbe" style="font-family:var(--font-mono)" />
-        <div v-if="probing" style="margin-top:8px;color:var(--text-sub)">探测中…</div>
-        <template v-if="probe">
-          <div class="es-probe">
-            <span>命中：<b>{{probe.indices.length}}</b> 索引 · <b>{{probe.data_streams.length}}</b> 数据流 · <b>{{probe.aliases.length}}</b> 别名</span>
-            <span>文档总数：<b class="mono">{{probe.docs_count}}</b></span>
+    <!-- 新建：抽屉 · 左表单 / 右匹配索引 -->
+    <el-drawer v-model="wizard" title="新建数据视图" size="760px" append-to-body :close-on-click-modal="false" class="es-view-drawer" @opened="onDrawerOpened">
+      <div class="es-view-create" v-loading="loadingIdx">
+        <div class="es-view-create-left">
+          <el-form label-position="top" @submit.prevent>
+            <el-form-item label="名称" required>
+              <el-input v-model="form.name" maxlength="64" placeholder="视图名称（同一连接内唯一）" @input="checkDup" />
+              <div v-if="dupMsg" class="es-sync-fail" style="margin-top:6px">{{dupMsg}}</div>
+            </el-form-item>
+            <el-form-item label="索引匹配" required>
+              <el-input v-model="form.index_pattern" placeholder="如 ysh* 或 logs-*"
+                        style="font-family:var(--font-mono)" />
+              <div class="es-qc-hint">支持 * / ? 通配；无通配时右侧按前缀过滤预览（创建仍按你填写的 pattern）</div>
+            </el-form-item>
+            <el-form-item label="时间字段" required>
+              <div class="es-tf-row">
+                <el-select v-if="timeFields.length" v-model="form.time_field" filterable allow-create default-first-option
+                           placeholder="选择或输入时间字段" style="flex:1;min-width:0">
+                  <el-option v-for="t in timeFields" :key="t" :label="t" :value="t" />
+                </el-select>
+                <el-input v-else v-model="form.time_field" placeholder="@timestamp" style="flex:1;min-width:0;font-family:var(--font-mono)" />
+                <el-button :loading="fetchingTF" :disabled="!matchedIndices.length" @click="fetchTimeFields">获取</el-button>
+              </div>
+              <div class="es-qc-hint">点击「获取」读取右侧第一个匹配索引的 date 字段</div>
+            </el-form-item>
+          </el-form>
+          <div class="es-view-create-footer">
+            <el-button @click="wizard=false">取消</el-button>
+            <el-button type="primary" :loading="creating" :disabled="!canCreate" @click="create">创建并进入</el-button>
           </div>
-          <div class="es-probe-names mono">{{allNames.slice(0,20).join('  ')}}<span v-if="allNames.length>20"> …共 {{allNames.length}} 项</span></div>
-          <div v-if="emptyHit" class="es-sync-fail" style="margin-top:8px">未命中任何索引或数据流，无法继续</div>
-          <div v-else-if="tooWide" class="es-sync-warn" style="margin-top:8px">范围过宽（pattern 为 * 或命中超过 50），字段表可能被截断，建议收窄</div>
-        </template>
+        </div>
+        <div class="es-view-create-right">
+          <div class="es-view-match-head">
+            <span>匹配索引</span>
+            <span class="mono">{{matchedIndices.length}} / {{allIndexNames.length}}</span>
+          </div>
+          <div class="es-view-match-list">
+            <div v-for="name in matchedIndices" :key="name" class="es-view-match-item mono">{{name}}</div>
+            <div v-if="!matchedIndices.length" class="es-lc-empty-hint">
+              {{ form.index_pattern.trim() ? '无匹配索引，可试加 * 如 ysh*' : '输入索引匹配后在此过滤'}}
+            </div>
+          </div>
+        </div>
       </div>
-
-      <div v-else>
-        <el-radio-group v-model="form.time_field" class="es-tf-list">
-          <el-radio v-for="t in probe.time_fields" :key="t" :value="t" border>
-            <span class="mono">{{t}}</span>
-          </el-radio>
-        </el-radio-group>
-        <div v-if="!probe.time_fields || !probe.time_fields.length" class="es-sync-fail">未探测到 date 类型时间字段：换一个 pattern，或给索引补时间字段</div>
-      </div>
-
-      <template #footer>
-        <el-button v-if="step>0" @click="step--">上一步</el-button>
-        <el-button v-if="step===0" type="primary" :disabled="!form.name || !!dupMsg" @click="step=1">下一步</el-button>
-        <el-button v-else-if="step===1" type="primary" :disabled="emptyHit" @click="step=2">下一步</el-button>
-        <el-button v-else type="primary" :loading="creating" :disabled="!form.time_field" @click="create">创建并进入</el-button>
-      </template>
-    </el-dialog>
+    </el-drawer>
 
     <!-- 编辑 -->
     <el-dialog v-model="editDialog" title="编辑视图" width="480px" append-to-body>
@@ -100,25 +103,20 @@ window.EsViewsTab = {
     return {
       views: [], loading: false,
       activeView: null,
-      wizard: false, step: 0, creating: false,
+      wizard: false, creating: false,
       form: { name: '', index_pattern: '', time_field: '' },
-      dupMsg: '', probe: null, probing: false, probeTimer: null,
+      dupMsg: '',
+      allIndexNames: [], loadingIdx: false,
+      timeFields: [], fetchingTF: false,
       editDialog: false, editForm: { name: '', index_pattern: '', time_field: '' }, saving: false
     }
   },
   computed: {
-    allNames() {
-      if (!this.probe) return []
-      return [...(this.probe.indices || []), ...(this.probe.data_streams || []), ...(this.probe.aliases || [])]
+    matchedIndices() {
+      return this.filterIndices(this.allIndexNames, this.form.index_pattern)
     },
-    emptyHit() {
-      if (!this.probe) return true
-      return !(this.probe.indices || []).length && !(this.probe.data_streams || []).length
-    },
-    tooWide() {
-      if (!this.probe) return false
-      const n = this.allNames.length
-      return this.form.index_pattern === '*' || n > 50
+    canCreate() {
+      return !!(this.form.name && !this.dupMsg && this.form.index_pattern.trim() && this.form.time_field.trim())
     }
   },
   mounted() { this.loadViews() },
@@ -127,30 +125,81 @@ window.EsViewsTab = {
       this.loading = true
       try { const r = await api.get('/es/' + this.conn.id + '/views'); if (r.code === 0) this.views = r.data || [] } catch (e) { /* */ } finally { this.loading = false }
     },
+    openWizard() {
+      this.wizard = true
+      this.form = { name: '', index_pattern: '', time_field: '' }
+      this.dupMsg = ''
+      this.timeFields = []
+      this.fetchingTF = false
+    },
+    async onDrawerOpened() {
+      await this.loadIndexNames()
+    },
+    async loadIndexNames() {
+      this.loadingIdx = true
+      try {
+        const r = await api.get('/es/' + this.conn.id + '/indices')
+        if (r.code === 0) {
+          const list = r.data?.list || []
+          this.allIndexNames = list.map(x => x.index).filter(Boolean).sort()
+        }
+      } catch (e) { /* */ } finally { this.loadingIdx = false }
+    },
+    // Kibana 风格：本地按 pattern 过滤；无 * / ? 时按前缀预览（ysh → ysh*）
+    filterIndices(names, pattern) {
+      const raw = (pattern || '').trim()
+      if (!raw) return names.slice()
+      const parts = raw.split(',').map(s => s.trim()).filter(Boolean)
+      if (!parts.length) return names.slice()
+      const regs = parts.map(p => {
+        let glob = p
+        if (!/[*?]/.test(glob)) glob = glob + '*'
+        const esc = glob.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.')
+        return new RegExp('^' + esc + '$')
+      })
+      return names.filter(n => regs.some(re => re.test(n)))
+    },
     syncText(row) {
       return row.sync_status === 'idle' ? '正常' : row.sync_status === 'syncing' ? '同步中' : '失败'
     },
     checkDup() {
       this.dupMsg = this.views.some(v => v.name === this.form.name) ? '视图名称在同一连接内已存在' : ''
     },
-    debounceProbe() {
-      clearTimeout(this.probeTimer)
-      this.probeTimer = setTimeout(() => this.runProbe(), 500)
-    },
-    async runProbe() {
-      const p = (this.form.index_pattern || '').trim()
-      if (!p) { this.probe = null; return }
-      this.probing = true; this.probe = null
+    async fetchTimeFields() {
+      const first = this.matchedIndices[0]
+      if (!first) { this.$message.warning('右侧暂无匹配索引'); return }
+      this.fetchingTF = true
       try {
-        const r = await api.post('/es/' + this.conn.id + '/index-pattern/probe', { index_pattern: p })
-        if (r.code === 0) this.probe = r.data
-      } catch (e) { /* */ } finally { this.probing = false }
+        const r = await api.post('/es/' + this.conn.id + '/index-pattern/probe', { index_pattern: first })
+        if (r.code === 0) {
+          this.timeFields = r.data?.time_fields || []
+          if (this.timeFields.length) {
+            if (!this.form.time_field || !this.timeFields.includes(this.form.time_field)) {
+              this.form.time_field = this.timeFields[0]
+            }
+            this.$message.success('已从索引 ' + first + ' 获取时间字段')
+          } else {
+            this.$message.warning('索引 ' + first + ' 未发现 date 类型时间字段，请手动填写')
+          }
+        }
+      } catch (e) { /* */ } finally { this.fetchingTF = false }
     },
     async create() {
+      if (!this.canCreate) return
+      // 创建用用户填写的 pattern；无通配且有前缀匹配时提示建议加 *
+      const p = this.form.index_pattern.trim()
+      if (!/[*?]/.test(p) && this.matchedIndices.length && !this.matchedIndices.includes(p)) {
+        try {
+          await this.$confirm(
+            '当前 pattern「' + p + '」无通配符，创建时 ES 按精确名匹配，可能失败。建议改为「' + p + '*」。仍要按原样创建？',
+            '提示', { type: 'warning', confirmButtonText: '仍创建', cancelButtonText: '去修改' }
+          )
+        } catch (e) { return }
+      }
       this.creating = true
       try {
         const r = await api.post('/es/' + this.conn.id + '/views', {
-          name: this.form.name, index_pattern: this.form.index_pattern, time_field: this.form.time_field
+          name: this.form.name, index_pattern: this.form.index_pattern.trim(), time_field: this.form.time_field.trim()
         })
         if (r.code === 0) {
           this.wizard = false
@@ -159,7 +208,7 @@ window.EsViewsTab = {
           const v = this.views.find(x => x.id === r.data.id)
           if (v) this.enterView(v)
           this.form = { name: '', index_pattern: '', time_field: '' }
-          this.probe = null; this.step = 0
+          this.timeFields = []
         }
       } catch (e) { /* */ } finally { this.creating = false }
     },

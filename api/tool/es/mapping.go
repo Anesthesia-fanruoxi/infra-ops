@@ -25,6 +25,7 @@ type capInfo struct {
 }
 
 // resolveIndex GET /_resolve/index/{pattern}：返回三类成员名称。
+// 无通配且索引不存在时 ES 返回 404（如 pattern=ysh），按「未命中」处理，避免向导输入过程中误报。
 func resolveIndex(ctx context.Context, c *escClient, pattern string) (indices, aliases, streams []string, err error) {
 	var payload struct {
 		Indices []struct {
@@ -37,9 +38,12 @@ func resolveIndex(ctx context.Context, c *escClient, pattern string) (indices, a
 			Name string `json:"name"`
 		} `json:"data_streams"`
 	}
-	status, body, e := c.do(ctx, http.MethodGet, "/_resolve/index/"+pattern, nil)
+	status, body, e := c.do(ctx, http.MethodGet, "/_resolve/index/"+pathEscapePattern(pattern), nil)
 	if e != nil {
 		return nil, nil, nil, e
+	}
+	if status == http.StatusNotFound {
+		return nil, nil, nil, nil
 	}
 	if status != http.StatusOK {
 		return nil, nil, nil, esErr(status, body, "索引匹配探测失败")
@@ -88,8 +92,9 @@ func indexStatsDocs(ctx context.Context, c *escClient, pattern string) (int64, e
 }
 
 // fetchFieldCaps GET /{pattern}/_field_caps：返回 名->类型->能力。
+// fields=* 必传：ES 对空 fields 直接 400「no fields specified」。
 func fetchFieldCaps(ctx context.Context, c *escClient, pattern string) (map[string]map[string]capInfo, error) {
-	path := "/" + pattern + "/_field_caps?expand_wildcards=open&allow_no_indices=false&ignore_unavailable=false"
+	path := "/" + pattern + "/_field_caps?fields=*&expand_wildcards=open&allow_no_indices=false&ignore_unavailable=false"
 	status, body, err := c.do(ctx, http.MethodGet, path, nil)
 	if err != nil {
 		return nil, err
@@ -106,7 +111,18 @@ func fetchFieldCaps(ctx context.Context, c *escClient, pattern string) (map[stri
 	if payload.Fields == nil {
 		payload.Fields = map[string]map[string]capInfo{}
 	}
-	return payload.Fields, nil
+	return dropMetaFields(payload.Fields), nil
+}
+
+// dropMetaFields 剔除 `_` 前缀的 ES 元字段（_index/_seq_no/_version 等）：它们只存在于 hit 元数据、
+// 不在 _source，混进字段表会污染侧栏并占据 Discover 默认列（展示恒为「—」）。
+func dropMetaFields(fields map[string]map[string]capInfo) map[string]map[string]capInfo {
+	for name := range fields {
+		if strings.HasPrefix(name, "_") {
+			delete(fields, name)
+		}
+	}
+	return fields
 }
 
 // fetchSingleMapping GET /{index}/_mapping：单索引原始映射（排障用，不合并）。

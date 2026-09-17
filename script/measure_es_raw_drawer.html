@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>ES 原始 JSON 抽屉 渲染台</title>
+<link rel="stylesheet" href="../template/static/vendor/element-plus.css">
+<link rel="stylesheet" href="../template/static/style.css">
+<style>
+  body { margin: 0; background: #F5F7FA; }
+  #out { position: fixed; left: 8px; bottom: 8px; z-index: 99999; margin: 0; padding: 8px 10px;
+         background: #fff; border: 1px solid #E5E7EB; border-radius: 6px; font: 12px/1.5 monospace;
+         white-space: pre-wrap; max-width: 660px; max-height: 46vh; overflow: auto; color: #1F2937; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<pre id="out">running…</pre>
+<script src="../template/static/vendor/vue.global.prod.js"></script>
+<script src="../template/static/vendor/element-plus.min.js"></script>
+<script src="../template/static/vendor/element-plus-icons-vue.min.js"></script>
+<script src="../template/static/vendor/element-plus-zh-cn.min.js"></script>
+<script src="../template/static/pages/es_index.js"></script>
+<script>
+// 单组件渲染台：只挂「ES 索引 tab」并打开它的原始 mapping 抽屉（点索引名触发的那条链路）。
+// 目的：拿真实 CSS + 真实组件出渲染证据（版式别估算），并让「JSON 面板是否向下铺满」有可注入的缺陷开关。
+// 参数：?long=true  用一份长 mapping（默认是用户截图里那种单字段短 mapping）
+//       ?fixed=true 回退到修复前的写法（抽屉 body 当普通块 + .es-source 吃全局 max-height:220px）
+//                   ——「JSON 面板铺满」必须翻成 NO
+//       ?loading=true mapping 请求永不返回，量 v-loading 遮罩有没有被关在面板里
+//       ?clean=true 藏掉左下角结论面板，方便截图留证
+//       ?shot=true  截图模式：立刻开抽屉 + 关掉滑入动画。无头 Chrome 的 --screenshot 会在
+//                   虚拟时间预算到点时拍，抽屉正在滑入就拍到半张，「改前 / 改后」两张会不对等。
+//                   只关动画与延时，量的是几何，不受影响。
+var QS = new URLSearchParams(location.search)
+if (QS.get('clean') === 'true' || QS.get('shot') === 'true') {
+  var stc = document.createElement('style')
+  stc.textContent = '#out { display: none !important; }'
+  if (QS.get('shot') === 'true') {
+    stc.textContent += ' .el-drawer, .el-overlay { transition: none !important; animation: none !important; }'
+  }
+  document.head.appendChild(stc)
+}
+
+// ?fixed=true 的忠实回退：修复前根本没有 .es-raw-drawer 这几条规则，
+// 抽屉 body 是普通块容器、.es-source 吃全局的 max-height:220px。两处必须一起回退，
+// 只回退其中一处复现不出「面板封顶 220px + 下方一大片白」的原貌。
+if (QS.get('fixed') === 'true') {
+  var stf = document.createElement('style')
+  stf.textContent = '.es-raw-drawer .el-drawer__body { display: block !important; overflow-y: auto !important; }'
+    + '.es-raw-drawer .el-drawer__body > .es-source { flex: none !important; max-height: 220px !important;'
+    + ' position: static !important; border: none !important; border-radius: 0 !important; }'
+  document.head.appendChild(stf)
+}
+
+var SHORT_MAPPING = {
+  'mhg_marketing-dk285f6-n6z1a-info-2026.09.16': {
+    mappings: { properties: { timestamp: { type: 'date', format: 'yyyy-MM-dd' } } }
+  }
+}
+
+var LONG_MAPPING = {
+  'xafq_credit_api_access_log-2026.09.17': {
+    mappings: {
+      dynamic: 'false',
+      properties: {
+        timestamp: { type: 'date', format: 'epoch_millis' },
+        '@timestamp': { type: 'date' },
+        trace_id: { type: 'keyword', ignore_above: 256 },
+        span_id: { type: 'keyword' },
+        service: { type: 'keyword' },
+        host: { type: 'keyword' },
+        level: { type: 'keyword' },
+        cost: { type: 'long' },
+        http: { properties: {
+          method: { type: 'keyword' }, path: { type: 'keyword' },
+          status: { type: 'integer' }, bytes: { type: 'long' },
+          request: { properties: { headers: { type: 'object', enabled: false } } } } },
+        client: { properties: { ip: { type: 'ip' }, ua: { type: 'text' }, geo: { properties: {
+          country: { type: 'keyword' }, province: { type: 'keyword' }, city: { type: 'keyword' } } } } },
+        api: { properties: { name: { type: 'keyword' }, version: { type: 'keyword' }, group: { type: 'keyword' } } },
+        upstream: { properties: { addr: { type: 'keyword' }, cost: { type: 'long' }, code: { type: 'integer' } } },
+        message: { type: 'text', fields: { kw: { type: 'keyword', ignore_above: 256 } } },
+        tags: { type: 'keyword' },
+        error: { properties: { type: { type: 'keyword' }, stack: { type: 'text', index: false } } }
+      }
+    }
+  }
+}
+
+var MAPPING = QS.get('long') === 'true' ? LONG_MAPPING : SHORT_MAPPING
+
+function route(method, url) {
+  if (method === 'GET' && /\/es\/\d+\/indices$/.test(url))
+    return { code: 0, data: { list: [
+      { index: Object.keys(MAPPING)[0], health: 'green', status: 'open', pri: '3', rep: '0', docs_count: '128467', store_size: '38.9mb' },
+      { index: 'xafq_sms_sending_record-2026.09.16', health: 'yellow', status: 'open', pri: '1', rep: '1', docs_count: '9021', store_size: '3.1mb' }] } }
+  if (method === 'GET' && /\/mapping$/.test(url)) {
+    // ?loading=true：请求永不返回，抽屉停在加载态，用来量 v-loading 遮罩的归属
+    if (QS.get('loading') === 'true') return new Promise(function () {})
+    return { code: 0, data: { mapping: MAPPING } }
+  }
+  return { code: 1, msg: '未桩住的请求 ' + method + ' ' + url }
+}
+
+window.api = {
+  get: function (url) { return Promise.resolve(route('GET', url)) },
+  post: function (url) { return Promise.resolve(route('POST', url)) },
+  put: function (url) { return Promise.resolve(route('PUT', url)) },
+  delete: function (url) { return Promise.resolve(route('DELETE', url)) }
+}
+
+var app = Vue.createApp(window.EsIndexTab, { conn: { id: 1, name: '测试集群' } })
+app.use(ElementPlus)
+app.use(ElementPlusIconsVue)
+var vm = app.mount('#app')
+
+function rect(sel) {
+  var el = document.querySelector(sel)
+  if (!el) return null
+  var r = el.getBoundingClientRect()
+  return { w: Math.round(r.width), h: Math.round(r.height), top: Math.round(r.top), bottom: Math.round(r.bottom), left: Math.round(r.left) }
+}
+function num(v) { return (typeof v === 'number' && isFinite(v)) ? Math.round(v) : '—' }
+
+// 打开抽屉要走真实链路：调组件自己的 showMapping(row)。
+// 截图模式下立刻开（不等列表，也不给滑入动画留时间），保证两张对比图停在同一个稳定态。
+if (QS.get('shot') === 'true') vm.showMapping({ index: Object.keys(MAPPING)[0] })
+else setTimeout(function () { vm.showMapping(vm.indices[0]) }, 900)
+
+setTimeout(function () {
+  var L = []
+  var dlgRoot = document.querySelector('.el-drawer')
+  var dlgBody = document.querySelector('.el-drawer__body')
+  var hint = document.querySelector('.es-mapping-hint')
+  var pre = document.querySelector('.el-drawer__body > .es-source')
+  var dw = rect('.el-drawer')
+  var db = rect('.el-drawer__body')
+  var ph = rect('.es-mapping-hint')
+  var pp = rect('.el-drawer__body > .es-source')
+  var padB = dlgBody ? (parseFloat(getComputedStyle(dlgBody).paddingBottom) || 0) : 0
+
+  L.push('== 渲染 ==')
+  L.push('索引表行数 = ' + document.querySelectorAll('.hosts-table .el-table__row').length)
+  L.push('抽屉已开 = ' + (vdOpen() ? 'YES' : 'NO') + '（vm.mappingDrawer=' + vm.mappingDrawer + '，索引 ' + vm.mappingIndex + '）')
+  L.push('mapping 文本行数 = ' + (vm.mappingText ? vm.mappingText.split('\n').length : 0)
+    + '  字符 = ' + (vm.mappingText ? vm.mappingText.length : 0))
+  L.push('hint 文案 = ' + (hint ? hint.textContent.trim() : '（缺失）'))
+  L.push('')
+  L.push('== 几何 ==')
+  L.push('可见视口 = ' + window.innerWidth + '×' + window.innerHeight)
+  L.push('.el-drawer = ' + JSON.stringify(dw))
+  L.push('.el-drawer__body = ' + JSON.stringify(db) + '   padding-bottom = ' + num(padB))
+  L.push('.es-mapping-hint = ' + JSON.stringify(ph))
+  L.push('.es-source = ' + JSON.stringify(pp))
+  // 判据 ①：面板底边贴住抽屉 body 的内容底边（gap == padding-bottom）⇔ 下方没有死白。
+  var gap = (dlgBody && pre) ? dlgBody.getBoundingClientRect().bottom - pre.getBoundingClientRect().bottom : NaN
+  L.push('面板底边至 body 底边 = ' + num(gap) + ' vs padding-bottom ' + num(padB)
+    + ' → JSON 面板铺满 = ' + (Math.abs(gap - padB) <= 1 ? 'YES' : 'NO'))
+  // 判据 ②：面板实际可用高度必须超过旧的全局封顶 220px（长内容不再挤在 220px 小框里滚）
+  L.push('面板可视高 = ' + num(pre ? pre.clientHeight : NaN) + ' → 突破旧的 220px 封顶 = '
+    + (pre && pre.clientHeight > 220 ? 'YES' : 'NO'))
+  L.push('面板内容高 = ' + num(pre ? pre.scrollHeight : NaN) + ' → 面板内滚动 = '
+    + (pre && pre.scrollHeight > pre.clientHeight + 1 ? 'YES' : 'NO'))
+  // 判据 ③：抽屉 body 自己不再滚（滚动交给面板），否则 hint 会被一起滚走
+  L.push('抽屉 body 高 = ' + num(dlgBody ? dlgBody.clientHeight : NaN) + ' / 内容 ' + num(dlgBody ? dlgBody.scrollHeight : NaN)
+    + ' → body 不自滚 = ' + (dlgBody && dlgBody.scrollHeight <= dlgBody.clientHeight + 1 ? 'YES' : 'NO'))
+  L.push('hint 未被压扁 = ' + (ph && ph.h >= 14 ? 'YES（高 ' + ph.h + '）' : 'NO（高 ' + (ph ? ph.h : '—') + '）'))
+  // 判据 ④：v-loading 的遮罩是绝对定位的，面板必须自己是定位祖先，否则遮罩会爬到抽屉上去盖住说明行
+  var mask = document.querySelector('.el-drawer__body > .es-source > .el-loading-mask')
+  var mr = mask ? mask.getBoundingClientRect() : null
+  L.push('loading 遮罩 = ' + (mr ? '{top:' + Math.round(mr.top) + ',bottom:' + Math.round(mr.bottom) + '}' : '（无）')
+    + ' → 遮罩被关在面板内 = ' + (mr && pp
+      ? (Math.abs(mr.top - pp.top) <= 1 && Math.abs(mr.bottom - pp.bottom) <= 1 ? 'YES' : 'NO')
+      : '—'))
+  L.push('')
+  L.push('注入 = ' + (QS.get('fixed') === 'true' ? '回退到修复前写法（body 普通块 + 面板 max-height:220px）'
+    : QS.get('loading') === 'true' ? '停在加载态（mapping 请求不返回）'
+    : QS.get('long') === 'true' ? '长 mapping' : '短 mapping（与用户截图同款）'))
+
+  function vdOpen() { return !!document.querySelector('.el-drawer') && getComputedStyle(document.querySelector('.el-drawer')).display !== 'none' }
+
+  document.getElementById('out').textContent = L.join('\n')
+  document.title = 'rendered:' + (pre ? 'ok' : 'fail')
+    + '|fill:' + (Math.abs(gap - padB) <= 1 ? 'yes' : 'no')
+    + '|h:' + num(pre ? pre.clientHeight : NaN)
+}, 2600)
+</script>
+</body>
+</html>

@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<!-- ES Discover（日志搜索）文档流版式渲染台。
+
+     目的：确认「不用卡片、改虚线分隔」之后的真实观感——行间是否有虚线、时间列灰底是否已去掉、
+     表头是否还像个卡片、有没有被压扁。改版式前先在这里看一眼，别凭想象（项目铁律）。
+
+     用法：
+       "C:\Program Files\Google\Chrome\Application\chrome.exe" --headless=new --disable-gpu --no-sandbox \
+         --window-size=1100,520 --virtual-time-budget=4000 --dump-dom \
+         --screenshot=%TEMP%\es-docs.png "file:///D:/project/go/infra-ops/script/measure_es_docs.html"
+     参数：?noshrink=true  反向验证：注入 flex-shrink:1 + overflow:hidden 复现 flex 塌陷，
+                          此时 squashed 必须变 YES，否则"没被压扁"这条结论没有鉴别力。
+
+     说明：DOM 与 template/static/pages/es_discover.js 的 docs 块（第 38~54 行）保持同构；
+          仅把 .es-docs 的 max-height 压小（--dump-dom 截不出整页）以便一屏看完。 -->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>es docs</title>
+<link rel="stylesheet" href="../template/static/vendor/element-plus.css" />
+<link rel="stylesheet" href="../template/static/style.css" />
+<style>
+  body { margin: 0; background: #fff; font: 13px/1.6 system-ui, sans-serif; }
+  #stage { padding: 12px 16px; }
+  /* 复刻 .es-disc-main（高度受限的 flex 列） */
+  .probe-main { display: flex; flex-direction: column; min-height: 0; }
+  /* 只压小可视高度，其余规则全部走真 CSS；?h=<px> 可临时放宽，便于一屏看到两三条文档的分隔线 */
+  .es-docs { max-height: var(--peek, 330px) !important; }
+  pre#out { margin: 0; padding: 10px 16px; font: 12px/1.6 monospace; background: #f6f8fa; border-top: 1px solid #e5e7eb; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div class="probe-main">
+    <div class="es-docs">
+      <div class="es-docs-head"><span class="es-docs-h-time">时间</span><span>内容</span></div>
+
+      <div class="es-doc">
+        <div class="es-doc-time mono">2026-09-17<br />10:55:50.532</div>
+        <div class="es-doc-body">
+          <div class="es-doc-line"><span class="mono es-doc-key">content</span><span class="es-doc-sep">:</span><span class="mono es-doc-val"><mark>半流程渠道通用轮子-假值-用户信息入库-插件取数</mark>-1步识别驱动产品列表-[12分钟(开插件)]，[32毫开金(开插件)]，60颗宽览品半流程</span></div>
+          <div class="es-doc-line"><span class="mono es-doc-key">environment</span><span class="es-doc-sep">:</span><span class="mono es-doc-val">ysh-api</span></div>
+          <div class="es-doc-line"><span class="mono es-doc-key">level</span><span class="es-doc-sep">:</span><span class="mono es-doc-val">INFO</span></div>
+          <div class="es-doc-line"><span class="mono es-doc-key">line_number</span><span class="es-doc-sep">:</span><span class="mono es-doc-val">5167</span></div>
+          <div class="es-doc-line"><span class="mono es-doc-key">log_time</span><span class="es-doc-sep">:</span><span class="mono es-doc-val">2026-09-17 10:55:50.177</span></div>
+          <div class="es-doc-line"><span class="mono es-doc-key">log_type</span><span class="es-doc-sep">:</span><span class="mono es-doc-val">info</span></div>
+          <div class="es-doc-line"><span class="mono es-doc-key">logger</span><span class="es-doc-sep">:</span><span class="mono es-doc-val">c.b.a.s.l.FillDataServiceImpl</span></div>
+          <div class="es-doc-line"><span class="mono es-doc-key">method</span><span class="es-doc-sep">:</span><span class="mono es-doc-val">channelAndProductFilter</span></div>
+          <div class="es-doc-line"><span class="mono es-doc-key">project_name</span><span class="es-doc-sep">:</span><span class="mono es-doc-val">ysh</span></div>
+          <div class="es-doc-line"><span class="mono es-doc-key">server_name</span><span class="es-doc-sep">:</span><span class="mono es-doc-val">ysh-app-7c7484c4dd-69k8z</span></div>
+          <div class="es-doc-line"><span class="mono es-doc-key">tags</span><span class="es-doc-sep">:</span><span class="mono es-doc-val">["beats_input_codec_plain_applied"]</span></div>
+          <div class="es-doc-line"><span class="mono es-doc-key">thread</span><span class="es-doc-sep">:</span><span class="mono es-doc-val">http-nio-8080-exec-3</span></div>
+        </div>
+      </div>
+
+      <div class="es-doc">
+        <div class="es-doc-time mono">2026-09-17<br />10:55:50.532</div>
+        <div class="es-doc-body">
+          <div class="es-doc-line"><span class="mono es-doc-key">content</span><span class="es-doc-sep">:</span><span class="mono es-doc-val">[灵犀优品半流程]-[插件]-uuid:[8ca2bdf2715458e0b37d86299e1da6f1]，mobileId:5c545dc2133390a3a1908fbc8dc15df0f8f，idCardMd5: 448a75a67e4c1ef5ec70539cf4f9f898，渠道60</span></div>
+          <div class="es-doc-line"><span class="mono es-doc-key">environment</span><span class="es-doc-sep">:</span><span class="mono es-doc-val">ysh-api</span></div>
+          <div class="es-doc-line"><span class="mono es-doc-key">level</span><span class="es-doc-sep">:</span><span class="mono es-doc-val">INFO</span></div>
+          <div class="es-doc-line"><span class="mono es-doc-key">logger</span><span class="es-doc-sep">:</span><span class="mono es-doc-val">c.b.a.s.a.l.ApiChannelServiceImpl</span></div>
+          <div class="es-doc-line"><span class="mono es-doc-key">method</span><span class="es-doc-sep">:</span><span class="mono es-doc-val">pushValidateV2</span></div>
+          <div class="es-doc-line"><span class="mono es-doc-key">server_name</span><span class="es-doc-sep">:</span><span class="mono es-doc-val">ysh-app-7c7484c4dd-69k8z</span></div>
+        </div>
+      </div>
+
+      <div class="es-doc">
+        <div class="es-doc-time mono">2026-09-17<br />10:55:50.503</div>
+        <div class="es-doc-body">
+          <div class="es-doc-line"><span class="mono es-doc-key">content</span><span class="es-doc-sep">:</span><span class="mono es-doc-val">半流程渠道通用轮子-假值-2用户信息入库-事件体认证关闭黑通认证状态:false，[灵犀优品半流程]-[插件]-uuid:[8ca2bdf2715458e0b37d86299e1da6f1]</span></div>
+          <div class="es-doc-line"><span class="mono es-doc-key">level</span><span class="es-doc-sep">:</span><span class="mono es-doc-val">INFO</span></div>
+          <div class="es-doc-line"><span class="mono es-doc-key">thread</span><span class="es-doc-sep">:</span><span class="mono es-doc-val">http-nio-8080-exec-3</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<pre id="out">pending</pre>
+
+<script>
+;(function () {
+  var q = new URLSearchParams(location.search)
+  var h = parseInt(q.get('h') || '', 10)
+  if (h > 0) document.documentElement.style.setProperty('--peek', h + 'px')
+  var mode = q.get('noshrink')
+  if (mode) {
+    var st = document.createElement('style')
+    // true  = flex-shrink:1 + overflow:hidden —— 复现历史塌陷条件（自动最小尺寸归零）
+    // flex  = 只把 flex-shrink 改回 1、不动 overflow —— 用来判断「当前这份 CSS 里
+    //         flex-shrink:0 到底是不是承重墙」（取消卡片后已无 overflow:hidden，
+    //         若此态不塌，说明它只是按铁律留的防御，而不是当前唯一防线）
+    st.textContent = (mode === 'flex')
+      ? '.es-doc { flex-shrink: 1 !important; }'
+      : '.es-doc { flex-shrink: 1 !important; overflow: hidden !important; }'
+    document.head.appendChild(st)
+    window.__INJ__ = (mode === 'flex')
+      ? '仅 flex-shrink:1（不动 overflow）'
+      : 'flex-shrink:1 + overflow:hidden（复现塌陷条件）'
+  } else { window.__INJ__ = '无（出厂状态）' }
+
+  function rule(sel) {
+    var el = document.querySelector(sel)
+    if (!el) return null
+    var cs = getComputedStyle(el)
+    return { bb: cs.borderBottomWidth + ' ' + cs.borderBottomStyle + ' ' + cs.borderBottomColor,
+             bri: '右 ' + cs.borderRightWidth + ' ' + cs.borderRightStyle + ' ' + cs.borderRightColor,
+             bt: cs.borderTopWidth + ' ' + cs.borderTopStyle,
+             br: cs.borderRadius, bg: cs.backgroundColor, fs: cs.flexShrink, ov: cs.overflow }
+  }
+  setTimeout(function () {
+    var docs = document.querySelector('.es-docs')
+    var doc = document.querySelectorAll('.es-doc')
+    var r0 = docs.querySelector('.es-doc')
+    var r1 = doc[1]
+    var rect = r0.getBoundingClientRect()
+    var box = document.querySelector('.es-doc-time').getBoundingClientRect()
+    // 塌陷的真实症状是「内容被压掉、且容器不再出滚动条」，不是「高度趋近 0」——
+    // 高度 <24px 那种判据在只有两三条文档时根本不成立（实测踩过）。
+    var squeezed = r0.scrollHeight > r0.clientHeight + 1
+    var lines = [
+      'doc 条数 = ' + doc.length + '   （3 = 正常）',
+      '',
+      '行① .es-doc      = ' + JSON.stringify(rule('.es-doc')),
+      '行① 显示高/自然高 = ' + Math.round(rect.height) + ' / ' + r0.scrollHeight,
+      'squashed(内容被压掉?)= ' + (squeezed ? 'YES ← flex 收缩把行压扁了' : 'no'),
+      '时间列宽/有无灰底 = ' + Math.round(box.width) + ' / ' + rule('.es-doc-time').bg,
+      '时间列右分隔      = ' + rule('.es-doc-time').bri,
+      '表头 .es-docs-head= ' + JSON.stringify(rule('.es-docs-head')),
+      '',
+      '行①底边与行②顶边间距 = ' + Math.round(r1.getBoundingClientRect().top - rect.bottom) + 'px（0=紧邻，虚线直接当分隔）',
+      '容器可滚动       = ' + (docs.scrollHeight > docs.clientHeight + 1) + '（scrollH ' + docs.scrollHeight + ' / clientH ' + docs.clientHeight + '）',
+      '注入CSS(反向验证) = ' + window.__INJ__
+    ]
+    document.getElementById('out').textContent = lines.join('\n')
+    document.title = 'docs=' + doc.length + ':' + (squeezed ? 'squashed' : 'ok')
+  }, 600)
+})()
+</script>
+</body>
+</html>

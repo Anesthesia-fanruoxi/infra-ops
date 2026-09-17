@@ -272,6 +272,7 @@ a { text-decoration: none; }
 .tpl-view-switch .view-btn.active { background: #fff; color: var(--brand); box-shadow: 0 1px 3px rgba(15,23,42,.08); font-weight: 600; }
 .tpl-head-left { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; min-width: 0; }
 .tpl-cats { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.tpl-search { display: flex; align-items: center; gap: 6px; }
 .tpl-filter-tab { border: none; background: transparent; padding: 5px 13px; border-radius: 16px; font-size: 12.5px; color: var(--text-sub); cursor: pointer; transition: all .15s ease; }
 .tpl-filter-tab:hover { color: var(--brand); background: var(--brand-soft); }
 .tpl-filter-tab.active { color: #fff; background: var(--brand); font-weight: 600; }
@@ -1010,6 +1011,10 @@ a { text-decoration: none; }
 .deploy-param-hint { font-size: 11px; color: var(--text-faint); margin-top: 2px; }
 .deploy-params .el-form-item { margin-bottom: 14px; }
 .deploy-params .el-form-item:last-child { margin-bottom: 0; }
+/* 镜像源（hub 镜像主机） */
+.deploy-hub-bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 8px 12px; margin-bottom: 6px; background: var(--bg-faint); border: 1px solid var(--border); border-radius: var(--radius-btn); }
+.deploy-hub-label { font-size: 13px; font-weight: 600; flex-shrink: 0; }
+.deploy-hub-empty { font-size: 12px; color: var(--danger, #C45656); margin: 0 0 10px 12px; }
 /* 主机选择 */
 .deploy-host-toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
 .deploy-host-list { max-height: 280px; overflow-y: auto; border: 1px solid var(--border); border-radius: var(--radius-btn); }
@@ -1825,16 +1830,16 @@ a { text-decoration: none; }
 .es-sub-head { font-size: 14px; font-weight: 600; margin: 20px 0 10px; }
 
 /* 字段侧栏 */
-.es-fields-panel { width: 240px; flex-shrink: 0; border-right: 1px solid var(--border, #E5E7EB); padding-right: 12px; }
+.es-fields-panel { width: 240px; flex-shrink: 0; display: flex; flex-direction: column; min-height: 0; overflow: hidden; border-right: 1px solid var(--border, #E5E7EB); padding-right: 12px; }
 .es-fields-head { display: flex; align-items: center; justify-content: space-between; }
 .es-fields-title { font-weight: 600; font-size: 13px; }
 .es-fields-sync { font-size: 12px; color: var(--text-sub, #6B7280); margin: 4px 0 8px; }
 .es-sync-fail { color: var(--danger, #F56C6C); font-size: 12px; }
 .es-sync-warn { color: var(--warn, #E6A23C); font-size: 12px; }
-.es-fields-list { max-height: 520px; overflow: auto; margin-top: 8px; }
-.es-field-item { padding: 6px 4px; border-radius: 6px; }
+.es-fields-list { flex: 1; min-height: 0; max-height: none; overflow: auto; margin-top: 8px; }
+.es-field-item { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 6px; border-radius: 6px; cursor: pointer; border-bottom: 2px solid transparent; }
 .es-field-item:hover { background: var(--bg-hover, #F5F7FA); }
-.es-field-main { display: flex; align-items: center; justify-content: space-between; gap: 6px; cursor: pointer; }
+.es-field-item.is-sel { background: #E8F1FF; border-bottom-color: var(--el-color-primary, #409EFF); }
 .es-field-name { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .es-field-type { font-size: 10.5px; padding: 1px 6px; border-radius: 4px; flex-shrink: 0; }
 .t-text { background: #E8F1FF; color: #1D63D8; }
@@ -1844,12 +1849,6 @@ a { text-decoration: none; }
 .t-bool { background: #FFE9EC; color: #C0392B; }
 .t-conflict { background: #FFF0C2; color: #8A6D00; }
 .t-other { background: #F1F3F7; color: #7C8798; }
-.es-field-badges { display: flex; gap: 4px; margin-top: 2px; }
-.es-fcap { font-size: 10px; color: var(--text-sub, #9CA3AF); border: 1px solid var(--border, #E5E7EB); border-radius: 3px; padding: 0 4px; }
-.es-fcap.on { color: var(--ok, #67C23A); border-color: var(--ok, #67C23A); }
-.es-fwarn { font-size: 10px; color: var(--warn, #B26A00); border: 1px solid var(--warn, #E6A23C); border-radius: 3px; padding: 0 4px; }
-.es-field-ops { display: none; gap: 2px; }
-.es-field-item:hover .es-field-ops { display: flex; }
 .es-fields-empty { color: var(--text-sub, #9CA3AF); font-size: 12px; padding: 12px 0; text-align: center; }
 
 /* KQL 输入条 */
@@ -1870,8 +1869,8 @@ a { text-decoration: none; }
 .es-disc-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
 .es-disc-view { font-weight: 600; font-size: 15px; }
 .es-disc-pattern { font-size: 12px; color: var(--text-sub, #6B7280); }
-.es-disc-body { display: flex; gap: 16px; }
-.es-disc-main { flex: 1; min-width: 0; }
+.es-disc-body { display: flex; gap: 16px; flex: 1; min-height: 0; }
+.es-disc-main { flex: 1; min-width: 0; display: flex; flex-direction: column; min-height: 0; }
 .es-trunc-hint { background: var(--warn-bg, #FDF6EC); border: 1px solid var(--warn, #E6A23C); color: var(--warn, #B26A00); border-radius: 6px; padding: 6px 12px; font-size: 12.5px; margin-bottom: 10px; }
 .es-histogram { margin-bottom: 10px; }
 .es-hist-svg { width: 100%; height: 90px; display: block; }
@@ -1880,14 +1879,39 @@ a { text-decoration: none; }
 .es-hist-drag { fill: var(--el-color-primary, #409EFF); opacity: .18; }
 .es-hist-axis { display: flex; justify-content: space-between; font-size: 11px; color: var(--text-sub, #9CA3AF); }
 .es-hist-hint { color: var(--el-color-primary, #409EFF); }
-.es-docs-table .el-table__row { cursor: pointer; }
-.es-cell { font-size: 12px; }
+/* 文档流（虚线分隔，非卡片，用户口径 2026-09-17）：左栏字段点击仅过滤此处展示的字段行；直方图与结果条固定，仅本区内部滚动
+   （max-height 给出确定高度约束，父链无高度时 flex:1 不触发 overflow；子项仍保留 flex-shrink:0 按铁律兜底——历史塌陷是 .es-doc 的 overflow:hidden 使自动最小尺寸归零所致，取消卡片后该属性已随之去掉） */
+.es-docs { display: flex; flex-direction: column; flex: 1; min-height: 120px; max-height: calc(100vh - 430px); overflow: auto; }
+.es-doc { display: flex; flex-shrink: 0; border-bottom: 1px dashed var(--border, #E5E7EB); }
+.es-doc-time { width: 172px; flex-shrink: 0; padding: 8px 10px; font-size: 12.5px; font-weight: 600; color: var(--text-main, #1F2937); border-right: 1px dashed var(--border, #E5E7EB); }
+.es-docs-head { display: flex; position: sticky; top: 0; z-index: 1; flex-shrink: 0; background: var(--bg-card, #fff); border-bottom: 1px dashed var(--border, #E5E7EB); padding: 6px 0; font-size: 12px; font-weight: 600; color: var(--text-sub, #6B7280); }
+.es-docs-h-time { width: 172px; flex-shrink: 0; padding: 0 10px; box-sizing: border-box; border-right: 1px dashed var(--border, #E5E7EB); }
+.es-docs-head span + span { padding: 0 12px; }
+.es-doc-body { flex: 1; min-width: 0; padding: 8px 12px; }
+.es-doc-line { display: flex; gap: 6px; font-size: 12px; line-height: 1.75; }
+.es-doc-key { flex-shrink: 0; color: #1D63D8; font-weight: 600; }
+.es-doc-sep { color: var(--text-sub, #9CA3AF); }
+.es-doc-val { white-space: pre-wrap; word-break: break-all; }
 .es-hl mark { background: #FFE58F; color: inherit; padding: 0 1px; border-radius: 2px; }
-.es-expand { margin: 8px 0; max-height: 320px; overflow: auto; }
+.es-docs-more { text-align: center; padding: 2px 0 6px; flex-shrink: 0; }
 .es-result-bar { display: flex; align-items: center; font-size: 12.5px; color: var(--text-sub, #6B7280); margin-top: 10px; }
 
 /* 单索引 mapping 抽屉 */
 .es-mapping-hint { font-size: 12px; color: var(--text-sub, #6B7280); margin-bottom: 8px; }
+
+/* 原始 JSON 抽屉（索引 mapping、模板 _simulate 结果）：说明行固定，JSON 面板吃掉剩余高度。
+   改前面板吃的是全局的 .es-source { max-height: 220px }——抽屉 1294px 高它也还是 220px，
+   下方空出 959px（script/measure_es_raw_drawer.html 量出来的），长 mapping 则挤在 220px 小框里滚。
+   口径与生命周期详情、索引模板对话框一致：高度受限 flex 列 + 指定项吃满剩余高度。
+   边框 + 圆角也照抄那两处（.es-lc-detail .es-source / .es-qc-preview）——抽屉底色与面板底色同为白，
+   不描边的话「铺满了」在短 mapping 上根本看不出来，JSON 会像是浮在抽屉里。
+   直接子项一律 flex-shrink:0（铁律），只有 .es-source 反向生长；
+   min-height:0 是让它能缩到内容以下的关键（<pre> 的 flex 自动最小尺寸等于整段 JSON，缺了会顶长容器）；
+   position:relative 用来兜住 v-loading 的遮罩——遮罩是绝对定位的，面板不定位它会盖满整个抽屉
+   （改前实测遮罩 0→1294 覆盖标题与说明行，加上定位后收敛到面板内 115→1274）。 */
+.es-raw-drawer .el-drawer__body { display: flex; flex-direction: column; overflow: hidden; }
+.es-raw-drawer .el-drawer__body > * { flex-shrink: 0; }
+.es-raw-drawer .el-drawer__body > .es-source { flex: 1 1 0; min-height: 0; max-height: none; overflow: auto; position: relative; border: 1px solid var(--border, #E5E7EB); border-radius: 10px; }
 
 /* 分析抽屉 */
 .es-an-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
@@ -1921,6 +1945,21 @@ a { text-decoration: none; }
 .es-probe { display: flex; gap: 20px; margin-top: 10px; font-size: 13px; }
 .es-probe-names { font-size: 11.5px; color: var(--text-sub, #6B7280); margin-top: 6px; line-height: 1.7; }
 .es-tf-list { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+.es-tf-row { display: flex; align-items: center; gap: 8px; width: 100%; }
+.es-sync-warn { font-size: 12px; color: var(--el-color-warning, #E6A23C); }
+
+/* 新建数据视图抽屉：左表单 / 右匹配索引 */
+.es-view-create { display: flex; gap: 18px; height: calc(100vh - 140px); min-height: 420px; }
+.es-view-create-left { width: 300px; flex-shrink: 0; display: flex; flex-direction: column; }
+.es-view-create-left .el-form { flex: 1; }
+.es-view-create-footer { display: flex; justify-content: flex-end; gap: 8px; padding-top: 12px; border-top: 1px solid var(--border, #E5E7EB); }
+.es-view-create-right { flex: 1; min-width: 0; display: flex; flex-direction: column; border: 1px solid var(--border, #E5E7EB); border-radius: 12px; overflow: hidden; background: var(--bg-card, #fff); }
+.es-view-match-head { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; background: var(--bg-faint, #F8FAFC); border-bottom: 1px solid var(--border, #E5E7EB); font-size: 13px; font-weight: 600; color: var(--text-main, #1F2937); }
+.es-view-match-head .mono { font-weight: 500; color: var(--text-sub, #6B7280); font-size: 12px; }
+.es-view-match-list { flex: 1; min-height: 0; overflow: auto; }
+.es-view-match-item { padding: 8px 14px; font-size: 12.5px; border-bottom: 1px solid var(--border, #F0F2F5); color: var(--text-main, #374151); }
+.es-view-match-item:hover { background: var(--bg-hover, #F5F7FA); }
+.es-view-match-list .es-lc-empty-hint { min-height: 160px; }
 
 /* 生命周期 / 模板 tab */
 .es-lc-toolbar { display: flex; gap: 10px; margin-bottom: 12px; }
@@ -1930,5 +1969,126 @@ a { text-decoration: none; }
 .es-lc-item:hover { background: var(--bg-hover, #F5F7FA); }
 .es-lc-item.active { background: #E8F1FF; }
 .es-managed { font-size: 10px; color: var(--text-sub, #9CA3AF); border: 1px solid var(--border, #E5E7EB); border-radius: 3px; padding: 0 4px; }
+.es-qc-hint { margin-top: 6px; font-size: 12px; color: var(--text-sub, #6B7280); line-height: 1.6; }
+.es-qc-body { display: flex; gap: 20px; }
+.es-qc-left { flex: 1; min-width: 0; }
+.es-qc-divider { width: 1px; background: var(--border, #E5E7EB); }
+.es-qc-right { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.es-area-label { font-size: 12px; color: var(--text-sub, #6B7280); margin-bottom: 8px; }
+.es-qc-preview { margin: 0; height: 380px; max-height: 420px; overflow: auto; border: 1px solid var(--border, #E5E7EB); border-radius: 8px; padding: 10px; }
+
+/* 索引模板可视化创建（es_template_quick.js）：与生命周期可视化创建共用 .es-qc-* 版式类，
+   这里只补索引模板独有的几处控件 —— pattern 标签、阶段链、多列栅格。
+   阶段链的按层配色在组件里以内联样式给出（层名不能进 CSS：style.css 禁 .es-hot/.es-tier-chip 之类的套件专属选择器）。 */
+.es-tc-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-height: 26px; }
+.es-tc-add { display: flex; gap: 8px; width: 100%; margin-top: 6px; }
+.es-tc-chain { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 8px; }
+.es-tc-node { font-size: 11.5px; line-height: 1.8; border-radius: 10px; padding: 1px 8px; }
+.es-tc-grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; width: 100%; }
+.es-tc-grid3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; width: 100%; }
+/* 本对话框内容高（左侧八段表单 + 右侧 JSON 预览），实测整框可达 1448px——
+   底部「取消 / 保存前模拟 / 确认创建」会被顶出视口。口径：整框做成高度受限的 flex 列，
+   头尾按铁律 flex-shrink:0 以免被压扁。max-height 用 15vh 扣掉 Element Plus 的
+   --el-dialog-margin-top 默认值 + 底部 50px 余量。 */
+.es-tqc-dialog { display: flex; flex-direction: column; max-height: calc(100vh - 15vh - 60px); }
+.es-tqc-dialog > .el-dialog__header { flex-shrink: 0; }
+.es-tqc-dialog > .el-dialog__footer { flex-shrink: 0; }
+/* body 由「自己滚」改成「只当容器」：仍由 body 滚的话，右列会被撑成整段表单那么高
+   （渲染台量到改前 .es-qc-body 高 1232px），预览框固定 378px、下方空出 690px，可见区照样空着。
+   改由 .es-qc-body 吃满 body 高度、左右两列各自滚，右列才是「可见的铺满」。
+   min-height:0 是让 flex 项能缩到内容以下的关键，缺了整框会顶出视口。 */
+.es-tqc-dialog > .el-dialog__body { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+/* 预设行是 body 的直接子项：高度受限 flex 列里必须 flex-shrink:0（铁律），否则被压扁 */
+.es-tqc-dialog > .el-dialog__body > .es-lc-toolbar { flex-shrink: 0; }
+.es-tqc-dialog .es-qc-body { flex: 1 1 auto; min-height: 0; }
+/* 左表单自己滚，不再把整个 body 顶长 */
+.es-tqc-dialog .es-qc-left { overflow-y: auto; overflow-x: hidden; }
+.es-tqc-dialog .es-qc-right { min-height: 0; overflow-y: auto; }
+/* 右列除预览框外的成员（标签 / 提示 / 重叠清单）保持自然高度，不许被 flex 压扁（同一条铁律） */
+.es-tqc-dialog .es-qc-right > * { flex-shrink: 0; }
+/* 预览框：固定 380px 改为吃掉右列剩余高度——这一条就是「铺满」本身。
+   选择器写到 3 段是为了稳压上面那条 > *，别改短（同特异度时后者才生效）。 */
+.es-tqc-dialog .es-qc-right > .es-qc-preview { flex: 1 1 0; height: auto; max-height: none; min-height: 160px; }
 .es-lc-detail { flex: 1; min-width: 0; }
 .es-lc-ops { display: flex; gap: 8px; margin-bottom: 8px; }
+
+/* ==========================================================================
+   ES 控制台内页视觉统一（数据视图 / 索引 / 生命周期 / 索引模板）
+   作用域限定在 .es-workspace，不影响其他模块；含「去表格横竖线、仅保留下表头 2px 分隔」约定
+   ========================================================================== */
+.es-workspace .es-workspace { padding: 0; }
+/* ES 连接视图：顶部头部 + 标签条固定，内容区填满可视高度；内容仅在区内滚动，杜绝整体出屏 */
+.content > .page-fade:has(.es-workspace) { height: 100%; }
+.content > .page-fade:has(.es-workspace) > div { height: 100%; display: flex; flex-direction: column; }
+.es-workspace { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.es-workspace .reg-es-tabs { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; padding: 2px 22px 22px; }
+
+/* 连接信息头部 + 标签导航同排：原生标签条隐藏，改用头部内自定义按钮，腾出一行 */
+.es-workspace .card-header.reg-whd { flex-wrap: nowrap; }
+.es-workspace .reg-whd-url { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.es-workspace .reg-whd-tabs { display: flex; align-items: center; justify-content: center; gap: 6px; flex: 1; min-width: 0; padding: 0 10px; }
+.es-workspace .rwt { border: none; background: transparent; height: 32px; padding: 0 14px; border-radius: 8px; font-size: 13.5px; color: var(--text-sub, #6B7280); cursor: pointer; transition: color .15s, background .15s; white-space: nowrap; }
+.es-workspace .rwt:hover { background: var(--bg-hover, #F5F7FA); color: var(--el-color-primary, #409EFF); }
+.es-workspace .rwt.active { background: var(--el-color-primary, #409EFF); color: #fff; font-weight: 600; box-shadow: 0 1px 3px rgba(64, 158, 255, .35); }
+.es-workspace .reg-es-tabs .el-tabs__header { display: none; }
+
+/* Tab 条：更大字、更宽、品牌色下划线 */
+.es-workspace .el-tabs__nav-wrap::after { height: 1px; background: var(--border, #E5E7EB); }
+.es-workspace .el-tabs__item { font-size: 14px; height: 48px; padding: 0 20px; color: var(--text-sub, #6B7280); letter-spacing: .2px; transition: color .15s ease; }
+.es-workspace .el-tabs__item:hover { color: var(--el-color-primary, #409EFF); }
+.es-workspace .el-tabs__item.is-active { font-weight: 600; color: var(--el-color-primary, #409EFF); }
+.es-workspace .el-tabs__active-bar { height: 3px; border-radius: 3px 3px 0 0; background: var(--el-color-primary, #409EFF); }
+
+/* 每个页签 → 白底卡片，填满标签内容高度；首子元素为 flex 列，内部表格/网格铺满并区内滚动 */
+.es-workspace .el-tabs__content { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.es-workspace .el-tab-pane { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; padding: 16px; background: var(--bg-card, #fff); border: 1px solid var(--border, #E5E7EB); border-radius: 12px; box-shadow: 0 1px 3px rgba(16, 24, 40, .04); }
+.es-workspace .el-tab-pane > :first-child { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.es-workspace .el-tab-pane .hosts-table { flex: 1; min-height: 0; max-height: none; }
+
+/* 工具栏 → 浅底分隔条 */
+.es-workspace .es-toolbar,
+.es-workspace .es-lc-toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 12px 14px; background: var(--bg-faint, #F8FAFC); border: 1px solid var(--border, #E5E7EB); border-radius: 10px; margin-bottom: 14px; }
+.es-workspace .es-lc-toolbar { margin-bottom: 12px; }
+.es-workspace .es-lc-toolbar .es-qc-hint { margin: 0; font-size: 12.5px; color: var(--text-sub, #6B7280); line-height: 1.6; }
+.es-workspace .es-lc-toolbar .es-qc-hint b { color: var(--el-color-primary, #409EFF); }
+
+/* 区块标题 → 左侧品牌色竖条 */
+.es-workspace .es-sub-head { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; color: var(--text-main, #1F2937); margin: 20px 0 12px; }
+.es-workspace .es-sub-head::before { content: ''; width: 3px; height: 15px; border-radius: 2px; background: var(--el-color-primary, #409EFF); flex-shrink: 0; }
+
+/* 统计条 → 卡片化 */
+.es-workspace .es-statbar { border: 1px solid var(--border, #E5E7EB); border-radius: 12px; margin-bottom: 14px; box-shadow: none; background: var(--bg-faint, #F8FAFC); }
+.es-workspace .reg-stat { border-right: 1px solid var(--border, #EEF1F5); padding-right: 16px; }
+.es-workspace .reg-stat:last-child { border-right: none; }
+
+/* 表格 → 白底圆角卡片，去横竖线，仅保留表头 2px 分隔（含横向滚动容器） */
+.es-workspace .hosts-table { border: 1px solid var(--border, #E5E7EB); border-radius: 10px; overflow: hidden; box-shadow: 0 1px 3px rgba(16, 24, 40, .03); --el-table-border-color: transparent; }
+.es-workspace .hosts-table th.el-table__cell { background: #f8fafc !important; border-bottom: 2px solid var(--border, #E5E7EB) !important; border-right: none; }
+.es-workspace .hosts-table td.el-table__cell { border-bottom: 1px solid transparent; border-right: none; }
+.es-workspace .hosts-table .el-table__row:hover > td.el-table__cell { background: #f6f9ff !important; }
+.es-workspace .es-sync-err { max-width: 200px; }
+
+/* 生命周期：工作区铺满 → 策略列表 + 详情双栏并排，列表区内滚动、JSON 预览铺满 */
+.es-workspace .es-lifecycle-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.es-workspace .es-lifecycle-wrap .es-lc-toolbar { flex-shrink: 0; }
+.es-workspace .es-lifecycle-wrap .es-lc-grid { flex: 1; min-height: 0; display: flex; flex-direction: row; align-items: stretch; gap: 14px; }
+.es-workspace .es-lc-list { width: 290px; flex-shrink: 0; height: auto; max-height: none; align-self: stretch; overflow-y: auto; border: 1px solid var(--border, #E5E7EB); border-radius: 12px; box-shadow: 0 1px 3px rgba(16, 24, 40, .03); background: var(--bg-card, #fff); }
+.es-workspace .es-lc-item { padding: 10px 14px; font-size: 13px; border-bottom: 1px solid var(--border, #F0F2F5); transition: background .12s ease; }
+.es-workspace .es-lc-item:last-child { border-bottom: none; }
+.es-workspace .es-lc-item:hover { background: var(--bg-hover, #F5F7FA); }
+.es-workspace .es-lc-item.active { background: #E8F1FF; box-shadow: inset 3px 0 0 var(--el-color-primary, #409EFF); }
+.es-workspace .es-lc-detail { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; margin-left: 0; border: 1px solid var(--border, #E5E7EB); border-radius: 12px; box-shadow: 0 1px 3px rgba(16, 24, 40, .03); background: var(--bg-card, #fff); padding: 12px 14px; }
+.es-workspace .es-lc-ops { flex-shrink: 0; display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.es-workspace .es-lc-detail .es-source { flex: 1; min-height: 0; max-height: none; overflow: auto; border: 1px solid var(--border, #E5E7EB); border-radius: 10px; }
+.es-workspace .es-lc-empty-hint { flex: 1; display: flex; align-items: center; justify-content: center; color: var(--text-sub, #9CA3AF); font-size: 13px; padding: 24px; }
+
+/* 集群概览：顶部统计固定，节点表向下铺满剩余高度（表体内滚动） */
+.es-workspace .el-tab-pane.es-pane-overview { display: flex; flex-direction: column; overflow: hidden; }
+.es-workspace .el-tab-pane.es-pane-overview > .es-overview-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.es-workspace .es-overview-top { flex-shrink: 0; }
+.es-workspace .es-pane-overview .es-sub-head { flex-shrink: 0; margin-top: 4px; }
+.es-workspace .es-nodes-table-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.es-workspace .es-pane-overview .hosts-table { flex: 1; min-height: 0; height: 100% !important; }
+
+/* 索引/视图 折叠行内空隙 */
+.es-an-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 4px; }

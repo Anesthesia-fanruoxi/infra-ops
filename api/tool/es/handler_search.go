@@ -17,6 +17,8 @@ import (
 )
 
 // searchReq POST /es/:id/search 请求体。start/end 为唯一时间接受体（字符串，§9）。
+// PageSize 仅决定**响应里带多少条**（默认 100，上限 esPageMaxSize）：
+// ES 拉取与内存缓存恒为整个窗口 esResultWindow 条，翻页/加载更多走 /search/page 内存切片。
 type searchReq struct {
 	ViewID            int64    `json:"view_id" binding:"required"`
 	KQL               string   `json:"kql"`
@@ -24,6 +26,7 @@ type searchReq struct {
 	End               string   `json:"end" binding:"required"`
 	Columns           []string `json:"columns"`
 	HistogramInterval string   `json:"histogram_interval"`
+	PageSize          int      `json:"page_size"`
 }
 
 // newRequestID 短请求 ID，用于串联 debug 日志。
@@ -123,12 +126,24 @@ func (h *Handler) SearchKQL(c *gin.Context) {
 	}
 	cachePut(rs)
 	log.Printf("[es:debug][%s] dsl=%s", reqID, string(mustJSON(body)))
+	// 响应只带第一页（默认 100）：缓存仍存整窗，后续增量走 /search/page 内存切片，前端不一次性接 1000 条
+	pageSize := req.PageSize
+	if pageSize <= 0 {
+		pageSize = esSearchDefaultPageSize
+	}
+	if pageSize > esPageMaxSize {
+		pageSize = esPageMaxSize
+	}
+	firstPage := rs.Hits
+	if len(firstPage) > pageSize {
+		firstPage = firstPage[:pageSize]
+	}
 	resp.OK(c, gin.H{
 		"result_id": rs.ResultID, "total": rs.Total,
 		"window": esResultWindow, "window_truncated": rs.Total > esResultWindow,
 		"view_id": rs.ViewID, "index_pattern": schema.Pattern, "time_field": schema.TimeField,
 		"start": req.Start, "start_ms": startMs, "end": req.End, "end_ms": endMs,
-		"columns": req.Columns, "hits": rs.Hits, "histogram": rs.Histogram,
+		"columns": req.Columns, "hits": firstPage, "page_size": pageSize, "histogram": rs.Histogram,
 	})
 }
 

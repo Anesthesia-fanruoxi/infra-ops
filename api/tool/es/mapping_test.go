@@ -105,6 +105,19 @@ func TestMergeFields_TruncatedStable(t *testing.T) {
 	}
 }
 
+// TestDropMetaFields 元字段（`_` 前缀）应被剔除：它们不在 _source，无法展示与检索。
+func TestDropMetaFields(t *testing.T) {
+	got := dropMetaFields(map[string]map[string]capInfo{
+		"@timestamp": {"date": cap("date", true, true)},
+		"_index":     {"_index": cap("_index", true, false)},
+		"_seq_no":    {"_seq_no": cap("_seq_no", true, false)},
+		"content":    {"text": cap("text", true, false)},
+	})
+	if len(got) != 2 || got["_index"] != nil || got["_seq_no"] != nil {
+		t.Fatalf("期望剔除元字段后剩 @timestamp/content，得到 %#v", got)
+	}
+}
+
 // TestPickTimeFields 时间字段候选排序：@timestamp 置顶，其次命名字段。
 func TestPickTimeFields(t *testing.T) {
 	fields := map[string]map[string]capInfo{
