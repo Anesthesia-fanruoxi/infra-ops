@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<!-- RabbitMQ 延迟队列插件 · 资产条渲染台。
+     目的：打开开关后资产条到底长什么样、有没有那两个按钮、有没有被压扁——开浏览器截图看，别凭想象。
+
+     用法（PowerShell / cmd 都行）：
+       "C:\Program Files\Google\Chrome\Application\chrome.exe" --headless=new --disable-gpu --no-sandbox \
+         --window-size=1000,340 --virtual-time-budget=6000 --dump-dom \
+         --screenshot=D:/tmp/asset-miss.png "file:///D:/project/go/infra-ops/script/measure_rb_asset_card.html"
+     参数：?plugin=false  开关未勾选（资产条不该出现，默认 true）
+           ?file=true    服务端已有该 .ez（已就绪态，默认 false=未就绪）
+           ?noshrink=true 反向验证：注入 flex-shrink:1 + overflow:hidden 复现「flex 塌陷」，
+                          此时 squashed 必须变 YES，否则这条版式结论没有鉴别力
+     输出：<pre id="out"> 内的断言与几何（也可用 --dump-dom 抓，比截图省事）。
+
+     两个必须踩对的细节（踩过）：
+     1) ctx 必须是 Vue.reactive —— 否则 assets()/checking() 这类 computed 无响应式依赖，
+        首帧求值后被永久缓存，检测结果写到 ctx 上也不会重渲染，永远停在「未能确定插件版本」。
+     2) 组件必须挂在「高度受限的 flex 列」里（复刻 .stk-param-step），且前面垫一个占位块制造
+        空间压力，否则量不出 flex-shrink 是否生效——挂 body 下也是量不出的。
+
+     注：只挂「资产条组件」本身，不驱动整个向导——file:// 下 el-dialog 是惰性渲染，
+         在里面用脚本走向导会踩到实例错位（已试过，不可靠）。「组件挂在第 3 步」这条
+         由 script/_fe_smoke.js 的第 10c/10d 项断言保证。 -->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>rb asset card</title>
+<link rel="stylesheet" href="../template/static/vendor/element-plus.css" />
+<link rel="stylesheet" href="../template/static/style.css" />
+<link rel="stylesheet" href="../template/static/stacks/common/common.css" />
+<link rel="stylesheet" href="../template/static/stacks/rabbitmq/style.css" />
+<style>
+  body { margin: 0; background: #fff; font: 13px/1.6 system-ui, sans-serif; }
+  #stage { padding: 12px 16px; }
+  /* 复刻 .stk-param-step：高度受限的滚动 flex 列，资产条是它的直接子项 */
+  .probe-col { height: 118px; min-height: 0; display: flex; flex-direction: column; overflow-y: auto;
+               border: 1px dashed #c9ced6; padding: 8px 10px; box-sizing: border-box; }
+  .probe-filler { flex: 0 0 auto; height: 150px; background: repeating-linear-gradient(45deg,#f2f4f7,#f2f4f7 6px,#e9ecf1 6px,#e9ecf1 12px);
+                  color: #8a94a6; font-size: 12px; line-height: 150px; text-align: center; }
+  pre#out { margin: 0; padding: 10px 16px; font: 12px/1.6 monospace; background: #f6f8fa; border-top: 1px solid #e5e7eb; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<div id="stage"><div id="app"></div></div>
+<pre id="out">pending</pre>
+
+<script>
+window.__ERR__ = ''
+function __pushErr(t) {
+  window.__ERR__ += t + '\n'
+  var o = document.getElementById('out'); if (o) o.textContent = window.__ERR__
+}
+window.onerror = function (m, s, l) { __pushErr('ERROR ' + m + ' @' + s + ':' + l) }
+window.addEventListener('unhandledrejection', function (e) { __pushErr('REJECT ' + ((e.reason && e.reason.message) || e.reason)) })
+</script>
+
+<script src="../template/static/vendor/vue.global.prod.js"></script>
+<script src="../template/static/vendor/element-plus.min.js"></script>
+<script src="../template/static/vendor/element-plus-zh-cn.min.js"></script>
+
+<script>
+;(function () {
+  var qs = new URLSearchParams(location.search)
+  var plugin = qs.get('plugin') !== 'false'
+  var fileExists = qs.get('file') === 'true'
+
+  window.__CALLS__ = []
+  window.ElMessage = window.ElMessage || ElementPlus.ElMessage
+
+  var ITEM = {
+    key: 'rabbitmq_delayed_message_exchange', version: '3.13.0',
+    file_name: 'rabbitmq_delayed_message_exchange-3.13.0.ez',
+    desc: '延迟队列插件（版本按镜像标签推导）',
+    satisfied: fileExists,
+    asset: fileExists ? { source: 'local', size_bytes: 45228 } : null
+  }
+  window.__ITEM__ = ITEM
+
+  // window.api：资产条组件内按全局标识符解析 api（写在 IIFE 里它会看不到，异常还被组件 catch 吞掉）
+  function stub() {
+    return function (url) {
+      window.__CALLS__.push(url)
+      if (url === '/stacks/assets/check') return Promise.resolve({ code: 0, data: { items: [ITEM] } })
+      return Promise.resolve({ code: 0, data: {} })
+    }
+  }
+  window.api = { get: stub(), post: stub(), put: stub(), delete: stub() }
+})()
+</script>
+
+<script src="../template/static/stacks/rabbitmq/assets.js"></script>
+
+<script>
+;(function () {
+  if (!window.StackFormRabbitmqAssets) { __pushErr('未加载 StackFormRabbitmqAssets'); return }
+  var qs = new URLSearchParams(location.search)
+  // 必须 reactive：见文件头注释 (1)
+  var ctx = Vue.reactive({
+    sharedParams: {
+      image: 'rabbitmq:3.13-management', admin_user: 'admin', admin_pass: 'pw',
+      amqp_port: '5672', delayed_plugin: qs.get('plugin') !== 'false' ? 'true' : 'false',
+      image_registry: ''
+    },
+    assetCheck: [], assetCheckBusy: false
+  })
+  window.__CTX__ = ctx
+
+  // 复刻骨架第 3 步：.stk-param-step 里先有一堆共享参数，套件插槽排在最后
+  var Host = {
+    props: ['ctx'],
+    components: { 'stack-form-rabbitmq-assets': window.StackFormRabbitmqAssets },
+    template: `  <div class="probe-col">
+    <div class="probe-filler">占位：同屏其它共享参数（制造空间压力）</div>
+    <stack-form-rabbitmq-assets :ctx="ctx" />
+  </div>`
+  }
+  try {
+    // 反向验证（?noshrink=true）：复现「flex 塌陷」的真实条件——flex-shrink:1 + overflow:hidden。
+    // 此时 squashed 必须变 YES，否则这条「没被压扁」的结论没有鉴别力。
+    // 说明：本组件当前 CSS 没有 overflow:hidden，所以只把 flex-shrink 改回 1 并不会塌陷
+    //      （自动最小尺寸 = 内容高度）；flex-shrink:0 是按项目铁律加的防御性约束，
+    //      一旦后续给它加 overflow 类属性，没有它就会塌成细线。
+    if (new URLSearchParams(location.search).get('noshrink') === 'true') {
+      var st = document.createElement('style')
+      st.textContent = '.stk-rb-assets { flex-shrink: 1 !important; overflow: hidden !important; }'
+      document.head.appendChild(st)
+      window.__INJ__ = 'flex-shrink:1 + overflow:hidden（复现塌陷条件）'
+    } else { window.__INJ__ = '无（出厂状态）' }
+    var app = Vue.createApp(Host, { ctx: ctx })
+    app.use(ElementPlus, { locale: ElementPlusLocaleZhCn })
+    app.mount('#app')
+  } catch (e) { __pushErr('MOUNT FAIL ' + e.message); return }
+
+  function run() {
+    // 滚到底：占位块把资产条顶出可视区了，截图要看得见它（真实场景里用户也是滚到底才看到开关）
+    var c = document.querySelector('.probe-col')
+    if (c) c.scrollTop = c.scrollHeight
+    var box = document.querySelector('.stk-rb-assets')
+    var miss = document.querySelector('.stk-rb-assets .stk-rb-asset.is-miss')
+    var ok = document.querySelector('.stk-rb-assets .stk-rb-asset.is-ok')
+    var idle = document.querySelector('.stk-rb-assets .stk-rb-asset.is-idle')
+    var btns = box ? Array.prototype.map.call(box.querySelectorAll('.el-button'), function (b) { return b.textContent.trim() }) : []
+    var r = box ? box.getBoundingClientRect() : null
+    var col = document.querySelector('.probe-col')
+    var colR = col ? col.getBoundingClientRect() : null
+    var scrollable = col ? col.scrollHeight > col.clientHeight + 1 : null
+    var out = [
+      'plugin = ' + ctx.sharedParams.delayed_plugin + '   fileExists = ' + window.__ITEM__.satisfied,
+      'assetsRoot(.stk-rb-assets) = ' + (box ? 'FOUND' : 'MISSING'),
+      'state = ' + (miss ? 'is-miss(未就绪)' : ok ? 'is-ok(已就绪)' : idle ? 'is-idle(检测中/无版本)' : '—'),
+      'title = ' + (document.querySelector('.stk-rb-asset-title') || {}).textContent,
+      'sub   = ' + (document.querySelector('.stk-rb-asset-sub') || {}).textContent,
+      'buttons = ' + JSON.stringify(btns),
+      'rect(top/h/w) = ' + (r ? [Math.round(r.top), Math.round(r.height), Math.round(r.width)].join(' / ') : '—'),
+      'squashed(被压扁?) = ' + (r ? (r.height < 24 ? 'YES' : 'no') : '—'),
+      '注入CSS(反向验证) = ' + window.__INJ__,
+      'container(h/clientH/scrollH) = ' + (colR ? [Math.round(colR.height), col.clientHeight, col.scrollHeight].join(' / ') : '—') + '   可滚动 = ' + scrollable,
+      'calls = ' + JSON.stringify(window.__CALLS__),
+      '自动代下次数(须为 0) = ' + window.__CALLS__.filter(function (u) { return u === '/stacks/assets/fetch' }).length,
+      window.__ERR__ ? 'ERR ' + window.__ERR__.trim() : 'err = none'
+    ]
+    document.getElementById('out').textContent = out.join('\n')
+    document.title = (box ? 'SHOWN' : 'MISSING') + ':' + (miss ? 'miss' : ok ? 'ok' : '-')
+  }
+  // 组件 mounted → debounce 300ms → 一次 await 往返
+  setTimeout(run, 800)
+})()
+</script>
+</body>
+</html>

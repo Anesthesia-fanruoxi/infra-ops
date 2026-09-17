@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<!-- 套件向导「第三步 填写参数」版式测量台（常驻）。
+     目的：动 .stk-param-step / .deploy-host-vars-list / .stk-wizard-dialog 的布局前先实测，
+     不再凭算术估算（该区域曾因估算返工多次）。
+
+     用法（PowerShell / cmd 都可）：
+       "C:\Program Files\Google\Chrome\Application\chrome.exe" --headless=new --disable-gpu --no-sandbox \
+         --window-size=1280,639 --virtual-time-budget=4000 \
+         --dump-dom "file:///D:/project/go/infra-ops/script/measure_wizard_layout.html?n=5"
+     参数：?n=主机数（默认 5） ?old=1 还原改版前（body 非 flex、列表 max-height:380px）
+     输出：<pre id="out"> 内的测量结果。 -->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>wizard param layout</title>
+<link rel="stylesheet" href="../template/static/vendor/element-plus.css" />
+<link rel="stylesheet" href="../template/static/style.css" />
+<link rel="stylesheet" href="../template/static/stacks/common/common.css" />
+<style>body { margin: 0; background: #f5f7fa; } pre#out { position: fixed; left: 0; top: 0; z-index: 99999; margin: 0; padding: 8px; font: 12px/1.5 monospace; background: #fff; white-space: pre; }</style>
+</head>
+<body>
+<pre id="out">pending</pre>
+<div class="el-overlay" style="z-index:2001">
+  <div class="el-overlay-dialog">
+    <div class="el-dialog stk-wizard-dialog" style="width:85%">
+      <header class="el-dialog__header"><span class="el-dialog__title">创建实例</span></header>
+      <div class="el-dialog__body">
+        <div class="stk-param-step">
+          <div class="deploy-host-vars-head"><span class="deploy-host-vars-title">集群名称</span></div>
+          <div class="deploy-host-var-fields stk-shared-fields" style="margin-bottom:12px">
+            <div class="deploy-host-var-field"><label>名称</label><div class="el-input el-input--small"><div class="el-input__wrapper"><input class="el-input__inner" placeholder="redis-1" /></div></div></div>
+          </div>
+          <div class="deploy-host-vars-head"><span class="deploy-host-vars-title">集群共享参数</span></div>
+          <div class="deploy-host-var-fields stk-shared-fields">
+            <div class="deploy-host-var-field"><label>端口</label><div class="el-input el-input--small"><div class="el-input__wrapper"><input class="el-input__inner" placeholder="6379" /></div></div></div>
+            <div class="deploy-host-var-field"><label>镜像</label><div class="el-input el-input--small"><div class="el-input__wrapper"><input class="el-input__inner" placeholder="redis:7" /></div></div></div>
+          </div>
+          <div class="deploy-host-vars-head" style="margin:16px 0 10px">
+            <span class="deploy-host-vars-title">每台主机 <span class="deploy-var-hint">留空则使用默认值</span></span>
+            <button class="el-button el-button--small"><span>复制首台到其他</span></button>
+          </div>
+          <div class="deploy-host-vars-list" id="list"></div>
+        </div>
+      </div>
+      <footer class="el-dialog__footer">
+        <div class="deploy-wizard-footer">
+          <span class="deploy-action-hint-inline"></span>
+          <div>
+            <button class="el-button"><span>取消</span></button>
+            <button class="el-button"><span>上一步</span></button>
+            <button class="el-button el-button--primary" id="primary"><span>开始部署</span></button>
+          </div>
+        </div>
+      </footer>
+    </div>
+  </div>
+</div>
+<script>
+;(function () {
+  var qs = new URLSearchParams(location.search)
+  var n = parseInt(qs.get('n') || '5', 10)
+  var old = qs.get('old') === '1'
+  if (old) {
+    var s = document.createElement('style')
+    s.textContent = '.stk-wizard-dialog .el-dialog__body{display:block}' +
+      '.stk-wizard-dialog .el-dialog__body>*{flex:none}' +
+      '.stk-wizard-dialog .el-dialog__body>.stk-param-step{display:block;overflow:visible}' +
+      '.stk-param-step .deploy-host-vars-list{flex:none;min-height:0;max-height:380px}' +
+      '.stk-wizard-dialog .el-dialog__footer{border-top:none;padding-top:10px}'
+    document.head.appendChild(s)
+  }
+  var list = document.getElementById('list')
+  var ips = ['192.168.3.40', '192.168.3.41', '192.168.3.42', '192.168.3.43', '192.168.3.44', '192.168.3.45']
+  var html = ''
+  for (var i = 0; i < n; i++) {
+    html += '<div class="deploy-host-var-row">' +
+      '<div class="deploy-host-var-rowhead"><span class="deploy-host-name">' + ips[i % 6] + '</span>' +
+      '<span class="mono deploy-host-ip">' + ips[i % 6] + '</span>' +
+      '<span class="el-tag el-tag--small el-tag--danger el-tag--plain"><span class="el-tag__content">主节点</span></span></div>' +
+      '<div class="deploy-host-var-fields">' +
+      '<div class="deploy-host-var-field"><label>端口</label><div class="el-input el-input--small"><div class="el-input__wrapper"><input class="el-input__inner" /></div></div></div>' +
+      '<div class="deploy-host-var-field"><label>数据目录</label><div class="el-input el-input--small"><div class="el-input__wrapper"><input class="el-input__inner" placeholder="~/redis/data" /></div></div></div>' +
+      '</div></div>'
+  }
+  list.innerHTML = html
+
+  function box(el) { var r = el.getBoundingClientRect(); return { top: r.top, bottom: r.bottom, h: r.height, w: r.width } }
+  function line(k, v) { return k + ' = ' + v + '\n' }
+
+  setTimeout(function () {
+    var body = document.querySelector('.el-dialog__body')
+    var footer = document.querySelector('.el-dialog__footer')
+    var step = document.querySelector('.stk-param-step')
+    var lb = box(list), bb = box(body), fb = box(footer), sb = box(step)
+    var btn = box(document.getElementById('primary'))
+    var cs = getComputedStyle(list)
+    var out = ''
+    out += line('viewport', window.innerWidth + 'x' + window.innerHeight)
+    out += line('mode', old ? 'OLD(max-height:380px, body block)' : 'NEW(flex fill)')
+    out += line('hosts', n)
+    out += line('dialog', JSON.stringify(box(document.querySelector('.el-dialog'))))
+    out += line('body', JSON.stringify(bb) + ' display=' + getComputedStyle(body).display)
+    out += line('step', JSON.stringify(sb))
+    out += line('list', JSON.stringify(lb))
+    out += line('list.maxHeight/clientHeight/scrollHeight', cs.maxHeight + ' / ' + list.clientHeight + ' / ' + list.scrollHeight)
+    out += line('listScrollable', list.scrollHeight > list.clientHeight + 1)
+    out += line('footer', JSON.stringify(fb) + ' borderTop=' + getComputedStyle(footer).borderTopWidth + ' ' + getComputedStyle(footer).borderTopStyle)
+    out += line('primaryBtn', JSON.stringify(btn))
+    out += line('GAP list.bottom -> footer.top', (fb.top - lb.bottom).toFixed(1))
+    out += line('GAP dashedLine -> btn.top', (btn.top - fb.top).toFixed(1))
+    out += line('GAP step.bottom -> footer.top', (fb.top - sb.bottom).toFixed(1))
+    out += line('blankBelowListInStep', (sb.bottom - lb.bottom).toFixed(1))
+    document.getElementById('out').textContent = out
+    document.title = 'm:' + lb.h.toFixed(0) + '/' + (fb.top - lb.bottom).toFixed(0)
+  }, 300)
+})()
+</script>
+</body>
+</html>

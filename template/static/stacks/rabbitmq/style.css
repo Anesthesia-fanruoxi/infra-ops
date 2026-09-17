@@ -1,3 +1,39 @@
 /* RabbitMQ 套件样式表（设计文档 §4.2 / §5.4：每套件一份 css、前缀 .stk-<key简写>-*）。
-   该套件当前没有独立于通用骨架的样式；保留本文件以维持目录约定，
-   后续该套件新增样式一律写在这里，不再回填全站 style.css。 */
+   新增样式一律写在这里，不再回填全站 style.css。 */
+
+/* 第二步资产条（延迟队列插件 .ez）：绿=已就绪（部署时自动分发），橙=未准备（可上传/服务端下载） */
+/* flex-shrink:0 —— 本组件是 .stk-param-step（高度受限的滚动 flex 列）的直接子项，
+   不锁死收缩会被主机列表挤成一条细线（项目已踩过的 flex 塌陷） */
+.stk-rb-assets { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; flex-shrink: 0; }
+
+.stk-rb-assets-head { font-size: 12.5px; font-weight: 600; }
+
+.stk-rb-assets-head .faint { margin-left: 8px; font-weight: 400; }
+
+.stk-rb-asset {
+  display: flex; align-items: center; gap: 10px; padding: 9px 12px;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--bg-card);
+}
+
+.stk-rb-asset.is-ok { border-color: #bfe3c8; background: var(--ok-soft, #f2fbf4); }
+
+.stk-rb-asset.is-miss { border-color: #f0d9a8; background: var(--warn-soft, #fffaf0); }
+
+.stk-rb-asset-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+
+.stk-rb-asset.is-ok .stk-rb-asset-dot { background: var(--el-color-success, #67c23a); }
+
+.stk-rb-asset.is-miss .stk-rb-asset-dot { background: var(--el-color-warning, #e6a23c); }
+
+/* 中性态：正在检测 / 未能确定版本（既非就绪也非缺失） */
+.stk-rb-asset.is-idle { border-style: dashed; }
+
+.stk-rb-asset.is-idle .stk-rb-asset-dot { background: var(--text-sub, #909399); }
+
+.stk-rb-asset-body { flex: 1; min-width: 0; }
+
+.stk-rb-asset-title { font-size: 12.5px; font-weight: 600; }
+
+.stk-rb-asset-sub { margin-top: 2px; font-size: 11.5px; color: var(--text-sub); line-height: 1.4; }
+
+.stk-rb-asset .el-button + .el-button { margin-left: 0; }

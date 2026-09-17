@@ -9,8 +9,8 @@
           const hp = this.hostParams[h.id] || {}
           return String(hp.roles || '').split(',').map(s => s.trim()).includes('master')
         })
-        if (!hasMaster) return '请在上方主机行勾选至少 1 台「master 候选」（数量已满足，最少 ' + this.minHosts + ' 台）'
-        return '请在上方主机行勾选数据层角色（hot/warm/cold 至少 1 台）'
+        if (!hasMaster) return '请在角色矩阵中至少勾选 1 个「master 候选」容器（生产建议 ≥3 台奇数；最少主机 ' + this.minHosts + ' 台）'
+        return '请在角色矩阵中勾选数据层角色（hot/warm/cold 至少 1 个容器）'
       }
     }
   })

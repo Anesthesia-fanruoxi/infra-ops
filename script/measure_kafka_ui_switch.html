@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<!-- 常驻测量台：KafkaUI 开关（第一步「部署模式」卡片区第三张卡）行为验证。
+     用真实 vendor(Vue3 + Element Plus) + 真实 parts.js/wizard.js/select.js 挂载，
+     依次点击开关与整张卡片，断言 sharedParams.enable_ui、开关 is-checked、卡片选中态是否翻转。
+     用途：这类「点了没反应」的故障在 prod 构建下会被静默吞掉（window.onerror 收不到），
+     只能靠真实渲染 + 真实点击复现；同时输出 instanceHas$set，可直接判定骨架是否用了 Vue 2 API。
+
+     用法：
+       chrome.exe --headless=new --disable-gpu --no-sandbox --allow-file-access-from-files \
+         --virtual-time-budget=6000 --dump-dom "file:///…/script/measure_kafka_ui_switch.html"
+     预期（修复后）：afterSwitchClick_value=true / checked=true / cardSel=true，
+                     afterCardClick_value=false / checked=false，errors=none
+     对照（把 onBoolVar 换回 this.$set）：afterSwitchClick_value 仍为 false —— 即「点击不生效」。 -->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="../template/static/vendor/element-plus.css">
+<script src="../template/static/vendor/vue.global.prod.js"></script>
+<script src="../template/static/vendor/element-plus.min.js"></script>
+<script src="../template/static/stacks/common/parts.js"></script>
+<script src="../template/static/stacks/common/wizard.js"></script>
+<script src="../template/static/stacks/kafka/select.js"></script>
+<style>body{font-family:monospace;padding:12px} pre{white-space:pre-wrap}</style>
+</head>
+<body>
+<div id="app"><stack-form-kafka-select :ctx="self" /></div>
+<pre id="result">running…</pre>
+<script>
+window.__err = ''
+window.addEventListener('error', e => { window.__err += ' | ' + e.message })
+
+// 取真实骨架里的 onBoolVar（wizard.js 的 mixin 实现），不复制粘贴
+const mixin = window.StacksParts.mixins.find(m => m.methods && m.methods.onBoolVar)
+const realOnBoolVar = mixin && mixin.methods.onBoolVar
+
+const app = Vue.createApp({
+  components: { 'stack-form-kafka-select': window.StackFormKafkaSelect },
+  data() {
+    return {
+      sharedParams: { enable_ui: 'false', ui_port: '8080', image: 'apache/kafka:3.7.0' },
+      selectedStack: { modes: [
+        { key: 'kraft', label: 'KRaft 集群', description: 'Kafka 3.x 内置仲裁', host_hint: '生产建议 ≥3 台' },
+        { key: 'zk', label: 'ZooKeeper 集群', description: '每台一个 ZK 节点', host_hint: '生产建议 3 或 5 台' }
+      ] },
+      selectedHosts: [], mode: 'kraft'
+    }
+  },
+  computed: { self() { return this } },
+  methods: { onBoolVar: realOnBoolVar },
+  template: '<stack-form-kafka-select :ctx="self" />'
+})
+app.use(ElementPlus)
+const vm = app.mount('#app')
+
+const out = {}
+const click = el => el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+const q = s => document.querySelector(s)
+
+;(async () => {
+  out.realOnBoolVarFound = typeof realOnBoolVar === 'function'
+  out.instanceHas$set = typeof vm.$set
+  await Vue.nextTick()
+
+  const card = q('.stk-kafka-ui-card')
+  const sw = q('.stk-kafka-ui-card .el-switch')
+  out.uiCardCount = document.querySelectorAll('.stk-kafka-ui-card').length
+  out.allCardsInGrid = document.querySelectorAll('.stk-mode-grid > .stk-mode').length
+  out.switchFound = !!sw
+  out.checkedBefore = sw && sw.classList.contains('is-checked')
+
+  click(sw)
+  await Vue.nextTick(); await Vue.nextTick()
+  out.afterSwitchClick_value = vm.sharedParams.enable_ui
+  out.afterSwitchClick_checked = q('.stk-kafka-ui-card .el-switch').classList.contains('is-checked')
+  out.afterSwitchClick_cardSel = q('.stk-kafka-ui-card').classList.contains('stk-mode--sel')
+
+  click(q('.stk-kafka-ui-card .stk-kafka-ui-name'))
+  await Vue.nextTick(); await Vue.nextTick()
+  out.afterCardClick_value = vm.sharedParams.enable_ui
+  out.afterCardClick_checked = q('.stk-kafka-ui-card .el-switch').classList.contains('is-checked')
+
+  out.uiUrlHint = (q('.stk-kafka-ui-card .faint') || {}).textContent
+  out.errors = window.__err || 'none'
+  document.getElementById('result').textContent = JSON.stringify(out, null, 1)
+})()
+</script>
+</body>
+</html>

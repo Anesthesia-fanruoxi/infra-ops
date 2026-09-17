@@ -81,19 +81,46 @@
 
 .stk-wizard-dialog .el-dialog__header { flex-shrink: 0; }
 
-.stk-wizard-dialog .el-dialog__body { flex: 1; overflow-y: auto; min-height: 0; }
+.stk-wizard-dialog .el-dialog__body { flex: 1; overflow-y: auto; min-height: 0; display: flex; flex-direction: column; }
 
-.stk-wizard-dialog .el-dialog__footer { flex-shrink: 0; }
+/* 各步骤根节点按内容自然高度排布（超出时由 body 滚动，不压缩内容） */
+.stk-wizard-dialog .el-dialog__body > * { flex: 0 0 auto; }
 
-.stk-cat { margin-bottom: 18px; }
+/* 第三步（填写参数）：让参数内容向下铺满弹框剩余高度——
+   集群名称 / 共享参数 / 标题等固定高度不动，主机列表吸收剩余空间并在内部滚动，
+   避免主机少时下方留出大片空白。
+   两道安全阀：① 列表自身保底 160px 不被压扁；② 弹框太矮时改由本步骤整体滚动，
+   不会把列表挤到 0 高而溢到页脚上。 */
+.stk-wizard-dialog .el-dialog__body > .stk-param-step { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; overflow-y: auto; }
 
-.stk-cat:last-of-type { margin-bottom: 0; }
+.stk-param-step .deploy-host-vars-list { flex: 1 1 auto; min-height: 160px; max-height: none; }
 
-.stk-cat-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 10px; }
+/* 底部按钮区：虚线顶边标记内容末尾（滚动区到此为止） */
+.stk-wizard-dialog .el-dialog__footer { flex-shrink: 0; border-top: 1px dashed var(--border); padding-top: 14px; }
 
-.stk-cat-title { font-size: 13px; font-weight: 700; letter-spacing: 0.04em; }
+/* 第一步分类标签页（全部 / 单服务集群 / 组合套件…）：点击筛选平铺卡片，不再分层堆叠分组标题。
+   样式对齐模板页 .tpl-filter-tab 的胶囊标签 */
+.stk-cat-tabs { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px solid var(--border); }
 
-.stk-cat-hint { font-size: 12px; color: var(--text-faint); }
+.stk-cat-tab { display: inline-flex; align-items: center; gap: 6px; border: none; background: transparent; padding: 5px 13px; border-radius: 16px; font-size: 12.5px; color: var(--text-sub); cursor: pointer; transition: all .15s ease; }
+
+.stk-cat-tab:hover { color: var(--brand); background: var(--brand-soft); }
+
+.stk-cat-tab--active { color: #fff; background: var(--brand); font-weight: 600; }
+
+.stk-cat-tab-num { font-size: 11px; font-weight: 600; padding: 0 7px; border-radius: 9px; background: var(--bg-faint); color: var(--text-sub); }
+
+.stk-cat-tab--active .stk-cat-tab-num { background: rgba(255,255,255,.26); color: #fff; }
+
+.stk-cat-summary { display: flex; align-items: baseline; gap: 8px; margin-bottom: 12px; }
+
+.stk-cat-summary-label { font-size: 12px; font-weight: 700; letter-spacing: 0.04em; color: var(--text-sub); }
+
+.stk-cat-summary-text { font-size: 12px; color: var(--text-faint); }
+
+.stk-card-meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+
+.stk-cat-chip { font-size: 11px; padding: 2px 8px; border-radius: 10px; background: var(--bg-faint); color: var(--text-sub); }
 
 .stk-card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
 
@@ -280,6 +307,18 @@
 .stk-verify-dialog .el-dialog__body { max-height: calc(84vh - 140px); overflow-y: auto; padding: 0 20px; }
 
 .stk-verify-body { padding: 4px 0 8px; }
+
+
+
+/* ===== 第 2 步两栏布局（倒品字，套件 forms.step2Split 开启） ===== */
+/* 上左=主机勾选、上右=套件表单（order 调换，DOM 保持表单在前以便未开启时沿用原顺序），下方通栏为角色计划预览 */
+.stk-step2-slot-host, .stk-step2-slot-form { min-width: 0; }
+
+.stk-step2-grid--split { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-start; }
+
+.stk-step2-grid--split .stk-step2-slot-host { order: 1; flex: 1 1 40%; min-width: 330px; }
+
+.stk-step2-grid--split .stk-step2-slot-form { order: 2; flex: 1.25 1 52%; min-width: 430px; }
 
 
 

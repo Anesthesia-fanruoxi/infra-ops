@@ -167,7 +167,8 @@ const app = createApp({
   }
 })
 
-app.use(ElementPlus)
+// 全局中文语言包（vendor/element-plus-zh-cn.min.js）：日期选择器/分页等组件文案走中文
+app.use(ElementPlus, { locale: ElementPlusLocaleZhCn })
 // 注册全部图标为全局组件（支持 prefix-icon="Lock" 等字符串引用）
 for (const [name, comp] of Object.entries(ElementPlusIconsVue)) {
   app.component(name, comp)

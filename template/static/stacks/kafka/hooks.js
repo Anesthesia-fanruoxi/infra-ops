@@ -1,17 +1,23 @@
-// Redis 套件 · 扩展点：成员角色文案、探活端点合成、主从「复制」列名，
-// 以及哨兵模式的组件页签（Redis 实体与 Sentinel 是两个独立容器/进程，分开看）。
+// Kafka 套件 · 扩展点：探活接入端点合成，以及多组件主机的组件页签。
+//
 // 组件归属由后端 probe.go 在端点与检查项上打 component；骨架 common/verify-dialog.js
 // 的 probeAttributed 会自动剔除探活结果里无归属的空壳页签。
+// 后端检查项命名约定：每台主机每个组件一条「实例」（明细以容器名开头），
+// 故组件页签的容器列直接取自该检查项。
 ;(function () {
   const P = (window.StacksParts = window.StacksParts || {})
 
-  const COMP_LABELS = { redis: 'Redis', sentinel: 'Sentinel' }
-  // 只有哨兵模式一台主机上同时跑两个组件；主从/集群只有 Redis 本体，不用页签（走整体视图）
-  const useTabs = (ctx) => ctx.verifyTarget?.stack_key === 'redis' && ctx.verifyTarget?.mode === 'sentinel'
+  const COMP_LABELS = { kafka: 'Kafka Broker', zookeeper: 'ZooKeeper', ui: 'KafkaUI' }
+  const yes = (v) => ['yes', 'true', '1', 'on'].includes(String(v == null ? '' : v).trim().toLowerCase())
+
+  // 需要分页签的两种情况：zk 模式一台主机跑 Kafka + ZooKeeper；任意模式开了 KafkaUI
+  // 后首台多一个 UI 容器。两者都静态可判，页签不会在探活返回后才「跳出来」。
+  const useTabs = (ctx) => ctx.verifyTarget?.stack_key === 'kafka' &&
+    (ctx.verifyTarget?.mode === 'zk' || yes(ctx.verifyParams?.enable_ui))
 
   function verifyComponents(ctx) {
     if (!useTabs(ctx)) return []
-    return ['redis', 'sentinel'].map(k => ({ key: k, label: COMP_LABELS[k] }))
+    return ['kafka', 'zookeeper', 'ui'].map(k => ({ key: k, label: COMP_LABELS[k] }))
   }
 
   function verifyCompEndpoints(ctx) {
@@ -32,7 +38,7 @@
     return Array.from(map.values())
   }
 
-  // 组件视角的节点表：只统计本组件的检查项（哨兵页签不受 Redis 复制状态影响，反之亦然）
+  // 组件视角的节点表：只统计本组件的检查项（ZooKeeper 页签不受 Kafka 容器状态影响，反之亦然）
   function verifyCompHostRows(ctx) {
     const comp = ctx.verifyActiveTab
     if (!comp || comp === 'all') return []
@@ -42,7 +48,9 @@
       const compChecks = (h.checks || []).filter(c => c.component === comp)
       if (!compChecks.length) continue
       const f = fullMap[h.host_ip] || {}
-      const containers = compChecks.filter(c => c.ok && /^容器\s/.test(c.name)).map(c => c.name.replace(/^容器\s*/, ''))
+      // 容器名取「实例」检查项明细的首段（后端格式：<容器名> <状态>）
+      const containers = compChecks.filter(c => c.ok && c.name === '实例')
+        .map(c => String(c.detail || '').trim().split(/\s+/)[0]).filter(Boolean)
       const uptime = f.uptime || '-'
       out.push({
         ip: h.host_ip, host_name: h.host_name,
@@ -58,29 +66,26 @@
     return out
   }
 
-  P.register('redis', {
+  P.register('kafka', {
     hooks: {
-      // 主从 / 哨兵模式下非主节点为「从」；集群模式交还骨架的「工作节点」
-      memberRoleTag(isMaster) {
-        if (isMaster) return ''
-        return (this.mode === 'replication' || this.mode === 'sentinel') ? '从' : ''
-      },
-      // 探活接入地址：redis:// + 哨兵模式的 redis-sentinel://（component 决定页签归属）
+      // 探活接入地址兜底（后端已实现 EndpointProvider，正常路径走 verifyResult.endpoints）：
+      // 两模式都给 kafka://，zk 模式追加 zookeeper://，开启 KafkaUI 时首台追加 http://
       endpointFor(h, hp, p, pt) {
         const it = this.verifyTarget
-        const isMaster = h.role === 'master'
-        const name = (it.mode === 'replication' || it.mode === 'sentinel')
-          ? (isMaster ? 'Redis 主' : 'Redis 从')
-          : 'Redis'
-        const out = [{ name, component: 'redis', url: 'redis://' + h.host_ip + ':' + pt, role: h.role, host_ip: h.host_ip, host_name: h.host_name }]
-        if (it.mode === 'sentinel') {
-          out.push({ name: 'Sentinel', component: 'sentinel', url: 'redis-sentinel://' + h.host_ip + ':' + (hp.sentinel_port || p.sentinel_port || '26379'), role: h.role, host_ip: h.host_ip, host_name: h.host_name })
+        const base = { role: h.role, host_ip: h.host_ip, host_name: h.host_name }
+        const out = [{ name: 'Kafka Broker', component: 'kafka', url: 'kafka://' + h.host_ip + ':' + pt, ...base }]
+        if (it.mode === 'zk') {
+          out.push({ name: 'ZooKeeper', component: 'zookeeper', url: 'zookeeper://' + h.host_ip + ':' + (hp.zk_port || p.zk_port || '2181'), ...base })
+        }
+        if (yes(p.enable_ui)) {
+          const hosts = (it.hosts || []).filter(x => x.status !== 'removed')
+          if (hosts.length && hosts[0].id === h.id) {
+            out.push({ name: 'KafkaUI', component: 'ui', url: 'http://' + h.host_ip + ':' + (hp.ui_port || p.ui_port || '8080'), ...base })
+          }
         }
         return out
       },
-      // 节点结果表的实例列：redis 下语义为「复制」
-      verifyCountLabel() { return '复制' },
-      // —— 探活组件页签（仅哨兵模式）——
+      // —— 探活组件页签 ——
       verifyTabbed() { return useTabs(this) },
       verifyComponents() { return verifyComponents(this) },
       currentVerifyCompLabel() {
@@ -90,7 +95,7 @@
       verifyCompEndpoints() { return verifyCompEndpoints(this) },
       verifyCompEndpointsByHost() { return verifyCompEndpointsByHost(this) },
       verifyCompHostRows() { return verifyCompHostRows(this) },
-      // 组件视角该列是容器（Redis 实体 / Sentinel 各一个），不是「复制」
+      // 组件视角该列是本组件的容器（Kafka / ZooKeeper / UI 各一个），不是骨架默认的「实例」
       verifyCompCountLabel() { return '容器' }
     }
   })

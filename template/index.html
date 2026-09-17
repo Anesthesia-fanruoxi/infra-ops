@@ -64,6 +64,8 @@
   <link rel="stylesheet" href="/static/stacks/bigdata/style.css">
 
   <!-- ===== 套件：Kafka ===== -->
+  <script src="/static/stacks/kafka/hooks.js"></script>
+  <script src="/static/stacks/kafka/select.js"></script>
   <script src="/static/stacks/kafka/index.js"></script>
   <link rel="stylesheet" href="/static/stacks/kafka/style.css">
 
@@ -74,7 +76,9 @@
   <script src="/static/stacks/elasticsearch/index.js"></script>
   <link rel="stylesheet" href="/static/stacks/elasticsearch/style.css">
 
-  <!-- ===== 套件：RabbitMQ ===== -->
+  <!-- ===== 套件：RabbitMQ =====
+       组件文件先于 index.js（组件在各自文件内自注册，顺序仅需早于挂载壳）。 -->
+  <script src="/static/stacks/rabbitmq/assets.js"></script>
   <script src="/static/stacks/rabbitmq/index.js"></script>
   <link rel="stylesheet" href="/static/stacks/rabbitmq/style.css">
 
