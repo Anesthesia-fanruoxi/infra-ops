@@ -135,6 +135,7 @@ func Setup(staticFS fs.FS, deps Deps) *gin.Engine {
 	deployTaskHandler.StartScheduler()
 	deploySchedHandler := deploy.NewDeployScheduleHandler(scheduleRepo, deployRepo, deployTaskHandler)
 	protected.POST("/deploy/run", deployTaskHandler.Run)
+	protected.GET("/deploy/registries", deployTaskHandler.Registries)
 	protected.GET("/deploy/tasks", deployTaskHandler.Tasks)
 	protected.GET("/deploy/tasks/:id", deployTaskHandler.TaskDetail)
 	sched := protected.Group("/deploy/schedules")
@@ -184,7 +185,6 @@ func Setup(staticFS fs.FS, deps Deps) *gin.Engine {
 		stacks.POST("/instances/:id/uninstall", stackHandler.Uninstall)
 		stacks.POST("/instances/:id/reinstall", stackHandler.Reinstall)
 		stacks.POST("/instances/:id/verify", stackHandler.VerifyInstance)
-		stacks.GET("/instances/:id/ca", stackHandler.CaCert)
 		stacks.GET("/instances/:id/runs", stackHandler.InstanceRuns)
 		// 角色计划（docs/角色物化设计.md §4.5）
 		stacks.POST("/plan/preview", stackHandler.PlanPreview)

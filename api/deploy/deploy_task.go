@@ -3,8 +3,10 @@ package deploy
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -57,6 +59,9 @@ type runReq struct {
 	HostParams  map[int64]map[string]string `json:"host_params"`  // 主机级变量覆盖 host_id -> {k:v}
 	Configs     map[string]string           `json:"configs"`      // 任务级自定义配置 config_key -> 内容（非空则覆盖默认配置文件）
 	HostConfigs map[int64]map[string]string `json:"host_configs"` // 主机级自定义配置覆盖 host_id -> {key: content}
+	HubHostID   int64                       `json:"hub_host_id"`  // 镜像源 hub 主机（须已登记 Docker Registry）；0=直连拉取
+	// 目标机未信任 hub 地址时是否自动写 daemon.json 并重启 Docker（会短暂中断该机容器）
+	HubAutoInsecure bool `json:"hub_auto_insecure"`
 }
 
 // deployProgress SSE 推送的进度事件。
@@ -94,7 +99,8 @@ func (h *deployHandler) Run(c *gin.Context) {
 		resp.Fail(c, resp.CodeNotFound, "模板不存在")
 		return
 	}
-	taskID, err := h.createAndRun(tpl, req.HostIDs, req.Params, req.HostParams, req.Configs, req.HostConfigs, "manual", 0, c.ClientIP())
+	taskID, err := h.createAndRun(tpl, req.HostIDs, req.Params, req.HostParams, req.Configs, req.HostConfigs,
+		req.HubHostID, req.HubAutoInsecure, "manual", 0, c.ClientIP())
 	if err != nil {
 		resp.Fail(c, resp.CodeBadRequest, err.Error())
 		return
@@ -106,11 +112,27 @@ func (h *deployHandler) Run(c *gin.Context) {
 // 主机列表允许为空：任务照常创建并落执行记录（total=0）。
 // hostParams 为逐主机变量覆盖（host_id -> {k:v}），为空则所有主机共用 params。
 // configs/hostConfigs 为任务级/主机级自定义配置覆盖（config_key -> 内容），非空内容会在渲染期覆盖默认配置文件。
+// hubHostID>0 时启用「hub 镜像主机」：各主机 image 变量改写为 hub 仓库地址，原始镜像清单随任务参数持久化供预热。
 func (h *deployHandler) createAndRun(tpl *model.DeployTemplate, hostIDs []int64,
 	params map[string]string, hostParams map[int64]map[string]string,
 	taskConfigs map[string]string, hostConfigs map[int64]map[string]string,
+	hubHostID int64, hubAutoInsecure bool,
 	triggerType string, scheduleID int64, remoteIP string) (int64, error) {
 	ids := DedupInt64(hostIDs)
+
+	// hub 镜像源解析：地址 + image 变量改写准备（v1 仅覆盖模板声明的 image 变量）
+	var hub *hubRegistry
+	if hubHostID > 0 {
+		if !templateHasVar(tpl, "image") {
+			return 0, errors.New("该模板没有 image 变量，不支持指定 hub 镜像主机")
+		}
+		hr, err := h.resolveHubRegistry(hubHostID)
+		if err != nil {
+			return 0, err
+		}
+		hub = hr
+	}
+	originalImages := map[string]bool{} // 任务内去重后的原始镜像清单（预热用）
 
 	var hosts []model.DeployTaskHost
 	for _, id := range ids {
@@ -131,6 +153,15 @@ func (h *deployHandler) createAndRun(tpl *model.DeployTemplate, hostIDs []int64,
 		for k, v := range cfgMerged {
 			merged["__cfg."+k] = v
 		}
+		if hub != nil {
+			orig := merged["image"]
+			addr := hub.remote
+			if hh.ID == hubHostID {
+				addr = hub.local // hub 自身同时是目标机：走 127.0.0.1（docker 对 localhost 免 insecure 配置）
+			}
+			merged["image"] = addr + "/" + trimRegistryDomain(orig)
+			originalImages[orig] = true
+		}
 		if _, err := RenderScript(tpl.Script, tpl.Variables, merged); err != nil {
 			return 0, fmt.Errorf("主机 %s 变量校验失败: %w", hh.Name, err)
 		}
@@ -141,10 +172,24 @@ func (h *deployHandler) createAndRun(tpl *model.DeployTemplate, hostIDs []int64,
 		})
 	}
 
-	taskParamsJSON, _ := json.Marshal(params)
+	taskParams := params
+	if hub != nil {
+		tp := make(map[string]string, len(params)+3)
+		for k, v := range params {
+			tp[k] = v
+		}
+		tp["__hub_images"] = strings.Join(mapKeysSorted(originalImages), ",")
+		tp["__hub_addr"] = hub.remote
+		if hubAutoInsecure {
+			tp["__hub_auto_insecure"] = "1"
+		}
+		taskParams = tp
+	}
+	taskParamsJSON, _ := json.Marshal(taskParams)
 	task := &model.DeployTask{
 		TemplateID: tpl.ID, TemplateName: tpl.Name, Total: len(hosts),
 		TriggerType: triggerType, ScheduleID: scheduleID, ParamsJSON: string(taskParamsJSON),
+		HubHostID: hubHostID,
 	}
 	taskID, err := h.tplRepo.CreateTask(task, hosts)
 	if err != nil {
@@ -152,6 +197,9 @@ func (h *deployHandler) createAndRun(tpl *model.DeployTemplate, hostIDs []int64,
 	}
 
 	detail := fmt.Sprintf("template=%s hosts=%d", tpl.Name, len(hosts))
+	if hub != nil {
+		detail += fmt.Sprintf(" hub=%s(%s)", hub.IP, hub.remote)
+	}
 	if triggerType == "schedule" {
 		detail += fmt.Sprintf(" trigger=schedule:%d", scheduleID)
 	}
@@ -195,6 +243,7 @@ func (h *deployHandler) TaskDetail(c *gin.Context) {
 		"id": task.ID, "template_id": task.TemplateID, "template_name": task.TemplateName,
 		"status": task.Status, "total": task.Total, "success_cnt": task.SuccessCnt,
 		"fail_cnt": task.FailCnt, "created_at": task.CreatedAt, "finished_at": task.FinishedAt,
-		"hosts": hosts,
+		"hub_host_id": task.HubHostID,
+		"hosts":       hosts,
 	})
 }

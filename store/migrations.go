@@ -36,6 +36,13 @@ var migrations = []migration{
 	{26, migrateV26},
 	{27, migrateV27},
 	{28, migrateV28},
+	{29, migrateV29},
+}
+
+// migrateV29 部署任务增加 hub_host_id：选中已部署 Docker Registry 的主机作为镜像源时记录，
+// 0 表示直连拉取。镜像预热与目标机信任配置不落库（执行期行为，日志留痕）。
+func migrateV29(db *sql.DB) error {
+	return addColumnIfMissing(db, "deploy_tasks", "hub_host_id", `INTEGER NOT NULL DEFAULT 0`)
 }
 
 // migrateV28 部署资产：套件离线物料登记（上传 / 服务端代下），部署时引擎经 SFTP 分发到目标机；

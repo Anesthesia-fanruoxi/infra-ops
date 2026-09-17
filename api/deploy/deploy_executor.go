@@ -24,6 +24,19 @@ func (h *deployHandler) execute(taskID int64) {
 	task, _ := h.tplRepo.GetTask(taskID) // 用于成功后写入主机安装标记
 	tpl, _ := h.tplRepo.GetTemplate(task.TemplateID)
 
+	// hub 镜像源：执行前串行做健康校验 + 镜像预热，任一失败整体中止（不回退直连拉取）
+	hubHostID, hubAddr, hubAutoInsecure := int64(0), "", false
+	if task != nil && task.HubHostID > 0 {
+		hubHostID = task.HubHostID
+		hubAutoInsecure = hubFlagFromParams(task.ParamsJSON)
+		if addr, msg := h.hubPhase(taskID, task); msg != "" {
+			h.abortAllHosts(taskID, records, msg)
+			return
+		} else {
+			hubAddr = addr
+		}
+	}
+
 	var mu sync.Mutex
 	successCnt, failCnt := 0, 0
 	publish := func(rec repo.HostRecord, status, output, errMsg string) {
@@ -125,6 +138,13 @@ func (h *deployHandler) execute(taskID int64) {
 				publish(rec, "failed", "", "前置依赖不满足："+hint)
 				return
 			}
+			// hub 模式：目标机（hub 自身除外）须信任 hub 仓库地址（HTTP 明文仓库的硬前提）
+			if hubHostID > 0 && rec.HostID != hubHostID {
+				if hint := h.ensureInsecureRegistry(taskID, rec, hubAddr, hubAutoInsecure); hint != "" {
+					publish(rec, "failed", "", hint)
+					return
+				}
+			}
 			h.appendLog(taskID, rec.HostID, rec.HostIP, "开始执行")
 			output, execErr := h.execOnHost(rec.HostID, rendered, onLog)
 			status, errMsg := "success", ""
@@ -183,4 +203,42 @@ func extractSelfReportedName(output string) string {
 		return ""
 	}
 	return name
+}
+
+// hubPhase hub 镜像源执行前阶段（串行）：健康校验（复用 Registry 模板口径）→ 逐镜像预热。
+// 返回 (hub 远程地址, "") 表示通过；非空第二值为失败原因，整个任务中止。
+func (h *deployHandler) hubPhase(taskID int64, task *model.DeployTask) (string, string) {
+	images := hubImagesFromParams(task.ParamsJSON)
+	if len(images) == 0 {
+		return "", "任务未记录原始镜像清单，无法在 hub 上预热"
+	}
+	logf := func(ip, text string) { h.appendLog(taskID, task.HubHostID, ip, text) }
+	return RunHubStage(h.hubDeps(), task.HubHostID, images, logf)
+}
+
+// abortAllHosts hub 阶段失败：全部主机记录置 failed、日志留痕、任务落终态。
+func (h *deployHandler) abortAllHosts(taskID int64, records []repo.HostRecord, msg string) {
+	for _, rec := range records {
+		_ = h.tplRepo.UpdateHostStatus(rec.RecID, "failed", "", msg)
+		h.appendLog(taskID, rec.HostID, rec.HostIP, msg)
+		if h.bus != nil {
+			h.bus.Publish(eventbus.TopicDeployProgress, deployProgress{
+				TaskID: taskID, HostID: rec.HostID, Status: "failed", Error: msg,
+				Total: len(records), TaskStatus: "running",
+			})
+		}
+	}
+	finalStatus, _ := h.tplRepo.FinishTask(taskID)
+	if h.bus != nil {
+		h.bus.Publish(eventbus.TopicDeployProgress, deployProgress{
+			TaskID: taskID, Status: "finished", FailCnt: len(records), Total: len(records), TaskStatus: finalStatus,
+		})
+	}
+}
+
+// ensureInsecureRegistry 目标机预检：Docker 须信任 hub 地址（HTTP 明文仓库的硬前提）。
+// 未信任时按 auto 决定自动写 daemon.json + 重启 Docker，或按前置依赖失败并提示。
+func (h *deployHandler) ensureInsecureRegistry(taskID int64, rec repo.HostRecord, addr string, auto bool) string {
+	logf := func(ip, text string) { h.appendLog(taskID, rec.HostID, ip, text) }
+	return EnsureInsecureRegistryWith(h.hubDeps(), rec.HostID, addr, auto, logf)
 }

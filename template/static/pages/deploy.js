@@ -60,6 +60,25 @@ window.DeployPage = {
 
     <!-- Step 2: 勾选主机 -->
     <div v-show="step===2">
+      <!-- 镜像源：直连拉取 / hub 镜像主机（须已部署 Docker Registry） -->
+      <div class="deploy-hub-bar">
+        <span class="deploy-hub-label">镜像源</span>
+        <el-radio-group v-model="hubMode" size="small" @change="onHubModeChange">
+          <el-radio-button label="direct">直连拉取</el-radio-button>
+          <el-radio-button label="hub">hub 镜像主机</el-radio-button>
+        </el-radio-group>
+        <template v-if="hubMode==='hub'">
+          <el-select v-model="hubHostId" size="small" style="width:300px" :loading="registriesLoading" placeholder="选择已部署 Docker Registry 的主机" :teleported="false">
+            <el-option v-for="r in onlineRegistries" :key="r.host_id" :value="r.host_id" :label="hubLabel(r)" />
+          </el-select>
+          <el-checkbox v-model="hubAutoInsecure" size="small">自动配置目标机 insecure-registries（会重启其 Docker）</el-checkbox>
+          <span class="deploy-var-hint">镜像先在 hub 预热（pull→tag→push，失败即中止），目标机改从 hub 拉取</span>
+        </template>
+        <span class="deploy-var-hint" v-else>按模板镜像变量直接从源仓库拉取</span>
+      </div>
+      <div v-if="hubMode==='hub' && registriesLoaded && !onlineRegistries.length" class="deploy-hub-empty">
+        没有可用的 hub：请先对目标机执行「安装 Docker Registry」模板部署镜像仓库，并保持主机在线
+      </div>
       <div class="deploy-host-toolbar">
         <el-input v-model="hostFilter" placeholder="搜索主机名 / IP / 标签" clearable size="small" style="width:220px" />
         <el-select v-model="hostSort.field" size="small" style="width:100px" :teleported="false"><el-option label="按主机名" value="name" /><el-option label="按 IP" value="ip" /></el-select>
@@ -220,6 +239,9 @@ window.DeployPage = {
       hostConfigs: {}, // 主机级自定义配置覆盖 host_id -> {key: content}
       deploying: false,
       wizardVisible: false,
+      // 镜像源：direct=直连拉取；hub=经已部署 Docker Registry 的主机中转
+      hubMode: 'direct', hubHostId: null, hubAutoInsecure: false,
+      registries: [], registriesLoading: false, registriesLoaded: false,
       tasks: [], tasksLoading: false,
       // 执行记录抽屉
       drawerVisible: false, recordMeta: null, recordHosts: [], recordLogs: [], logFilter: '',
@@ -261,6 +283,8 @@ window.DeployPage = {
       return this.sortHostList(list, this.hostSort)
     },
     selectedHosts() { return this.hosts.filter(h => this.selectedHostIds.has(h.id)) },
+    // 当前在线的 hub 候选（已登记 Docker Registry 服务）
+    onlineRegistries() { return this.registries.filter(r => r.status === 'online') },
     hasTplVars() { return !!(this.selectedTemplate && this.selectedTemplate.variables && this.selectedTemplate.variables.length) },
     // 模板声明的可覆盖配置文件
     selectedConfigs() { return (this.selectedTemplate && this.selectedTemplate.configs) || [] },
@@ -393,6 +417,19 @@ window.DeployPage = {
       if (n >= 2) this.loadHosts() // 主机列表懒加载（已加载则跳过）
       this.step = n
     },
+    /* ===== 镜像源（hub 镜像主机） ===== */
+    async loadRegistries() {
+      if (this.registriesLoading || this.registriesLoaded) return
+      this.registriesLoading = true
+      try { const r = await api.get('/deploy/registries'); if (r.code === 0) { this.registries = r.data || []; this.registriesLoaded = true } } catch (e) { /* */ } finally { this.registriesLoading = false }
+    },
+    onHubModeChange(v) { if (v === 'hub') this.loadRegistries() },
+    // 从登记的服务 URL 取端口用于展示（http://ip:port → port）
+    // hub 候选展示：只给「主机名 · IP:端口」；地址含未渲染占位符或解析失败时退回纯 IP
+    hubLabel(r) {
+      const m = String(r.url || '').match(/^https?:\/\/([^/:]+):(\d+)/)
+      return r.host_name + ' · ' + (m ? m[1] + ':' + m[2] : r.host_ip)
+    },
     resetWizard() {
       this.step = 1
       this.selectedTemplateId = null
@@ -403,13 +440,18 @@ window.DeployPage = {
       this.taskConfigs = {}; this.hostConfigs = {}
       this.selectedHostIds = new Set()
       this.hostFilter = ''
+      this.hubMode = 'direct'; this.hubHostId = null; this.hubAutoInsecure = false
     },
     /* ===== 部署（新建任务 → 新执行记录） ===== */
     async confirmDeploy() {
       if (!this.selectedHosts.length) { ElMessage.warning('请至少选择一台主机'); return }
+      if (this.hubMode === 'hub' && !this.hubHostId) { ElMessage.warning('请选择一台 hub 镜像主机'); return }
+      const hubTip = this.hubMode === 'hub'
+        ? '\n镜像源：hub 镜像主机（部署前先在 hub 上预热镜像）'
+        : ''
       try {
         await ElMessageBox.confirm(
-          '即将对 ' + this.selectedHosts.length + ' 台主机执行模板「' + this.selectedTemplate.name + '」，确认？',
+          '即将对 ' + this.selectedHosts.length + ' 台主机执行模板「' + this.selectedTemplate.name + '」，确认？' + hubTip,
           '确认部署', { type: 'warning', confirmButtonText: '确认执行', cancelButtonText: '取消' }
         )
       } catch (e) { return }
@@ -421,7 +463,9 @@ window.DeployPage = {
           host_ids: this.filteredHosts.filter(h => this.selectedHostIds.has(h.id)).map(h => h.id),
           host_params: this.buildHostParams(),
           configs: this.buildTaskConfigs(),
-          host_configs: this.buildHostConfigs()
+          host_configs: this.buildHostConfigs(),
+          hub_host_id: this.hubMode === 'hub' ? (this.hubHostId || 0) : 0,
+          hub_auto_insecure: this.hubMode === 'hub' && this.hubAutoInsecure
         })
         if (r.code === 0) {
           ElMessage.success('部署任务已创建')

@@ -5,9 +5,13 @@ package store
 
 import (
 	"database/sql"
+	"embed"
 	"errors"
 	"strings"
 )
+
+//go:embed builtin stacks/elasticsearch stacks/rocketmq stacks/rabbitmq
+var builtinFS embed.FS
 
 type builtinTemplate struct {
 	name        string
@@ -18,7 +22,7 @@ type builtinTemplate struct {
 	services    string            // JSON: [{name,url,web}]
 	requires    string            // JSON: [{check,hint}] 前置依赖检查
 	configs     string            // JSON: [{key,label,file,hint,required}] 可被用户覆盖的配置文件
-	path        string            // 内嵌资源路径：builtin/xxx.sh 或 stacks/<key>/scripts/xxx.sh
+	path        string            // builtinFS 内相对脚本路径
 	assets      map[string]string // 资源路径 -> 注入脚本占位符 @@KEY@@ 的内容
 }
 
@@ -268,10 +272,10 @@ var builtinTemplates = []builtinTemplate{
 	},
 	{
 		name:        "部署 RabbitMQ 集群节点",
-		description: "部署 RabbitMQ 集群节点（compose + middleware_net，统一 RABBITMQ_ERLANG_COOKIE、hostname）：is_bootstrap=true 初始化首节点；false 时就绪后自动 rabbitmqctl join_cluster 加入，失败自动恢复独立并提示排查。编译：先首节点，其余填 join_cluster_host=rabbit@首节点名。依赖 Docker。",
+		description: "部署 RabbitMQ 集群节点（compose + middleware_net，统一 RABBITMQ_ERLANG_COOKIE、hostname）：is_bootstrap=true 初始化首节点；false 时就绪后自动 rabbitmqctl join_cluster 加入，失败自动恢复独立并提示排查。可选延迟队列插件（delayed_plugin=true 时优先使用平台资产，缺失时从 GitHub 下载 .ez 并启用）；自建镜像仓库在部署向导的「镜像源」处选择 hub 镜像主机（引擎会把 image 改写为该仓库前缀并预热），与套件部署同一套链路。编译：先首节点，其余填 join_cluster_host=rabbit@首节点名。依赖 Docker。",
 		category:    "消息队列",
 		requires:    requiresDocker,
-		variables:   `[{"name":"node_name","label":"节点名","default":"rabbit-node-1","required":true},{"name":"amqp_port","label":"AMQP 端口","default":"5672","required":true},{"name":"mgmt_port","label":"管理端口","default":"15672","required":true},{"name":"erlang_cookie","label":"Erlang cookie(全节点必须一致)","default":"","required":true},{"name":"admin_user","label":"管理账号","default":"admin","required":false},{"name":"admin_pass","label":"管理密码","default":"","required":true},{"name":"home_dir","label":"服务主目录","default":"/data/rabbitmq","required":true},{"name":"is_bootstrap","label":"是否集群首节点(true/false)","default":"false","required":true},{"name":"join_cluster_host","label":"加入目标节点 rabbit@host","default":"","required":false},{"name":"image","label":"镜像","default":"rabbitmq:3.13-management","required":true}]`,
+		variables:   `[{"name":"node_name","label":"节点名","default":"rabbit-node-1","required":true},{"name":"amqp_port","label":"AMQP 端口","default":"5672","required":true},{"name":"mgmt_port","label":"管理端口","default":"15672","required":true},{"name":"erlang_cookie","label":"Erlang cookie(全节点必须一致)","default":"","required":true},{"name":"admin_user","label":"管理账号","default":"admin","required":false},{"name":"admin_pass","label":"管理密码","default":"","required":true},{"name":"home_dir","label":"服务主目录","default":"/data/rabbitmq","required":true},{"name":"is_bootstrap","label":"是否集群首节点(true/false)","default":"false","required":true},{"name":"join_cluster_host","label":"加入目标节点 rabbit@host","default":"","required":false},{"name":"delayed_plugin","label":"安装延迟队列插件(true/false)","default":"false","required":false},{"name":"image","label":"镜像","default":"rabbitmq:3.13-management","required":true}]`,
 		services:    `[{"name":"RabbitMQ 管理台","url":"http://{{ip}}:{{mgmt_port}}","web":true}]`,
 		path:        "stacks/rabbitmq/scripts/node.sh",
 	},
@@ -295,13 +299,20 @@ var builtinTemplates = []builtinTemplate{
 		services:    `[{"name":"InfluxDB UI","url":"http://{{ip}}:{{port}}","web":true}]`,
 		path:        "builtin/install-influxdb.sh",
 	},
+	{
+		name:        "部署 SFTP",
+		description: "docker compose 部署 SFTP 文件服务（atmoz/sftp，OpenSSH internal-sftp：只许文件传输、不给 shell）：多用户密码认证、每用户 chroot 隔离只能看见自己的 upload 目录、数据目录持久化。用户清单格式「用户名:密码:uid」英文逗号分隔（如 alice:Pass1234:1001,bob:Pass5678:1002）；改用户后重跑本模板即生效。依赖 Docker。",
+		category:    "工具",
+		requires:    requiresDocker,
+		variables:   `[{"name":"users","label":"用户清单(用户名:密码:uid，逗号分隔)","default":"","required":true},{"name":"port","label":"SFTP 端口","default":"2222","required":true},{"name":"home_dir","label":"服务主目录","default":"/data/sftp","required":true},{"name":"image","label":"镜像","default":"atmoz/sftp:alpine","required":true}]`,
+		services:    `[{"name":"SFTP","url":"sftp://{{ip}}:{{port}}","web":false}]`,
+		path:        "builtin/install-sftp.sh",
+	},
 }
 
 // loadBuiltinScript 读取模板脚本并注入其引用的资源占位符。
-// 脚本路径可能落在 builtin/（模板体系）或 stacks/<key>/scripts/（模板复用套件脚本，
-// 共 3 条：RocketMQ namesrv/broker、RabbitMQ node），由 readAsset 按前缀路由到对应内嵌 FS。
 func loadBuiltinScript(t builtinTemplate) (string, error) {
-	b, err := readAsset(t.path)
+	b, err := builtinFS.ReadFile(t.path)
 	if err != nil {
 		return "", err
 	}
@@ -310,7 +321,7 @@ func loadBuiltinScript(t builtinTemplate) (string, error) {
 		return "", errors.New("empty builtin script: " + t.path)
 	}
 	for key, asset := range t.assets {
-		c, err := readAsset(asset)
+		c, err := builtinFS.ReadFile(asset)
 		if err != nil {
 			return "", err
 		}

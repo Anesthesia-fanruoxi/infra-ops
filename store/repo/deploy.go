@@ -146,8 +146,8 @@ func (r *DeployRepo) CreateTask(task *model.DeployTask, hosts []model.DeployTask
 	defer func() { _ = tx.Rollback() }()
 
 	res, err := tx.Exec(
-		`INSERT INTO deploy_tasks(template_id,template_name,status,total,schedule_id,trigger_type,params_json) VALUES(?,?,'running',?,?,?,?)`,
-		task.TemplateID, task.TemplateName, len(hosts), task.ScheduleID, task.TriggerType, task.ParamsJSON,
+		`INSERT INTO deploy_tasks(template_id,template_name,status,total,schedule_id,trigger_type,params_json,hub_host_id) VALUES(?,?,'running',?,?,?,?,?)`,
+		task.TemplateID, task.TemplateName, len(hosts), task.ScheduleID, task.TriggerType, task.ParamsJSON, task.HubHostID,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("create task: %w", err)
@@ -325,6 +325,36 @@ func (r *DeployRepo) HostServices(hostID int64) ([]model.HostService, error) {
 	return items, rows.Err()
 }
 
+// RegistryHosts 已登记 Docker Registry 服务的主机清单（含主机名与探活状态），
+// 供「hub 镜像主机」候选下拉使用；在线过滤由前端/上层按 status 处理。
+func (r *DeployRepo) RegistryHosts() ([]model.HostService, error) {
+	rows, err := store.DB.Query(
+		`SELECT s.id,s.host_id,s.host_ip,s.service_name,s.url,s.web,s.template_id,s.updated_at,
+			COALESCE(h.name,''), COALESCE(h.status,'unverified')
+		FROM host_services s LEFT JOIN hosts h ON h.id=s.host_id
+		WHERE s.service_name='Docker Registry'
+		ORDER BY CASE h.status WHEN 'online' THEN 0 ELSE 1 END, h.name`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var items []model.HostService
+	for rows.Next() {
+		var it model.HostService
+		var web int
+		var status string
+		if err := rows.Scan(&it.ID, &it.HostID, &it.HostIP, &it.ServiceName, &it.URL, &web, &it.TemplateID, &it.UpdatedAt, &it.HostName, &status); err != nil {
+			return nil, err
+		}
+		it.Web = web == 1
+		it.Status = status
+		items = append(items, it)
+	}
+	return items, rows.Err()
+}
+
 // FinishTask 汇总成败计数并落任务终态。
 func (r *DeployRepo) FinishTask(taskID int64) (string, error) {
 	var successCnt, failCnt, total int
@@ -360,7 +390,7 @@ func (r *DeployRepo) ListTasks(page, pageSize int) ([]model.DeployTask, int64, e
 	}
 	offset := (page - 1) * pageSize
 	rows, err := store.DB.Query(
-		`SELECT id,template_id,template_name,status,total,success_cnt,fail_cnt,schedule_id,trigger_type,created_at,finished_at
+		`SELECT id,template_id,template_name,status,total,success_cnt,fail_cnt,schedule_id,trigger_type,hub_host_id,created_at,finished_at
 		FROM deploy_tasks ORDER BY id DESC LIMIT ? OFFSET ?`, pageSize, offset,
 	)
 	if err != nil {
@@ -372,7 +402,7 @@ func (r *DeployRepo) ListTasks(page, pageSize int) ([]model.DeployTask, int64, e
 	for rows.Next() {
 		var t model.DeployTask
 		if err := rows.Scan(&t.ID, &t.TemplateID, &t.TemplateName, &t.Status, &t.Total,
-			&t.SuccessCnt, &t.FailCnt, &t.ScheduleID, &t.TriggerType, &t.CreatedAt, &t.FinishedAt); err != nil {
+			&t.SuccessCnt, &t.FailCnt, &t.ScheduleID, &t.TriggerType, &t.HubHostID, &t.CreatedAt, &t.FinishedAt); err != nil {
 			return nil, 0, err
 		}
 		items = append(items, t)
@@ -384,10 +414,12 @@ func (r *DeployRepo) ListTasks(page, pageSize int) ([]model.DeployTask, int64, e
 func (r *DeployRepo) GetTask(id int64) (*model.DeployTask, error) {
 	t := &model.DeployTask{}
 	err := store.DB.QueryRow(
-		`SELECT id,template_id,template_name,status,total,success_cnt,fail_cnt,schedule_id,trigger_type,created_at,finished_at
+		// params_json 必须带回：执行器 hub 阶段从它取 __hub_images 预热清单与 __hub_auto_insecure 开关
+		//（曾漏查导致 hub 模式任务一律报「未记录原始镜像清单」而中止）
+		`SELECT id,template_id,template_name,status,total,success_cnt,fail_cnt,schedule_id,trigger_type,hub_host_id,params_json,created_at,finished_at
 		FROM deploy_tasks WHERE id=?`, id,
 	).Scan(&t.ID, &t.TemplateID, &t.TemplateName, &t.Status, &t.Total,
-		&t.SuccessCnt, &t.FailCnt, &t.ScheduleID, &t.TriggerType, &t.CreatedAt, &t.FinishedAt)
+		&t.SuccessCnt, &t.FailCnt, &t.ScheduleID, &t.TriggerType, &t.HubHostID, &t.ParamsJSON, &t.CreatedAt, &t.FinishedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}

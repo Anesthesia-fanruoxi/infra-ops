@@ -20,6 +20,11 @@ window.TemplatesPage = {
     <div class="card-header tpl-panel-head">
       <div class="tpl-head-left">
         <span class="title">模板列表</span>
+        <div class="tpl-search">
+          <el-input v-model="keyword" placeholder="搜索模板名称…" size="small" clearable style="width:220px">
+            <template #prefix><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M23.6 22.2l-6.2-6.2a9.6 9.6 0 1 0-1.4 1.4l6.2 6.2 1.4-1.4zM2 10a8 8 0 1 1 16 0 8 8 0 0 1-16 0z"/></svg></template>
+          </el-input>
+        </div>
         <div class="tpl-cats">
           <button class="tpl-filter-tab" :class="{active: activeCat==='全部'}" @click="activeCat='全部'">全部</button>
           <button v-for="c in categories" :key="c" class="tpl-filter-tab" :class="{active: activeCat===c}" @click="activeCat=c">{{c}}</button>
@@ -68,7 +73,7 @@ window.TemplatesPage = {
         </el-table-column>
       </el-table>
       <div v-if="!loading && !filtered.length" class="empty-state tpl-empty">
-        <strong>暂无适配的模板</strong><span>换个分类，或点击「新增模板」创建</span>
+        <strong>暂无适配的模板</strong><span>换个分类或搜索关键词，或点击「新增模板」创建</span>
       </div>
     </template>
 
@@ -101,7 +106,7 @@ window.TemplatesPage = {
         </div>
       </div>
       <div v-if="!loading && !filtered.length" class="empty-state tpl-empty">
-        <strong>暂无适配的模板</strong><span>换个分类，或点击「新增模板」创建</span>
+        <strong>暂无适配的模板</strong><span>换个分类或搜索关键词，或点击「新增模板」创建</span>
       </div>
     </template>
     </div>
@@ -228,6 +233,7 @@ window.TemplatesPage = {
       gutterScroll: 0,
       mode: localStorage.getItem('tpl-view-mode') || 'card',
       activeCat: '全部',
+      keyword: '',
       categoryOptions: ['系统', '工具', '数据库', '消息队列', '配置注册中心', '对象存储', '监控', '可视化', '其他'],
       tagOptions: ['关系型', '文档型', '缓存', 'KV', '时序', '搜索', '分析', 'OLAP', '对象存储', '向量', '监控', '消息'],
       editing: { name: '', description: '', category: '其他', tags: [], script: '', variables: [], requires: [], configs: [] },
@@ -247,8 +253,12 @@ window.TemplatesPage = {
       return want.filter(c => s.has(c))
     },
     filtered() {
-      if (this.activeCat === '全部') return this.list
-      return this.list.filter(t => (t.category || '未分类') === this.activeCat)
+      const q = (this.keyword || '').toUpperCase()
+      return this.list.filter(t => {
+        if (this.activeCat !== '全部' && (t.category || '未分类') !== this.activeCat) return false
+        if (q && !(t.name || '').toUpperCase().includes(q)) return false
+        return true
+      })
     },
     dlgTitle() {
       if (this.viewMode) return '查看模板'

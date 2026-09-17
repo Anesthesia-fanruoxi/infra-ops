@@ -54,6 +54,7 @@ type DeployTask struct {
 	FailCnt      int     `json:"fail_cnt"`
 	TriggerType  string  `json:"trigger_type"` // manual/schedule
 	ScheduleID   int64   `json:"schedule_id"`  // 定时触发时的 schedule ID，手动为 0
+	HubHostID    int64   `json:"hub_host_id"`  // 镜像源 hub 主机（须已部署 Docker Registry）；0=直连拉取
 	ParamsJSON   string  `json:"params_json"`  // 任务级默认变量(JSON)，空为"{}"
 	CreatedAt    string  `json:"created_at"`
 	FinishedAt   *string `json:"finished_at"`

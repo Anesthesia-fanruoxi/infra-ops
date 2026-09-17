@@ -48,6 +48,7 @@ type HostService struct {
 	Web         bool   `json:"web"`
 	TemplateID  int64  `json:"template_id"`
 	InstanceID  int64  `json:"instance_id"`
+	Status      string `json:"status"` // 主机探活状态（联表填充，仅 hub 候选查询返回；online/offline/unverified）
 	UpdatedAt   string `json:"updated_at"`
 }
 
