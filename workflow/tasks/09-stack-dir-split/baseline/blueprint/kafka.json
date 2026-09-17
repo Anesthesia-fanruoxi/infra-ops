@@ -78,9 +78,10 @@
     },
     {
       "name": "enable_ui",
-      "label": "附带部署 KafkaUI（yes/no）",
-      "default": "no",
-      "required": true
+      "label": "附带部署 KafkaUI",
+      "default": "false",
+      "type": "bool",
+      "required": false
     },
     {
       "name": "ui_image",
@@ -93,6 +94,13 @@
       "label": "KafkaUI 端口",
       "default": "8080",
       "required": true
+    },
+    {
+      "name": "image_registry",
+      "label": "镜像仓库（自建，选填）",
+      "default": "",
+      "type": "registry",
+      "required": false
     }
   ],
   "host_vars": [

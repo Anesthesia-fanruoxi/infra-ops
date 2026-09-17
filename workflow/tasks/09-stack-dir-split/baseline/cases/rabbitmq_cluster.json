@@ -102,18 +102,39 @@
   ],
   "endpoints": [
     {
-      "name": "RabbitMQ",
-      "url": "tcp://10.0.2.1",
+      "name": "RabbitMQ AMQP",
+      "component": "rabbitmq",
+      "url": "amqp://10.0.2.1:5672",
       "role": "master"
     },
     {
-      "name": "RabbitMQ",
-      "url": "tcp://10.0.2.2",
+      "name": "RabbitMQ 管理台",
+      "component": "rabbitmq",
+      "url": "http://10.0.2.1:15672",
+      "role": "master"
+    },
+    {
+      "name": "RabbitMQ AMQP",
+      "component": "rabbitmq",
+      "url": "amqp://10.0.2.2:5672",
       "role": "worker"
     },
     {
-      "name": "RabbitMQ",
-      "url": "tcp://10.0.2.3",
+      "name": "RabbitMQ 管理台",
+      "component": "rabbitmq",
+      "url": "http://10.0.2.2:15672",
+      "role": "worker"
+    },
+    {
+      "name": "RabbitMQ AMQP",
+      "component": "rabbitmq",
+      "url": "amqp://10.0.2.3:5672",
+      "role": "worker"
+    },
+    {
+      "name": "RabbitMQ 管理台",
+      "component": "rabbitmq",
+      "url": "http://10.0.2.3:15672",
       "role": "worker"
     }
   ]

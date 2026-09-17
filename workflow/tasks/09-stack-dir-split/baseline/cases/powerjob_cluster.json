@@ -45,16 +45,16 @@
   "services": [
     {
       "host_id": 1401,
-      "service_name": "PowerJob 主节点",
-      "url": "http://10.0.5.1",
-      "web": false,
+      "service_name": "PowerJob 控制台",
+      "url": "http://10.0.5.1:7700/",
+      "web": true,
       "instance_id": 0
     },
     {
       "host_id": 1402,
-      "service_name": "PowerJob 工作节点",
-      "url": "http://10.0.5.2",
-      "web": false,
+      "service_name": "PowerJob 控制台",
+      "url": "http://10.0.5.2:7700/",
+      "web": true,
       "instance_id": 0
     }
   ],
@@ -74,13 +74,15 @@
   ],
   "endpoints": [
     {
-      "name": "PowerJob",
-      "url": "tcp://10.0.5.1",
+      "name": "PowerJob 控制台",
+      "component": "powerjob",
+      "url": "http://10.0.5.1:7700/",
       "role": "master"
     },
     {
-      "name": "PowerJob",
-      "url": "tcp://10.0.5.2",
+      "name": "PowerJob 控制台",
+      "component": "powerjob",
+      "url": "http://10.0.5.2:7700/",
       "role": "worker"
     }
   ]

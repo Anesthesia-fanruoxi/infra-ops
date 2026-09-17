@@ -63,8 +63,9 @@
     },
     {
       "name": "image_registry",
-      "label": "私有镜像仓库前缀（选填，填后自动应用到下列全部镜像）",
+      "label": "镜像仓库（自建，选填）",
       "default": "",
+      "type": "registry",
       "required": false
     },
     {

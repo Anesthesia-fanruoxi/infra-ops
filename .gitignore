@@ -30,7 +30,12 @@ bin/
 .coverprofile
 coverage.out
 
+# Python tooling caches
+__pycache__/
+*.pyc
+
 # Local workspace/tooling metadata
+.agent-teams/
 .workbuddy/
 .codex/
 

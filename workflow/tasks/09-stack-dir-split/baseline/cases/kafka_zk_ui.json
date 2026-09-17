@@ -155,18 +155,45 @@
   ],
   "endpoints": [
     {
-      "name": "Kafka",
-      "url": "tcp://10.0.1.1",
+      "name": "Kafka Broker",
+      "component": "kafka",
+      "url": "kafka://10.0.1.1:9092",
       "role": "node"
     },
     {
-      "name": "Kafka",
-      "url": "tcp://10.0.1.2",
+      "name": "ZooKeeper",
+      "component": "zookeeper",
+      "url": "zookeeper://10.0.1.1:2181",
       "role": "node"
     },
     {
-      "name": "Kafka",
-      "url": "tcp://10.0.1.3",
+      "name": "KafkaUI",
+      "component": "ui",
+      "url": "http://10.0.1.1:8080",
+      "role": "ui"
+    },
+    {
+      "name": "Kafka Broker",
+      "component": "kafka",
+      "url": "kafka://10.0.1.2:9092",
+      "role": "node"
+    },
+    {
+      "name": "ZooKeeper",
+      "component": "zookeeper",
+      "url": "zookeeper://10.0.1.2:2181",
+      "role": "node"
+    },
+    {
+      "name": "Kafka Broker",
+      "component": "kafka",
+      "url": "kafka://10.0.1.3:9092",
+      "role": "node"
+    },
+    {
+      "name": "ZooKeeper",
+      "component": "zookeeper",
+      "url": "zookeeper://10.0.1.3:2181",
       "role": "node"
     }
   ]

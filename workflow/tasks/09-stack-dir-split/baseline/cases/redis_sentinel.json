@@ -145,31 +145,37 @@
   "endpoints": [
     {
       "name": "Redis 主",
+      "component": "redis",
       "url": "redis://10.0.0.1:6379",
       "role": "master"
     },
     {
       "name": "Sentinel",
+      "component": "sentinel",
       "url": "redis-sentinel://10.0.0.1:26379",
       "role": "master"
     },
     {
       "name": "Redis 从",
+      "component": "redis",
       "url": "redis://10.0.0.2:6379",
       "role": "worker"
     },
     {
       "name": "Sentinel",
+      "component": "sentinel",
       "url": "redis-sentinel://10.0.0.2:26379",
       "role": "worker"
     },
     {
       "name": "Redis 从",
+      "component": "redis",
       "url": "redis://10.0.0.3:6379",
       "role": "worker"
     },
     {
       "name": "Sentinel",
+      "component": "sentinel",
       "url": "redis-sentinel://10.0.0.3:26379",
       "role": "worker"
     }

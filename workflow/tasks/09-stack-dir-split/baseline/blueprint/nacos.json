@@ -59,6 +59,13 @@
       "label": "MySQL 镜像（自动部署时用）",
       "default": "mysql:8.0",
       "required": true
+    },
+    {
+      "name": "image_registry",
+      "label": "镜像仓库（自建，选填）",
+      "default": "",
+      "type": "registry",
+      "required": false
     }
   ],
   "host_vars": [

@@ -81,27 +81,31 @@
         <component v-if="opFormComp" :is="opFormComp" :ctx="selfCtx" />
       </div>
       <div v-else>
-      <div v-for="g in stackGroups" :key="g.key" class="stk-cat">
-        <div class="stk-cat-head">
-          <span class="stk-cat-title">{{g.label}}</span>
-          <span class="stk-cat-hint">{{g.hint}}</span>
-        </div>
-        <div class="stk-card-grid">
-          <button v-for="s in g.stacks" :key="s.key" type="button" class="stk-card" :class="{'stk-card--sel': selectedKey===s.key}" @click="selectStack(s)">
-            <div class="stk-card-head">
-              <div class="stk-card-ava" :class="stackAvatar(s).c">{{stackAvatar(s).t}}</div>
-              <div class="stk-card-name">{{s.name}}</div>
-              <span class="stk-runtime" :class="s.requires_docker ? 'is-container' : 'is-host'">{{runtimeLabel(s)}}</span>
-              <el-switch v-if="s.ha_support && wizardOp==='create'" size="small" :model-value="sharedParams.ha==='true'" :disabled="selectedKey!==s.key" :inline-prompt="true" active-text="HA" inactive-text="" @click.stop.prevent @change="e => onHaToggle(e)"></el-switch>
-            </div>
-            <div class="stk-card-modes">
-              <el-tag v-for="m in s.modes" :key="m.key" size="small" :type="mode===m.key ? 'primary' : 'info'" effect="plain">{{m.label}}</el-tag>
-            </div>
-            <div class="stk-card-desc">{{s.description}}</div>
-          </button>
-        </div>
+      <div v-if="stackTabs.length > 1" class="stk-cat-tabs">
+        <button v-for="t in stackTabs" :key="t.key" type="button" class="stk-cat-tab" :class="{'stk-cat-tab--active': catFilter===t.key}" @click="catFilter=t.key">
+          {{t.label}}<span class="stk-cat-tab-num">{{t.count}}</span>
+        </button>
       </div>
-      <div v-if="!stacks.length && !stacksLoading" class="deploy-placeholder">暂无可用套件</div>
+      <div v-if="activeCatTab.hint" class="stk-cat-summary">
+        <span class="stk-cat-summary-label">{{activeCatTab.label}}</span>
+        <span class="stk-cat-summary-text">{{activeCatTab.hint}}</span>
+      </div>
+      <div class="stk-card-grid">
+        <button v-for="s in visibleStacks" :key="s.key" type="button" class="stk-card" :class="{'stk-card--sel': selectedKey===s.key}" @click="selectStack(s)">
+          <div class="stk-card-head">
+            <div class="stk-card-ava" :class="stackAvatar(s).c">{{stackAvatar(s).t}}</div>
+            <div class="stk-card-name">{{s.name}}</div>
+            <span class="stk-runtime" :class="s.requires_docker ? 'is-container' : 'is-host'">{{runtimeLabel(s)}}</span>
+            <el-switch v-if="s.ha_support && wizardOp==='create'" size="small" :model-value="sharedParams.ha==='true'" :disabled="selectedKey!==s.key" :inline-prompt="true" active-text="HA" inactive-text="" @click.stop.prevent @change="e => onHaToggle(e)"></el-switch>
+          </div>
+          <div class="stk-card-modes">
+            <el-tag v-for="m in s.modes" :key="m.key" size="small" :type="mode===m.key ? 'primary' : 'info'" effect="plain">{{m.label}}</el-tag>
+          </div>
+          <div class="stk-card-desc">{{s.description}}</div>
+          <div v-if="catFilter==='all' && stackTabs.length > 1" class="stk-card-meta"><span class="stk-cat-chip">{{stackCatLabel(s)}}</span></div>
+        </button>
+      </div>
+      <div v-if="!visibleStacks.length && !stacksLoading" class="deploy-placeholder">该分类下暂无可用套件</div>
       <div v-if="selectedStack" class="stk-mode-box">
         <component v-if="step1FormComp" :is="step1FormComp" :ctx="selfCtx" />
         <template v-else>
@@ -122,6 +126,8 @@
     </div>
 
     <div v-show="step===2">
+      <!-- 镜像源（平台级能力）只在第 3 步表达：由套件声明的 Type=registry 变量渲染成「自建仓库」下拉。
+           第 2 步不再有「直连拉取 / hub 镜像主机」栏——同一件事两处表达只会互相打架。 -->
       <!-- 大数据等角色规划套件：表格勾选成员 → 按组件指定主角色 -->
       <template v-if="useRolePlan">
         <div class="deploy-host-toolbar">
@@ -166,32 +172,40 @@
 
       <!-- Redis 等仍用主从/引导节点单选 -->
       <template v-else>
-        <component v-if="step===2 && step2FormComp" :is="step2FormComp" :ctx="selfCtx" />
-        <!-- 扩缩容边界（全部套件，拍板 ②）：落点角色冻结，扩缩容只操作数据/工作节点 -->
-        <div v-if="wizardOp==='scale_out'" class="stk-freeze-hint">
-          主节点 / 引导节点已随集群部署冻结，扩容不改变主节点布局；新机自动承担从属 / 成员等全员角色。
-        </div>
-        <div v-if="wizardOp==='scale_in'" class="stk-freeze-hint">
-          缩容仅限数据 / 工作节点：承载落点角色的成员已标红置灰，不可移除（如需调整主节点布局请重装）。
-        </div>
-        <div class="deploy-host-toolbar">
-          <el-input v-model="hostFilter" placeholder="搜索主机名 / IP / 标签" clearable size="small" style="width:220px" />
-          <el-select v-model="hostSort.field" size="small" style="width:100px" :teleported="false"><el-option label="按主机名" value="name" /><el-option label="按 IP" value="ip" /></el-select>
-          <el-button size="small" @click="toggleHostSortOrder">{{hostSort.order==='asc' ? '↑ 升序' : '↓ 降序'}}</el-button>
-          <el-button size="small" @click="toggleSelectAll">{{ selectedHosts.length === filteredHosts.length ? '取消全选' : '全选' }}</el-button>
-          <span class="deploy-sel-count">已选 {{selectedHosts.length}} 台 · {{hostHint}}</span>
-        </div>
-        <div class="deploy-host-list deploy-host-list--dialog" v-loading="hostsLoading">
-          <label v-for="h in filteredHosts" :key="h.id" class="deploy-host-item" :class="{'deploy-host-item--sel': selectedHostIds.has(h.id), 'deploy-host-item--locked': !!scaleInProtected[h.ip]}">
-            <el-checkbox :model-value="selectedHostIds.has(h.id)" :disabled="!!scaleInProtected[h.ip]" @change="toggleHost(h.id)" />
-            <span class="deploy-host-name">{{h.name}}</span>
-            <span class="mono deploy-host-ip">{{h.ip}}</span>
-            <span class="tag-badge other" style="font-size:10px">{{h.tag || 'other'}}</span>
-            <span class="status-badge" :class="h.status"><span class="dot"></span>{{h.status==='online'?'在线':h.status==='offline'?'离线':'未验证'}}</span>
-            <el-tag v-if="scaleInProtected[h.ip]" size="small" type="danger" effect="plain" style="margin-left:auto">{{scaleInProtected[h.ip]}} · 不可缩容</el-tag>
-            <el-radio v-if="needMaster && selectedHostIds.has(h.id)" :model-value="masterHostId" :label="h.id" @change="masterHostId=h.id" style="margin-left:auto">主节点</el-radio>
-          </label>
-          <div v-if="!filteredHosts.length && !hostsLoading" class="deploy-placeholder">无匹配主机</div>
+        <!-- step2Split「倒品字」两栏：上左主机勾选、上右套件表单，下方通栏角色计划预览；
+             未开启时保持原纵向顺序（套件表单在最上方，redis 等沿用） -->
+        <div class="stk-step2-grid" :class="{'stk-step2-grid--split': step2Split}">
+          <div v-if="step===2 && step2FormComp" class="stk-step2-slot-form">
+            <component :is="step2FormComp" :ctx="selfCtx" />
+          </div>
+          <div class="stk-step2-slot-host">
+            <!-- 扩缩容边界（全部套件，拍板 ②）：落点角色冻结，扩缩容只操作数据/工作节点 -->
+            <div v-if="wizardOp==='scale_out'" class="stk-freeze-hint">
+              主节点 / 引导节点已随集群部署冻结，扩容不改变主节点布局；新机自动承担从属 / 成员等全员角色。
+            </div>
+            <div v-if="wizardOp==='scale_in'" class="stk-freeze-hint">
+              缩容仅限数据 / 工作节点：承载落点角色的成员已标红置灰，不可移除（如需调整主节点布局请重装）。
+            </div>
+            <div class="deploy-host-toolbar">
+              <el-input v-model="hostFilter" placeholder="搜索主机名 / IP / 标签" clearable size="small" style="width:220px" />
+              <el-select v-model="hostSort.field" size="small" style="width:100px" :teleported="false"><el-option label="按主机名" value="name" /><el-option label="按 IP" value="ip" /></el-select>
+              <el-button size="small" @click="toggleHostSortOrder">{{hostSort.order==='asc' ? '↑ 升序' : '↓ 降序'}}</el-button>
+              <el-button size="small" @click="toggleSelectAll">{{ selectedHosts.length === filteredHosts.length ? '取消全选' : '全选' }}</el-button>
+              <span class="deploy-sel-count">已选 {{selectedHosts.length}} 台 · {{hostHint}}</span>
+            </div>
+            <div class="deploy-host-list deploy-host-list--dialog" v-loading="hostsLoading">
+              <label v-for="h in filteredHosts" :key="h.id" class="deploy-host-item" :class="{'deploy-host-item--sel': selectedHostIds.has(h.id), 'deploy-host-item--locked': !!scaleInProtected[h.ip]}">
+                <el-checkbox :model-value="selectedHostIds.has(h.id)" :disabled="!!scaleInProtected[h.ip]" @change="toggleHost(h.id)" />
+                <span class="deploy-host-name">{{h.name}}</span>
+                <span class="mono deploy-host-ip">{{h.ip}}</span>
+                <span class="tag-badge other" style="font-size:10px">{{h.tag || 'other'}}</span>
+                <span class="status-badge" :class="h.status"><span class="dot"></span>{{h.status==='online'?'在线':h.status==='offline'?'离线':'未验证'}}</span>
+                <el-tag v-if="scaleInProtected[h.ip]" size="small" type="danger" effect="plain" style="margin-left:auto">{{scaleInProtected[h.ip]}} · 不可缩容</el-tag>
+                <el-radio v-if="needMaster && selectedHostIds.has(h.id)" :model-value="masterHostId" :label="h.id" @change="masterHostId=h.id" style="margin-left:auto">主节点</el-radio>
+              </label>
+              <div v-if="!filteredHosts.length && !hostsLoading" class="deploy-placeholder">无匹配主机</div>
+            </div>
+          </div>
         </div>
         <!-- 角色计划预览（通用套件）：第二步勾选主机即确认落点，不再藏进开始部署的弹框 -->
         <div v-if="needOpPlan" class="stk-plan-preview" style="margin-top:12px">
@@ -219,7 +233,7 @@
       </template>
     </div>
 
-    <div v-show="step===3">
+    <div v-show="step===3" class="stk-param-step">
       <div class="deploy-host-vars-head" v-if="wizardOp==='create'">
         <span class="deploy-host-vars-title">集群名称</span>
       </div>
@@ -236,9 +250,19 @@
         <div class="deploy-host-var-field" v-for="v in visibleSharedVars" :key="v.name">
           <label>{{v.label}}<b v-if="v.required">*</b></label>
           <el-switch v-if="v.type==='bool'" :model-value="sharedParams[v.name]==='true'" @change="e => onBoolVar(v.name, e)"></el-switch>
+          <!-- 自建仓库选择器（Type=registry）：候选与部署中心「hub 镜像主机」同一台账与口径，0=不使用 -->
+          <el-select v-else-if="v.type==='registry'" :model-value="registryPick" @change="onRegistryPick" size="small" style="width:100%" :loading="registriesLoading" placeholder="选择自建仓库（不用则直连官方源）" :teleported="false">
+            <el-option label="不使用（直连官方源）" :value="0" />
+            <el-option v-for="r in onlineRegistries" :key="r.host_id" :value="r.host_id" :label="hubLabel(r)" />
+          </el-select>
           <el-input v-else size="small" v-model="sharedParams[v.name]" :placeholder="v.default || ''" :show-password="v.name==='password'" />
+          <el-checkbox v-if="v.type==='registry' && registryPick" :model-value="hubAutoInsecure" size="small" @change="e => hubAutoInsecure = e">自动配置目标机 insecure-registries（会重启其 Docker）</el-checkbox>
+          <span v-if="v.type==='registry' && registriesLoaded && !onlineRegistries.length" class="deploy-var-hint">没有可用的自建仓库：请先对目标机执行「安装 Docker Registry」模板部署镜像仓库，并保持主机在线</span>
+          <span v-else-if="v.type==='registry'" class="deploy-var-hint">{{registryPick ? '镜像先在该仓库预热，目标机改从它拉取' : '各目标机直接从源仓库拉取镜像'}}</span>
         </div>
       </div>
+      <!-- 第 3 步套件插槽：套件自定义 UI（如 rabbitmq 延迟插件资产条）。须与触发它的共享参数同屏 -->
+      <component v-if="step===3 && step3FormComp" :is="step3FormComp" :ctx="selfCtx" />
       <div class="deploy-host-vars-head" style="margin:16px 0 10px">
         <span class="deploy-host-vars-title">每台主机 <span class="deploy-var-hint">留空则使用默认值</span></span>
         <el-button size="small" :disabled="selectedHosts.length < 2" @click="copyFirstToAll">复制首台到其他</el-button>

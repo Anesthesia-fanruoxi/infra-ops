@@ -1,7 +1,7 @@
 {
   "key": "rabbitmq",
   "name": "RabbitMQ",
-  "description": "一次成型部署 RabbitMQ 集群。指定一台初始化节点，其余自动 join；host 网络 + 节点名 rabbit@宿主机IP，Erlang cookie 留空则自动生成。",
+  "description": "一次成型部署 RabbitMQ 集群。指定一台初始化节点，其余自动 join；host 网络 + 节点名 rabbit@宿主机IP，Erlang cookie 留空则自动生成。可选延迟队列插件（delayed_plugin 开启后优先使用平台资产分发，缺失时从 GitHub 官方源下载 .ez 并启用，扩容新节点自动同步）；可选自建镜像仓库（选中后全部镜像改为该仓库前缀，并接入 hub 预热与 insecure 预检）。",
   "requires_docker": true,
   "category": "service",
   "ha_support": false,
@@ -53,6 +53,20 @@
       "label": "管理端口",
       "default": "15672",
       "required": true
+    },
+    {
+      "name": "delayed_plugin",
+      "label": "安装延迟队列插件",
+      "default": "false",
+      "type": "bool",
+      "required": false
+    },
+    {
+      "name": "image_registry",
+      "label": "镜像仓库（自建，选填）",
+      "default": "",
+      "type": "registry",
+      "required": false
     }
   ],
   "host_vars": [

@@ -102,19 +102,22 @@
   ],
   "endpoints": [
     {
-      "name": "Elasticsearch-协调",
+      "name": "Elasticsearch",
+      "component": "elasticsearch",
       "url": "http://10.0.6.1:9200",
-      "role": "coordinator"
+      "role": "master"
     },
     {
-      "name": "Elasticsearch-协调",
+      "name": "Elasticsearch",
+      "component": "elasticsearch",
       "url": "http://10.0.6.2:9200",
-      "role": "coordinator"
+      "role": "worker"
     },
     {
-      "name": "Elasticsearch-协调",
+      "name": "Elasticsearch",
+      "component": "elasticsearch",
       "url": "http://10.0.6.3:9200",
-      "role": "coordinator"
+      "role": "worker"
     }
   ]
 }

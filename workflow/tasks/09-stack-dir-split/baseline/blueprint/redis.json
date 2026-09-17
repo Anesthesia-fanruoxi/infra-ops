@@ -67,6 +67,22 @@
       "modes": [
         "sentinel"
       ]
+    },
+    {
+      "name": "master_name",
+      "label": "哨兵主名",
+      "default": "mymaster",
+      "required": true,
+      "modes": [
+        "sentinel"
+      ]
+    },
+    {
+      "name": "image_registry",
+      "label": "镜像仓库（自建，选填）",
+      "default": "",
+      "type": "registry",
+      "required": false
     }
   ],
   "host_vars": [

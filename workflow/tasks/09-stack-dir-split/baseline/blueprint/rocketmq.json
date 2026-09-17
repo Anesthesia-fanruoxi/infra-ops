@@ -41,6 +41,13 @@
       "label": "Broker 端口",
       "default": "10911",
       "required": true
+    },
+    {
+      "name": "image_registry",
+      "label": "镜像仓库（自建，选填）",
+      "default": "",
+      "type": "registry",
+      "required": false
     }
   ],
   "host_vars": [

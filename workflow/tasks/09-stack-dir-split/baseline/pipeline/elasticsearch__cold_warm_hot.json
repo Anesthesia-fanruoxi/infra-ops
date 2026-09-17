@@ -8,17 +8,20 @@
   {
     "key": "masters",
     "label": "启动 master 候选节点",
-    "target": "all"
+    "target": "all",
+    "component": "elasticsearch"
   },
   {
     "key": "coords",
     "label": "启动纯协调节点",
-    "target": "all"
+    "target": "all",
+    "component": "elasticsearch"
   },
   {
     "key": "data",
     "label": "启动数据节点（hot/warm/cold）",
-    "target": "all"
+    "target": "all",
+    "component": "elasticsearch"
   },
   {
     "key": "verify",

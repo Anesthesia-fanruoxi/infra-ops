@@ -60,22 +60,29 @@
   "services": [
     {
       "host_id": 1101,
-      "service_name": "RocketMQ 主节点",
-      "url": "http://10.0.3.1",
+      "service_name": "RocketMQ Broker 主",
+      "url": "rocketmq://10.0.3.1:10911",
+      "web": false,
+      "instance_id": 0
+    },
+    {
+      "host_id": 1101,
+      "service_name": "RocketMQ NameServer",
+      "url": "rocketmq://10.0.3.1:9876",
       "web": false,
       "instance_id": 0
     },
     {
       "host_id": 1102,
-      "service_name": "RocketMQ 工作节点",
-      "url": "http://10.0.3.2",
+      "service_name": "RocketMQ Broker 从",
+      "url": "rocketmq://10.0.3.2:10911",
       "web": false,
       "instance_id": 0
     },
     {
       "host_id": 1103,
-      "service_name": "RocketMQ 工作节点",
-      "url": "http://10.0.3.3",
+      "service_name": "RocketMQ Broker 从",
+      "url": "rocketmq://10.0.3.3:10911",
       "web": false,
       "instance_id": 0
     }
@@ -102,18 +109,27 @@
   ],
   "endpoints": [
     {
-      "name": "RocketMQ",
-      "url": "tcp://10.0.3.1",
+      "name": "RocketMQ NameServer",
+      "component": "namesrv",
+      "url": "rocketmq://10.0.3.1:9876",
       "role": "master"
     },
     {
-      "name": "RocketMQ",
-      "url": "tcp://10.0.3.2",
+      "name": "RocketMQ Broker",
+      "component": "broker",
+      "url": "rocketmq://10.0.3.1:10911",
+      "role": "master"
+    },
+    {
+      "name": "RocketMQ Broker",
+      "component": "broker",
+      "url": "rocketmq://10.0.3.2:10911",
       "role": "worker"
     },
     {
-      "name": "RocketMQ",
-      "url": "tcp://10.0.3.3",
+      "name": "RocketMQ Broker",
+      "component": "broker",
+      "url": "rocketmq://10.0.3.3:10911",
       "role": "worker"
     }
   ]

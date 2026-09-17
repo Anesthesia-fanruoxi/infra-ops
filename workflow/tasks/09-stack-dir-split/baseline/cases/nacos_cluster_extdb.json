@@ -63,23 +63,23 @@
   "services": [
     {
       "host_id": 1301,
-      "service_name": "Nacos 主节点",
-      "url": "http://10.0.4.1",
-      "web": false,
+      "service_name": "Nacos 控制台",
+      "url": "http://10.0.4.1:8848/nacos/",
+      "web": true,
       "instance_id": 0
     },
     {
       "host_id": 1302,
-      "service_name": "Nacos 工作节点",
-      "url": "http://10.0.4.2",
-      "web": false,
+      "service_name": "Nacos 控制台",
+      "url": "http://10.0.4.2:8848/nacos/",
+      "web": true,
       "instance_id": 0
     },
     {
       "host_id": 1303,
-      "service_name": "Nacos 工作节点",
-      "url": "http://10.0.4.3",
-      "web": false,
+      "service_name": "Nacos 控制台",
+      "url": "http://10.0.4.3:8848/nacos/",
+      "web": true,
       "instance_id": 0
     }
   ],
@@ -105,18 +105,21 @@
   ],
   "endpoints": [
     {
-      "name": "Nacos",
-      "url": "tcp://10.0.4.1",
+      "name": "Nacos 控制台",
+      "component": "nacos",
+      "url": "http://10.0.4.1:8848/nacos/",
       "role": "master"
     },
     {
-      "name": "Nacos",
-      "url": "tcp://10.0.4.2",
+      "name": "Nacos 控制台",
+      "component": "nacos",
+      "url": "http://10.0.4.2:8848/nacos/",
       "role": "worker"
     },
     {
-      "name": "Nacos",
-      "url": "tcp://10.0.4.3",
+      "name": "Nacos 控制台",
+      "component": "nacos",
+      "url": "http://10.0.4.3:8848/nacos/",
       "role": "worker"
     }
   ]

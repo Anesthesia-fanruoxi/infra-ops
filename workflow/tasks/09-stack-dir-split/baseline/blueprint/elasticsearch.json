@@ -1,7 +1,7 @@
 {
   "key": "elasticsearch",
   "name": "Elasticsearch",
-  "description": "一次成型部署 Elasticsearch 集群。双模式：原「集群」模式（指定一台引导主节点，其余 seed_hosts 加入）；新增「冷热温」模式（按主机勾选 master/纯协调/数据层角色，主脑流水线阶段编排，支持 SSL 自签）。host 网络直连，默认关闭 xpack 安全。",
+  "description": "一次成型部署 Elasticsearch 集群。双模式：原「集群」模式（单容器，指定一台引导主节点）；「冷热温」模式（一机多容器：矩阵勾选即部署，每格一个对应角色的 ES 容器，数据层与 master/协调互斥，master 与协调可同机多容器；对外仅暴露协调/master 入口）。host 网络直连，xpack 安全保持关闭。规格由三档内部预设决定（小额尝鲜 / 标准使用 / 大力出奇迹），不需要逐节点填 JVM 参数；档位只定义每角色 JVM 参数与参考数量，机器数量与硬件由用户自定。",
   "requires_docker": true,
   "category": "service",
   "ha_support": false,
@@ -19,9 +19,9 @@
     {
       "key": "cold_warm_hot",
       "label": "冷热温",
-      "description": "按数据热度分层：每台多选 master/纯协调/数据-hot/warm/cold 角色；master 不与数据层混部；生产建议 master ≥3 台（奇数）。SSL 可自签。",
+      "description": "一机多容器：矩阵勾选即部署，每格一个对应角色的 ES 容器（master 与协调可同机叠加，数据层 hot/warm/cold 可叠加；数据层与 master/协调互斥）。行清空自动归冷热温数据层；端口按角色固定偏移（master 9200/协调 9210/hot 9220/warm 9230/cold 9240），对外仅登记协调或 master 入口。",
       "min_hosts": 4,
-      "host_hint": "至少 4 台；建议 1+ master（≥3，奇数）+ ≥2 纯协调 + 数据层（按 tier）",
+      "host_hint": "至少 4 台；建议 ≥3 master（奇数）+ ≥2 纯协调 + 数据层（按 tier）",
       "has_bootstrap": true,
       "assign_master": false,
       "default_home_dir": "/data/elasticsearch"
@@ -41,65 +41,26 @@
       "required": true
     },
     {
-      "name": "java_opts",
-      "label": "堆内存",
-      "default": "-Xms1g -Xmx1g",
+      "name": "sizing",
+      "label": "规格档位",
+      "default": "standard",
+      "required": true
+    },
+    {
+      "name": "transport_port",
+      "label": "Transport 端口",
+      "default": "9300",
       "required": true,
       "modes": [
         "cluster"
       ]
     },
     {
-      "name": "transport_port",
-      "label": "Transport 端口",
-      "default": "9300",
-      "required": true
-    },
-    {
-      "name": "ssl_enabled",
-      "label": "启用 SSL（节点自签证书）",
-      "default": "false",
-      "type": "bool",
-      "required": false,
-      "modes": [
-        "cold_warm_hot"
-      ]
-    },
-    {
-      "name": "coordinator_count",
-      "label": "纯协调节点数",
-      "default": "2",
-      "required": false,
-      "modes": [
-        "cold_warm_hot"
-      ]
-    },
-    {
-      "name": "heap_xms",
-      "label": "JVM 初始堆",
-      "default": "1g",
-      "required": false,
-      "modes": [
-        "cold_warm_hot"
-      ]
-    },
-    {
-      "name": "heap_xmx",
-      "label": "JVM 最大堆",
-      "default": "1g",
-      "required": false,
-      "modes": [
-        "cold_warm_hot"
-      ]
-    },
-    {
-      "name": "jvm_opts",
-      "label": "JVM 额外参数（追加进 ES_JAVA_OPTS）",
-      "default": "-XX:+UseG1GC",
-      "required": false,
-      "modes": [
-        "cold_warm_hot"
-      ]
+      "name": "image_registry",
+      "label": "镜像仓库（自建，选填）",
+      "default": "",
+      "type": "registry",
+      "required": false
     }
   ],
   "host_vars": [
@@ -107,7 +68,10 @@
       "name": "port",
       "label": "HTTP 端口",
       "default": "9200",
-      "required": true
+      "required": true,
+      "modes": [
+        "cluster"
+      ]
     },
     {
       "name": "home_dir",
@@ -118,11 +82,150 @@
     {
       "name": "roles",
       "label": "节点角色",
-      "default": "coordinator",
+      "default": "",
       "required": false,
       "modes": [
         "cold_warm_hot"
       ]
     }
-  ]
+  ],
+  "extras": {
+    "sizing": [
+      {
+        "key": "mini",
+        "label": "小额尝鲜",
+        "summary": "每角色各 1 台的最小分层，成本最低",
+        "fit": "POC 验证 / 接口联调 / 开发测试环境",
+        "hot_daily_gb": "5–20 GB / 节点",
+        "hot_write_mbps": "10–20 MB/s（约 1–2 万条/秒）",
+        "query_qps": "30–100 QPS 起",
+        "note": "基本数量：master / 协调 / hot / warm / cold 各 1 台。任一节点单点无冗余，不要用于生产。",
+        "mem_note": "内存口径：数据层 = 堆 × 2（另一半留给 Lucene 页缓存，ES 官方建议堆 ≤ 宿主内存 50%）；master / 纯协调不存分片、无页缓存需求，= 堆 + 4G 系统与堆外开销。同机混部时，宿主内存按各容器建议内存之和取。",
+        "roles": [
+          {
+            "role": "master",
+            "label": "master / 协调",
+            "heap_gb": 2,
+            "mem_gb": 6,
+            "mem_rule": "堆 + 4G",
+            "ref": "各 ×1"
+          },
+          {
+            "role": "data_hot",
+            "label": "数据-hot",
+            "heap_gb": 6,
+            "mem_gb": 12,
+            "mem_rule": "堆 × 2",
+            "ref": "×1"
+          },
+          {
+            "role": "data_warm",
+            "label": "数据-warm",
+            "heap_gb": 4,
+            "mem_gb": 8,
+            "mem_rule": "堆 × 2",
+            "ref": "×1"
+          },
+          {
+            "role": "data_cold",
+            "label": "数据-cold",
+            "heap_gb": 2,
+            "mem_gb": 6,
+            "mem_rule": "堆 × 2",
+            "ref": "×1"
+          }
+        ]
+      },
+      {
+        "key": "standard",
+        "label": "标准使用",
+        "summary": "默认档：生产常规给堆，分层齐备",
+        "fit": "中型业务主搜索集群 / 日志与指标平台",
+        "hot_daily_gb": "30–80 GB / 节点",
+        "hot_write_mbps": "20–40 MB/s（约 2–4 万条/秒）",
+        "query_qps": "每 hot 节点约 100–400 QPS",
+        "note": "基本数量：master ×3（奇数）· 协调 ×2；数据层按需 n。机器数量与硬件由你按实际资源决定。",
+        "mem_note": "内存口径：数据层 = 堆 × 2（另一半留给 Lucene 页缓存，ES 官方建议堆 ≤ 宿主内存 50%）；master / 纯协调不存分片、无页缓存需求，= 堆 + 4G 系统与堆外开销。同机混部时，宿主内存按各容器建议内存之和取。",
+        "roles": [
+          {
+            "role": "master",
+            "label": "master / 协调",
+            "heap_gb": 8,
+            "mem_gb": 12,
+            "mem_rule": "堆 + 4G",
+            "ref": "master ×3 · 协调 ×2"
+          },
+          {
+            "role": "data_hot",
+            "label": "数据-hot",
+            "heap_gb": 16,
+            "mem_gb": 32,
+            "mem_rule": "堆 × 2",
+            "ref": "按需 n"
+          },
+          {
+            "role": "data_warm",
+            "label": "数据-warm",
+            "heap_gb": 8,
+            "mem_gb": 16,
+            "mem_rule": "堆 × 2",
+            "ref": "按需 n"
+          },
+          {
+            "role": "data_cold",
+            "label": "数据-cold",
+            "heap_gb": 4,
+            "mem_gb": 8,
+            "mem_rule": "堆 × 2",
+            "ref": "按需 n"
+          }
+        ]
+      },
+      {
+        "key": "full",
+        "label": "大力出奇迹",
+        "summary": "hot 层拉满：单容器堆顶到 31G（compressed oops 上限）",
+        "fit": "大规模日志 / APM / 安全分析，写入持续高位",
+        "hot_daily_gb": "80–230 GB / 节点",
+        "hot_write_mbps": "40–80 MB/s（约 4–8 万条/秒）",
+        "query_qps": "每 hot 节点约 150–650 QPS",
+        "note": "hot 单容器堆已到 31G 上限，单节点规格无法再加大——要更高容量/吞吐就加数据节点数量。基本数量：master ×3 · 协调 ×2，数据层按需 n。",
+        "mem_note": "内存口径：数据层 = 堆 × 2（另一半留给 Lucene 页缓存，ES 官方建议堆 ≤ 宿主内存 50%）；master / 纯协调不存分片、无页缓存需求，= 堆 + 4G 系统与堆外开销。同机混部时，宿主内存按各容器建议内存之和取。",
+        "roles": [
+          {
+            "role": "master",
+            "label": "master / 协调",
+            "heap_gb": 16,
+            "mem_gb": 20,
+            "mem_rule": "堆 + 4G",
+            "ref": "master ×3 · 协调 ×2"
+          },
+          {
+            "role": "data_hot",
+            "label": "数据-hot",
+            "heap_gb": 31,
+            "mem_gb": 64,
+            "mem_rule": "堆 × 2",
+            "ref": "按需 n"
+          },
+          {
+            "role": "data_warm",
+            "label": "数据-warm",
+            "heap_gb": 16,
+            "mem_gb": 32,
+            "mem_rule": "堆 × 2",
+            "ref": "按需 n"
+          },
+          {
+            "role": "data_cold",
+            "label": "数据-cold",
+            "heap_gb": 8,
+            "mem_gb": 16,
+            "mem_rule": "堆 × 2",
+            "ref": "按需 n"
+          }
+        ]
+      }
+    ]
+  }
 }

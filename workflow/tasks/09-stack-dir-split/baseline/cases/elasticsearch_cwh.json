@@ -18,8 +18,14 @@
         "roles": [
           {
             "comp": "elasticsearch",
-            "role": "boot_master",
-            "label": "引导主节点（master, data）",
+            "role": "master",
+            "label": "master 候选",
+            "source": "manual"
+          },
+          {
+            "comp": "elasticsearch",
+            "role": "coordinator",
+            "label": "纯协调",
             "source": "manual"
           }
         ]
@@ -32,10 +38,9 @@
         "roles": [
           {
             "comp": "elasticsearch",
-            "role": "data",
-            "label": "数据节点（data）",
-            "source": "auto",
-            "scope": "rest"
+            "role": "data_hot",
+            "label": "数据-hot",
+            "source": "manual"
           }
         ]
       },
@@ -47,10 +52,9 @@
         "roles": [
           {
             "comp": "elasticsearch",
-            "role": "data",
-            "label": "数据节点（data）",
-            "source": "auto",
-            "scope": "rest"
+            "role": "auto",
+            "label": "自动分配（数据节点）",
+            "source": "auto"
           }
         ]
       },
@@ -62,10 +66,15 @@
         "roles": [
           {
             "comp": "elasticsearch",
-            "role": "data",
-            "label": "数据节点（data）",
-            "source": "auto",
-            "scope": "rest"
+            "role": "data_warm",
+            "label": "数据-warm",
+            "source": "manual"
+          },
+          {
+            "comp": "elasticsearch",
+            "role": "data_cold",
+            "label": "数据-cold",
+            "source": "manual"
           }
         ]
       }
@@ -75,43 +84,8 @@
   "services": [
     {
       "host_id": 1701,
-      "service_name": "Elasticsearch-master",
-      "url": "http://10.0.6.1:9200",
-      "web": true,
-      "instance_id": 0
-    },
-    {
-      "host_id": 1701,
-      "service_name": "Elasticsearch-数据-hot",
-      "url": "http://10.0.6.1:9200",
-      "web": true,
-      "instance_id": 0
-    },
-    {
-      "host_id": 1702,
-      "service_name": "Elasticsearch-数据-hot",
-      "url": "http://10.0.6.2:9200",
-      "web": true,
-      "instance_id": 0
-    },
-    {
-      "host_id": 1703,
-      "service_name": "Elasticsearch-数据-warm",
-      "url": "http://10.0.6.3:9200",
-      "web": true,
-      "instance_id": 0
-    },
-    {
-      "host_id": 1704,
       "service_name": "Elasticsearch-协调",
-      "url": "http://10.0.6.4:9200",
-      "web": true,
-      "instance_id": 0
-    },
-    {
-      "host_id": 1704,
-      "service_name": "Elasticsearch-数据-cold",
-      "url": "http://10.0.6.4:9200",
+      "url": "http://10.0.6.1:9210",
       "web": true,
       "instance_id": 0
     }
@@ -144,33 +118,9 @@
   ],
   "endpoints": [
     {
-      "name": "Elasticsearch-master",
-      "url": "http://10.0.6.1:9200",
-      "role": "master"
-    },
-    {
-      "name": "Elasticsearch-数据-hot",
-      "url": "http://10.0.6.1:9200",
-      "role": "data_hot"
-    },
-    {
-      "name": "Elasticsearch-数据-hot",
-      "url": "http://10.0.6.2:9200",
-      "role": "data_hot"
-    },
-    {
-      "name": "Elasticsearch-数据-warm",
-      "url": "http://10.0.6.3:9200",
-      "role": "data_warm"
-    },
-    {
-      "name": "Elasticsearch-数据-cold",
-      "url": "http://10.0.6.4:9200",
-      "role": "data_cold"
-    },
-    {
       "name": "Elasticsearch-协调",
-      "url": "http://10.0.6.4:9200",
+      "component": "coordinator",
+      "url": "http://10.0.6.1:9210",
       "role": "coordinator"
     }
   ]

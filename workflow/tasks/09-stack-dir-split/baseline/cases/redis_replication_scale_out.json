@@ -131,21 +131,25 @@
   "endpoints": [
     {
       "name": "Redis 主",
+      "component": "redis",
       "url": "redis://10.0.0.1:6379",
       "role": "master"
     },
     {
       "name": "Redis 从",
+      "component": "redis",
       "url": "redis://10.0.0.2:6379",
       "role": "worker"
     },
     {
       "name": "Redis 从",
+      "component": "redis",
       "url": "redis://10.0.0.3:6379",
       "role": "worker"
     },
     {
       "name": "Redis 从",
+      "component": "redis",
       "url": "redis://10.0.0.4:6379",
       "role": "worker"
     }

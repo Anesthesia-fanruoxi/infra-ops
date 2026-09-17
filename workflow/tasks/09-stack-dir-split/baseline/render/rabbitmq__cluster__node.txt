@@ -16,6 +16,7 @@ IS_BOOTSTRAP="{{__is_bootstrap}}"
 JOIN_HOST="{{__join_host}}"
 SELF_IP="{{__ip}}"
 CONTAINER=rabbitmq-node
+DELAYED_PLUGIN="{{delayed_plugin}}"
 
 [ -n "${COOKIE}" ] || { echo "erlang_cookie 不能为空，所有节点必须一致"; exit 1; }
 [ -n "${ADMIN_PASS}" ] || { echo "管理密码不能为空"; exit 1; }
@@ -24,6 +25,9 @@ CONTAINER=rabbitmq-node
 [ -n "${AMQP_PORT}" ] || AMQP_PORT=5672
 [ -n "${MGMT_PORT}" ] || MGMT_PORT=15672
 [ -n "${ADMIN_USER}" ] || ADMIN_USER="admin"
+
+# 自建镜像仓库前缀由平台在渲染期统一注入：选中仓库后，引擎把本脚本的 image（以及其它镜像
+# 参数）一并改写为 <仓库>/<镜像>，脚本无需再自行拼接。
 
 mkdir -p "${HOME_DIR}/data" "${HOME_DIR}/log"
 # rabbitmq 镜像以 uid 999 运行
@@ -42,6 +46,64 @@ umask 022
 chown 999:999 "${HOME_DIR}/rabbitmq.conf" 2>/dev/null || true
 chmod 644 "${HOME_DIR}/rabbitmq.conf"
 
+# ==== 延迟队列插件（delayed_plugin=true/yes 时安装：GitHub 官方源 + 加速轮换，已存在则跳过）====
+# 数据目录 enabled_plugins 存有本插件时必须保持 .ez 挂载——否则容器因插件缺失无法启动。
+PLUGIN_BASE=rabbitmq_delayed_message_exchange
+PLUGIN_DIR="${HOME_DIR}/plugins"
+case "${DELAYED_PLUGIN}" in
+  yes|true|1|on)     PLUGIN_WANT=1 ;;
+  ""|no|false|0|off) PLUGIN_WANT=0 ;;
+  *) echo "delayed_plugin 仅支持 true/false（或 yes/no）: ${DELAYED_PLUGIN}"; exit 1 ;;
+esac
+PLUGIN_PREV=0
+if grep -q "${PLUGIN_BASE}" "${HOME_DIR}/data/enabled_plugins" 2>/dev/null; then PLUGIN_PREV=1; fi
+PLUGIN_FILE="$(ls "${PLUGIN_DIR}/${PLUGIN_BASE}-"*.ez 2>/dev/null | head -n 1 || true)"
+if [ "${PLUGIN_WANT}" = "1" ]; then
+  # 版本矩阵取自官方 release（3.10/3.11 标签无 v 前缀）；镜像标签形如 rabbitmq:3.13-management
+  IMAGE_TAG="${IMAGE##*:}"
+  SERIES="$(printf '%s' "${IMAGE_TAG}" | grep -oE '^[0-9]+\.[0-9]+' || true)"
+  case "${SERIES}" in
+    4.2)  PVER=4.2.0;  PTAG=v4.2.0 ;;
+    4.1)  PVER=4.1.0;  PTAG=v4.1.0 ;;
+    4.0)  PVER=4.0.7;  PTAG=v4.0.7 ;;
+    3.13) PVER=3.13.0; PTAG=v3.13.0 ;;
+    3.12) PVER=3.12.0; PTAG=v3.12.0 ;;
+    3.11) PVER=3.11.1; PTAG=3.11.1 ;;
+    3.10) PVER=3.10.2; PTAG=3.10.2 ;;
+    "")   echo "无法从镜像标签推导插件版本（${IMAGE}），请使用形如 rabbitmq:3.13-management 的标签"; exit 1 ;;
+    *)    PVER="${SERIES}.0"; PTAG="v${PVER}" ;;
+  esac
+  PLUGIN_FILE="${PLUGIN_DIR}/${PLUGIN_BASE}-${PVER}.ez"
+  mkdir -p "${PLUGIN_DIR}"
+  if [ -s "${PLUGIN_FILE}" ]; then
+    echo "延迟队列插件已存在: ${PLUGIN_FILE}"
+  else
+    SRC_URL="https://github.com/rabbitmq/rabbitmq-delayed-message-exchange/releases/download/${PTAG}/${PLUGIN_BASE}-${PVER}.ez"
+    # 轮换顺序与 store/stacks/rabbitmq/assets.go 的 FetchURLs 同族：代理优先、直连垫底
+    # （raw github.com 直连常超时，放首位会白等 connect-timeout 再换源）
+    PROXIES=("https://gh-proxy.com" "https://gh.ddlc.top" "https://ghfast.top" "")
+    OK=0
+    for i in 1 2 3 4 5 6; do
+      P="${PROXIES[$(( (i-1) % 4 ))]}"
+      URL="${P}${SRC_URL}"
+      echo "下载延迟队列插件 (尝试 ${i}/6): ${URL}"
+      if curl -sfL --connect-timeout 10 --max-time 300 "${URL}" -o "${PLUGIN_FILE}" && [ "$(stat -c%s "${PLUGIN_FILE}" 2>/dev/null || echo 0)" -gt 10000 ]; then
+        OK=1; break
+      fi
+      rm -f "${PLUGIN_FILE}"
+      sleep 2
+    done
+    [ "${OK}" = "1" ] || { echo "插件下载失败，可手动放置到 ${PLUGIN_FILE} 后重跑"; exit 1; }
+  fi
+fi
+PLUGIN_VOL=""
+if [ -n "${PLUGIN_FILE}" ] && [ -s "${PLUGIN_FILE}" ]; then
+  chmod 644 "${PLUGIN_FILE}"
+  PLUGIN_VOL="      - ${PLUGIN_FILE}:/opt/rabbitmq/plugins/$(basename "${PLUGIN_FILE}")"
+elif [ "${PLUGIN_WANT}" = "1" ] || [ "${PLUGIN_PREV}" = "1" ]; then
+  echo "延迟队列插件文件缺失（${PLUGIN_DIR}/${PLUGIN_BASE}-*.ez），请手动放置 .ez 后重跑"; exit 1
+fi
+
 if docker ps -a --format '{{.Names}}' | grep -qx "${CONTAINER}"; then
   PROJ="$(docker inspect --format='{{index .Config.Labels "com.docker.compose.project"}}' "${CONTAINER}" 2>/dev/null || true)"
   if [ -z "${PROJ}" ]; then
@@ -54,7 +116,7 @@ cat > "${HOME_DIR}/compose.yml" <<'YAMLEOF'
 name: rabbitmq-cluster
 services:
   rabbitmq:
-    image: {{image}}
+    image: __RB_IMAGE__
     container_name: rabbitmq-node
     restart: always
     network_mode: host
@@ -69,7 +131,15 @@ services:
       - {{home_dir}}/data:/var/lib/rabbitmq
       - {{home_dir}}/log:/var/log/rabbitmq
       - {{home_dir}}/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
+__PLUGIN_VOL__
 YAMLEOF
+
+if [ -n "${PLUGIN_VOL}" ]; then
+  sed -i "s|__PLUGIN_VOL__|${PLUGIN_VOL}|" "${HOME_DIR}/compose.yml"
+else
+  sed -i '/__PLUGIN_VOL__/d' "${HOME_DIR}/compose.yml"
+fi
+sed -i "s|__RB_IMAGE__|${IMAGE}|" "${HOME_DIR}/compose.yml"
 
 echo "拉取镜像 ${IMAGE}"
 docker compose -f "${HOME_DIR}/compose.yml" pull
@@ -89,6 +159,20 @@ if [ "${READY}" != "1" ]; then
 fi
 
 docker exec "${CONTAINER}" rabbitmq-plugins enable rabbitmq_management >/dev/null 2>&1 || true
+
+if [ "${PLUGIN_WANT}" = "1" ]; then
+  if docker exec "${CONTAINER}" rabbitmq-plugins list -e --minimal 2>/dev/null | grep -qx "${PLUGIN_BASE}"; then
+    echo "延迟队列插件已启用，跳过"
+  elif docker exec "${CONTAINER}" rabbitmq-plugins enable "${PLUGIN_BASE}" >/dev/null 2>&1 && \
+       docker exec "${CONTAINER}" rabbitmq-plugins list -e --minimal 2>/dev/null | grep -qx "${PLUGIN_BASE}"; then
+    echo "延迟队列插件启用成功（交换机类型 x-delayed-message，发送时设置 x-delay 头部，单位毫秒）"
+  else
+    echo "延迟队列插件启用失败，可手动执行: docker exec ${CONTAINER} rabbitmq-plugins enable ${PLUGIN_BASE}"; exit 1
+  fi
+elif [ "${PLUGIN_PREV}" = "1" ]; then
+  docker exec "${CONTAINER}" rabbitmq-plugins disable "${PLUGIN_BASE}" >/dev/null 2>&1 || true
+  echo "延迟队列插件已停用（delayed_plugin 未开启）"
+fi
 
 if [ "${IS_BOOTSTRAP}" != "true" ]; then
   [ -n "${JOIN_HOST}" ] || { echo "加入节点缺少主节点地址"; exit 1; }
