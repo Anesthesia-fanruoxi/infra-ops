@@ -1,4 +1,5 @@
-// ES 控制台 · 数据视图 tab（F2）：视图列表 + 抽屉新建（左表单 / 右索引过滤）+ 编辑/删除。
+// ES 控制台 · 数据视图 tab（F2）：视图列表 + 抽屉新建/编辑（左表单 / 右索引过滤）+ 删除。
+// 新建与编辑共用同一抽屉：仅标题、提交文案、回填与提交报文（只传变更字段）不同。
 // 点视图名进入 Discover（es_discover.js，页面内展开，不新增路由）。
 window.EsViewsTab = {
   props: ['conn'],
@@ -42,8 +43,8 @@ window.EsViewsTab = {
       <template #empty><empty-state text="暂无数据视图：先创建一个视图（名称 / 索引匹配 / 时间字段），再进入检索" /></template>
     </el-table>
 
-    <!-- 新建：抽屉 · 左表单 / 右匹配索引 -->
-    <el-drawer v-model="wizard" title="新建数据视图" size="760px" append-to-body :close-on-click-modal="false" class="es-view-drawer" @opened="onDrawerOpened">
+    <!-- 新建 / 编辑：同一抽屉 · 左表单 / 右匹配索引 -->
+    <el-drawer v-model="drawer" :title="drawerTitle" size="760px" append-to-body :close-on-click-modal="false" class="es-view-drawer" @opened="onDrawerOpened">
       <div class="es-view-create" v-loading="loadingIdx">
         <div class="es-view-create-left">
           <el-form label-position="top" @submit.prevent>
@@ -52,9 +53,11 @@ window.EsViewsTab = {
               <div v-if="dupMsg" class="es-sync-fail" style="margin-top:6px">{{dupMsg}}</div>
             </el-form-item>
             <el-form-item label="索引匹配" required>
-              <el-input v-model="form.index_pattern" placeholder="如 ysh* 或 logs-*"
+              <el-input v-model="form.index_pattern" placeholder="如 ysh 或 logs-*"
                         style="font-family:var(--font-mono)" />
-              <div class="es-qc-hint">支持 * / ? 通配；无通配时右侧按前缀过滤预览（创建仍按你填写的 pattern）</div>
+              <div class="es-qc-hint">
+                支持 * / ? 与逗号分隔多段；未写通配符时保存自动补 *<span v-if="autoSuffix" class="mono">（{{form.index_pattern.trim()}} → {{autoSuffix}}）</span>
+              </div>
             </el-form-item>
             <el-form-item label="时间字段" required>
               <div class="es-tf-row">
@@ -69,8 +72,8 @@ window.EsViewsTab = {
             </el-form-item>
           </el-form>
           <div class="es-view-create-footer">
-            <el-button @click="wizard=false">取消</el-button>
-            <el-button type="primary" :loading="creating" :disabled="!canCreate" @click="create">创建并进入</el-button>
+            <el-button @click="drawer=false">取消</el-button>
+            <el-button type="primary" :loading="saving" :disabled="!canSubmit" @click="submit">{{isEdit ? '保存' : '创建并进入'}}</el-button>
           </div>
         </div>
         <div class="es-view-create-right">
@@ -87,36 +90,35 @@ window.EsViewsTab = {
         </div>
       </div>
     </el-drawer>
-
-    <!-- 编辑 -->
-    <el-dialog v-model="editDialog" title="编辑视图" width="480px" append-to-body>
-      <el-form label-position="top">
-        <el-form-item label="名称" required><el-input v-model="editForm.name" maxlength="64" /></el-form-item>
-        <el-form-item label="索引匹配" required><el-input v-model="editForm.index_pattern" style="font-family:var(--font-mono)" /></el-form-item>
-        <el-form-item label="时间字段"><el-input v-model="editForm.time_field" placeholder="留空自动挑选" /></el-form-item>
-      </el-form>
-      <template #footer><el-button @click="editDialog=false">取消</el-button><el-button type="primary" :loading="saving" @click="save">保存</el-button></template>
-    </el-dialog>
   </template>
 </div>`,
   data() {
     return {
       views: [], loading: false,
       activeView: null,
-      wizard: false, creating: false,
+      drawer: false, mode: 'create', editId: 0, saving: false,
+      origin: { name: '', index_pattern: '', time_field: '' },
       form: { name: '', index_pattern: '', time_field: '' },
       dupMsg: '',
       allIndexNames: [], loadingIdx: false,
-      timeFields: [], fetchingTF: false,
-      editDialog: false, editForm: { name: '', index_pattern: '', time_field: '' }, saving: false
+      timeFields: [], fetchingTF: false
     }
   },
   computed: {
+    isEdit() { return this.mode === 'edit' },
+    drawerTitle() { return this.isEdit ? '编辑数据视图' : '新建数据视图' },
     matchedIndices() {
       return this.filterIndices(this.allIndexNames, this.form.index_pattern)
     },
-    canCreate() {
-      return !!(this.form.name && !this.dupMsg && this.form.index_pattern.trim() && this.form.time_field.trim())
+    // 保存时会被自动补 * 的预览（仅当补全结果与用户输入不同才提示）
+    autoSuffix() {
+      const p = (this.form.index_pattern || '').trim()
+      if (!p) return ''
+      const n = this.normalizePattern(p)
+      return n && n !== p ? n : ''
+    },
+    canSubmit() {
+      return !!(this.form.name.trim() && !this.dupMsg && this.form.index_pattern.trim() && this.form.time_field.trim())
     }
   },
   mounted() { this.loadViews() },
@@ -125,12 +127,24 @@ window.EsViewsTab = {
       this.loading = true
       try { const r = await api.get('/es/' + this.conn.id + '/views'); if (r.code === 0) this.views = r.data || [] } catch (e) { /* */ } finally { this.loading = false }
     },
-    openWizard() {
-      this.wizard = true
-      this.form = { name: '', index_pattern: '', time_field: '' }
+    // 与后端 normalizeIndexPattern 同规则：逐分量补 *，已含 * / ? 的原样
+    normalizePattern(p) {
+      return (p || '').split(',').map(s => s.trim()).filter(Boolean)
+        .map(s => (/[*?]/.test(s) ? s : s + '*')).join(',')
+    },
+    openWizard() { this.openDrawer('create', null) },
+    openEdit(row) { this.openDrawer('edit', row) },
+    openDrawer(mode, row) {
+      this.mode = mode
+      this.editId = row ? row.id : 0
+      this.origin = row
+        ? { name: row.name, index_pattern: row.index_pattern, time_field: row.time_field }
+        : { name: '', index_pattern: '', time_field: '' }
+      this.form = { name: this.origin.name, index_pattern: this.origin.index_pattern, time_field: this.origin.time_field }
       this.dupMsg = ''
       this.timeFields = []
       this.fetchingTF = false
+      this.drawer = true
     },
     async onDrawerOpened() {
       await this.loadIndexNames()
@@ -163,7 +177,8 @@ window.EsViewsTab = {
       return row.sync_status === 'idle' ? '正常' : row.sync_status === 'syncing' ? '同步中' : '失败'
     },
     checkDup() {
-      this.dupMsg = this.views.some(v => v.name === this.form.name) ? '视图名称在同一连接内已存在' : ''
+      const name = (this.form.name || '').trim()
+      this.dupMsg = this.views.some(v => v.name === name && v.id !== this.editId) ? '视图名称在同一连接内已存在' : ''
     },
     async fetchTimeFields() {
       const first = this.matchedIndices[0]
@@ -184,33 +199,45 @@ window.EsViewsTab = {
         }
       } catch (e) { /* */ } finally { this.fetchingTF = false }
     },
-    async create() {
-      if (!this.canCreate) return
-      // 创建用用户填写的 pattern；无通配且有前缀匹配时提示建议加 *
-      const p = this.form.index_pattern.trim()
-      if (!/[*?]/.test(p) && this.matchedIndices.length && !this.matchedIndices.includes(p)) {
-        try {
-          await this.$confirm(
-            '当前 pattern「' + p + '」无通配符，创建时 ES 按精确名匹配，可能失败。建议改为「' + p + '*」。仍要按原样创建？',
-            '提示', { type: 'warning', confirmButtonText: '仍创建', cancelButtonText: '去修改' }
-          )
-        } catch (e) { return }
+    async submit() {
+      if (!this.canSubmit) return
+      const name = this.form.name.trim()
+      const pattern = this.normalizePattern(this.form.index_pattern)
+      const timeField = this.form.time_field.trim()
+      if (!pattern) { this.$message.warning('索引匹配不能为空'); return }
+      const body = {}
+      if (!this.isEdit) {
+        body.name = name
+        body.index_pattern = pattern
+        body.time_field = timeField
+      } else {
+        // 编辑只提交真正变更的字段（后端对缺省字段沿用当前值）
+        if (name !== this.origin.name) body.name = name
+        if (pattern !== this.origin.index_pattern) body.index_pattern = pattern
+        if (timeField !== this.origin.time_field) body.time_field = timeField
+        if (!Object.keys(body).length) { this.$message.info('未检测到修改'); return }
       }
-      this.creating = true
+      this.saving = true
       try {
-        const r = await api.post('/es/' + this.conn.id + '/views', {
-          name: this.form.name, index_pattern: this.form.index_pattern.trim(), time_field: this.form.time_field.trim()
-        })
-        if (r.code === 0) {
-          this.wizard = false
-          this.$message.success('视图已创建')
-          await this.loadViews()
-          const v = this.views.find(x => x.id === r.data.id)
-          if (v) this.enterView(v)
-          this.form = { name: '', index_pattern: '', time_field: '' }
-          this.timeFields = []
+        if (this.isEdit) {
+          const r = await api.put('/es/' + this.conn.id + '/views/' + this.editId, body)
+          if (r.code === 0) {
+            this.drawer = false
+            const resynced = ('index_pattern' in body) || ('time_field' in body)
+            this.$message.success(resynced ? '已保存，字段已重新同步' : '已保存')
+            await this.loadViews()
+          }
+        } else {
+          const r = await api.post('/es/' + this.conn.id + '/views', body)
+          if (r.code === 0) {
+            this.drawer = false
+            this.$message.success('视图已创建')
+            await this.loadViews()
+            const v = this.views.find(x => x.id === r.data.id)
+            if (v) this.enterView(v)
+          }
         }
-      } catch (e) { /* */ } finally { this.creating = false }
+      } catch (e) { /* */ } finally { this.saving = false }
     },
     enterView(row) { this.activeView = row },
     async refresh(row) {
@@ -219,19 +246,6 @@ window.EsViewsTab = {
         const r = await api.post('/es/' + this.conn.id + '/views/' + row.id + '/refresh')
         if (r.code === 0) { this.$message.success('字段已刷新'); this.loadViews() }
       } catch (e) { /* */ } finally { row._refreshing = false }
-    },
-    openEdit(row) {
-      this.editForm = { id: row.id, name: row.name, index_pattern: row.index_pattern, time_field: row.time_field }
-      this.editDialog = true
-    },
-    async save() {
-      this.saving = true
-      try {
-        const r = await api.put('/es/' + this.conn.id + '/views/' + this.editForm.id, {
-          name: this.editForm.name, index_pattern: this.editForm.index_pattern, time_field: this.editForm.time_field
-        })
-        if (r.code === 0) { this.editDialog = false; this.$message.success('已保存，正在重新同步字段'); this.loadViews() }
-      } catch (e) { /* */ } finally { this.saving = false }
     },
     async del(row) {
       try { await this.$confirm('确认删除视图「' + row.name + '」？不影响 ES 中的任何数据。', '提示', { type: 'warning' }) } catch (e) { return }

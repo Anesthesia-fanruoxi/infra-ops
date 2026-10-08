@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -23,11 +24,78 @@ type statsSnapshot struct {
 	Truncated bool     `json:"truncated"`
 }
 
-// viewUpsertReq 创建/更新视图请求体。time_field 为空时由后端自动从候选挑选。
+// viewUpsertReq 创建视图请求体。time_field 为空时由后端自动从候选挑选。
 type viewUpsertReq struct {
 	Name         string `json:"name" binding:"required"`
 	IndexPattern string `json:"index_pattern" binding:"required"`
 	TimeField    string `json:"time_field"`
+}
+
+// viewUpdateReq 更新视图请求体：**部分更新**，只提交需要变更的字段。
+// 指针用于区分「未提供」（nil → 沿用库内当前值）与「显式清空」（"" → time_field 重新自动挑选）。
+type viewUpdateReq struct {
+	Name         *string `json:"name"`
+	IndexPattern *string `json:"index_pattern"`
+	TimeField    *string `json:"time_field"`
+}
+
+// normalizeIndexPattern 逐分量补齐通配符：不含 * / ? 的分量末尾追加 *。
+// 已含通配符的分量原样保留，空分量丢弃。例：
+//
+//	ysh            → ysh*
+//	ysh,nginx      → ysh*,nginx*
+//	logs-*,ysh     → logs-*,ysh*
+//	logs-?0        → logs-?0（原样）
+func normalizeIndexPattern(p string) string {
+	parts := strings.Split(p, ",")
+	out := make([]string, 0, len(parts))
+	for _, raw := range parts {
+		s := strings.TrimSpace(raw)
+		if s == "" {
+			continue
+		}
+		if !strings.ContainsAny(s, "*?") {
+			s += "*"
+		}
+		out = append(out, s)
+	}
+	if len(out) == 0 {
+		return ""
+	}
+	return strings.Join(out, ",")
+}
+
+// viewUpdateTarget 部分更新归算结果。
+type viewUpdateTarget struct {
+	Name         string // 目标名称：请求未提供时沿用当前值
+	Pattern      string // 目标 index_pattern：已补通配符
+	TimeField    string // 当前时间字段（重新探测后可能被覆盖）
+	TimeProvided bool   // 请求是否显式给了 time_field
+	TimeWant     string // 请求给的时间字段；TimeProvided 且为空串 = 重新自动挑选
+	NeedProbe    bool   // 是否需要重新探测 ES（pattern 或时间字段真的变了）
+}
+
+// planViewUpdate 归算部分更新：未提供的字段沿用库内当前值，pattern 统一补通配符。
+// 第二个返回值为非空字符串时表示请求非法（pattern 归一后为空），调用方直接 400。
+func planViewUpdate(cur *model.ESView, req viewUpdateReq) (viewUpdateTarget, string) {
+	t := viewUpdateTarget{Name: cur.Name, Pattern: cur.IndexPattern, TimeField: cur.TimeField}
+	if req.Name != nil && strings.TrimSpace(*req.Name) != "" {
+		t.Name = strings.TrimSpace(*req.Name)
+	}
+	if req.IndexPattern != nil {
+		if raw := strings.TrimSpace(*req.IndexPattern); raw != "" {
+			t.Pattern = normalizeIndexPattern(raw)
+			if t.Pattern == "" {
+				return t, "索引匹配不能为空"
+			}
+		}
+	}
+	if req.TimeField != nil {
+		t.TimeProvided = true
+		t.TimeWant = strings.TrimSpace(*req.TimeField)
+	}
+	t.NeedProbe = t.Pattern != cur.IndexPattern || (t.TimeProvided && t.TimeWant != cur.TimeField)
+	return t, ""
 }
 
 // Probe 探测 index pattern（创建向导用），不落库。
@@ -104,7 +172,13 @@ func (h *Handler) CreateView(c *gin.Context) {
 		resp.Fail(c, resp.CodeBadRequest, "参数错误: "+err.Error())
 		return
 	}
-	cc, err := collateView(c.Request.Context(), client, req.IndexPattern)
+	// 用户没写通配符时自动补 *（ysh → ysh*），落库与探测都用补全后的 pattern
+	pattern := normalizeIndexPattern(req.IndexPattern)
+	if pattern == "" {
+		resp.Fail(c, resp.CodeBadRequest, "索引匹配不能为空")
+		return
+	}
+	cc, err := collateView(c.Request.Context(), client, pattern)
 	if err != nil {
 		h.failViewErr(c, err)
 		return
@@ -115,8 +189,8 @@ func (h *Handler) CreateView(c *gin.Context) {
 		return
 	}
 	id, err := h.viewRepo.Create(&model.ESView{
-		ConnID: shared.ParseID(c), Name: req.Name,
-		IndexPattern: req.IndexPattern, TimeField: timeField,
+		ConnID: shared.ParseID(c), Name: strings.TrimSpace(req.Name),
+		IndexPattern: pattern, TimeField: timeField,
 	})
 	if err != nil {
 		if shared.IsDuplicateErr(err) {
@@ -156,7 +230,8 @@ func (h *Handler) GetView(c *gin.Context) {
 	})
 }
 
-// UpdateView 更新视图；改 pattern 或时间字段后自动重同步。
+// UpdateView 更新视图（**部分更新**：只提交需要改的字段，缺省字段沿用当前值）；
+// 改 pattern 或时间字段后自动重同步，仅改名则不动字段表、不触发探测。
 func (h *Handler) UpdateView(c *gin.Context) {
 	client, code, msg := h.resolve(shared.ParseID(c))
 	if client == nil {
@@ -173,46 +248,40 @@ func (h *Handler) UpdateView(c *gin.Context) {
 		resp.Fail(c, esCodeViewNotExist, "视图不存在")
 		return
 	}
-	var req viewUpsertReq
+	var req viewUpdateReq
 	if err := c.ShouldBindJSON(&req); err != nil {
 		resp.Fail(c, resp.CodeBadRequest, "参数错误: "+err.Error())
 		return
 	}
-	// 改 pattern 或时间字段 → 需要重新探测；仅改名则不动字段表。
+	tgt, badMsg := planViewUpdate(cur, req)
+	if badMsg != "" {
+		resp.Fail(c, resp.CodeBadRequest, badMsg)
+		return
+	}
+	// 只有 pattern 或时间字段真的变了才重新探测；仅改名不动字段表。
 	var cc *collateResult
-	if req.IndexPattern != "" && req.IndexPattern != cur.IndexPattern || req.TimeField != "" && req.TimeField != cur.TimeField {
-		cc, err = collateView(c.Request.Context(), client, req.IndexPattern)
+	if tgt.NeedProbe {
+		cc, err = collateView(c.Request.Context(), client, tgt.Pattern)
 		if err != nil {
 			h.failViewErr(c, err)
 			return
 		}
 	}
-	var timeField string
-	if req.TimeField != "" {
-		if cc == nil {
-			resp.Fail(c, resp.CodeBadRequest, "时间字段变更需同时提供 index_pattern")
-			return
+	timeField := tgt.TimeField
+	if cc != nil {
+		// 未显式给时间字段 → 沿用当前值并在新集合里复核；显式给空值 → 按候选重新自动挑选
+		want := tgt.TimeField
+		if tgt.TimeProvided {
+			want = tgt.TimeWant
 		}
-		tf, verr := resolveTimeField(cc, req.TimeField)
+		tf, verr := resolveTimeField(cc, want)
 		if verr != nil {
 			resp.Fail(c, verr.code, verr.msg)
 			return
 		}
 		timeField = tf
-	} else if cc != nil {
-		tf, verr := resolveTimeField(cc, cur.TimeField)
-		if verr != nil {
-			resp.Fail(c, verr.code, verr.msg)
-			return
-		}
-		timeField = tf
-	} else {
-		timeField = cur.TimeField
 	}
-	if req.Name == "" {
-		req.Name = cur.Name
-	}
-	if err := h.viewRepo.UpdateBasic(id, req.Name, req.IndexPattern, timeField); err != nil {
+	if err := h.viewRepo.UpdateBasic(id, tgt.Name, tgt.Pattern, timeField); err != nil {
 		if shared.IsDuplicateErr(err) {
 			resp.Fail(c, esCodeViewNameDup, "视图名称在同一连接内已存在")
 			return
