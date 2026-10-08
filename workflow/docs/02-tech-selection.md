@@ -10,7 +10,9 @@
 | 部署 | 单二进制 + embed 前端 | 需 venv/依赖/gunicorn |
 | 已有积累 | ops-platform Go Agent 可复用 | Flask 已踩过多坑 |
 
-**结论：Go 1.23。** 无 cgo 依赖，保证 Windows 开发 / Linux 交叉编译一致。
+**结论：Go 1.27.1**（2026-10-08 由 1.23 升级）。无 cgo 依赖，保证 Windows 开发 / Linux 交叉编译一致。
+升级原因：Go 仅维护最近两个大版本，1.23 自 1.25 发布（2025-08）起已停止安全更新；
+另容器感知 GOMAXPROCS 需 go.mod 声明 ≥1.25.0 才生效。实测升级零代码改动（详见 §升级记录）。
 
 ## 2. Web 框架：Gin
 
@@ -62,3 +64,21 @@ gopkg.in/yaml.v3
 - 开发：`go run .`（Windows，main.go 位于根目录）。
 - 发布：`GOOS=linux GOARCH=amd64 go build`，产出单二进制。
 - 端口：默认 8090，可经 env `INFRA_OPS_PORT` 或 yaml 覆盖。
+
+## 10. 升级记录
+
+**2026-10-08：Go 1.23.10 → 1.27.1。**
+
+改法：只动 `go.mod` 的 go 指令 + `go mod tidy`（`pkg/sftp` 由 indirect 提为直接依赖），**业务代码零改动**。
+
+| 项 | 结果 |
+|---|---|
+| `go.sum` | 174 行逐字节未变 |
+| 依赖升级 | 一个都不用升（直接依赖仅 gin / cron / x-crypto / modernc-sqlite） |
+| `go build` / `go vet` / `go test ./...` | 全绿，vet 零告警 |
+| 交叉编译 `CGO_ENABLED=0 GOOS=linux` | 通过 |
+| 体积 | Windows PE 17.82 → 19.07 MB（+6.98%）；Linux ELF 17.50 → 18.73 MB（+7.03%） |
+
+之所以这么顺：生产代码零 `unsafe`、零 `go:linkname`、零反射；测试断言的错误文本全是自有中文业务串，**没有一条断言标准库或 JSON 解析的错误文本**（故 1.27 JSON v2 换实现的风险为零）。
+
+升级后需留意：Green Tea GC 默认开启（GC CPU 降 10~40%，但基线内存 +8~15%，容器内存上限要重校）；容器感知 GOMAXPROCS 须 go.mod 声明 ≥1.25.0 才生效（已满足）；`crypto/x509` 自 1.24 起移除 SHA-1 证书支持（K8s API 自签证书需实连复验）；`go vet` 1.25 起新增 waitgroup / hostport 检查。

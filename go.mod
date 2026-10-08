@@ -1,9 +1,10 @@
 module infra-ops
 
-go 1.23
+go 1.27.1
 
 require (
 	github.com/gin-gonic/gin v1.10.0
+	github.com/pkg/sftp v1.13.7
 	github.com/robfig/cron/v3 v3.0.1
 	golang.org/x/crypto v0.32.0
 	modernc.org/sqlite v1.34.5
@@ -31,7 +32,6 @@ require (
 	github.com/modern-go/reflect2 v1.0.2 // indirect
 	github.com/ncruces/go-strftime v0.1.9 // indirect
 	github.com/pelletier/go-toml/v2 v2.2.2 // indirect
-	github.com/pkg/sftp v1.13.7 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/ugorji/go/codec v1.2.12 // indirect

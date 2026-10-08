@@ -57,7 +57,7 @@ template/        # 前端（go:embed）
 
 ## 技术栈
 
-- Go 1.23 + Gin
+- Go 1.27.1 + Gin
 - SQLite（modernc.org/sqlite，纯 Go 无 cgo）
 - Vue3 + Element Plus（全局构建版，无 npm）
 - AES-256-GCM 凭据加密

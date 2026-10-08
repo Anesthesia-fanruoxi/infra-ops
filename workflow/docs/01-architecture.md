@@ -75,5 +75,5 @@ nginx-01/02  harbor-01  k8s-master  k8s-node-01..N  standby-01
 ## 6. 技术栈总览
 
 详见 `docs/02-tech-selection.md`。结论速览：
-Go 1.23 + Gin + golang.org/x/crypto/ssh + modernc.org/sqlite（纯 Go 无 cgo）
+Go 1.27.1 + Gin + golang.org/x/crypto/ssh + modernc.org/sqlite（纯 Go 无 cgo）
 + Vue3/Element Plus 全局构建（无构建链）+ SQLite(WAL)。
