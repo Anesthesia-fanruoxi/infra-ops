@@ -37,6 +37,169 @@ var migrations = []migration{
 	{27, migrateV27},
 	{28, migrateV28},
 	{29, migrateV29},
+	{30, migrateV30},
+	{31, migrateV31},
+	{32, migrateV32},
+	{33, migrateV33},
+	{34, migrateV34},
+	{35, migrateV35},
+	{36, migrateV36},
+}
+
+// migrateV33 工具-MySQL：使用记录（两张互不相关的表）。
+//
+//	mysql_sql_logs —— 人在工具里执行 SQL 的记录，记语句类型、影响行数、耗时与成败；
+//	mysql_ai_logs  —— AI 被调用的记录（语义目录按批各一条、生成 SQL 各一条），
+//	                  记输入来源、生成结果与 token 用量。
+//
+// 两者各记各的，不做关联：一条 SQL 执行记录只说明「有人执行过这句 SQL」，
+// 一条 AI 记录只说明「AI 被调用了这一次、花了这些 token」，AI 生成的语句是否被拿去执行
+// 不作为记录维度。两张表都按保留期自动清理（并入部署历史的保留策略，见 main.runRetentionLoop）。
+func migrateV33(db *sql.DB) error {
+	stmts := []string{
+		`CREATE TABLE IF NOT EXISTS mysql_sql_logs (
+			id               INTEGER PRIMARY KEY AUTOINCREMENT,
+			conn_id          INTEGER NOT NULL DEFAULT 0,
+			conn_name        TEXT NOT NULL DEFAULT '',
+			schema_name      TEXT NOT NULL DEFAULT '',
+			sql_text         TEXT NOT NULL DEFAULT '',
+			statement_count  INTEGER NOT NULL DEFAULT 0,
+			sql_type         TEXT NOT NULL DEFAULT '',
+			statement_kind   TEXT NOT NULL DEFAULT '',
+			mode             TEXT NOT NULL DEFAULT '',
+			confirmed        INTEGER NOT NULL DEFAULT 0,
+			row_count        INTEGER NOT NULL DEFAULT 0,
+			affected_rows    INTEGER NOT NULL DEFAULT 0,
+			elapsed_ms       INTEGER NOT NULL DEFAULT 0,
+			status           TEXT NOT NULL DEFAULT '',
+			error            TEXT NOT NULL DEFAULT '',
+			created_at       TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_mysql_sql_logs_created ON mysql_sql_logs(created_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_mysql_sql_logs_conn ON mysql_sql_logs(conn_id, id DESC)`,
+		`CREATE TABLE IF NOT EXISTS mysql_ai_logs (
+			id                INTEGER PRIMARY KEY AUTOINCREMENT,
+			conn_id           INTEGER NOT NULL DEFAULT 0,
+			conn_name         TEXT NOT NULL DEFAULT '',
+			schema_name       TEXT NOT NULL DEFAULT '',
+			kind              TEXT NOT NULL DEFAULT '',
+			mode              TEXT NOT NULL DEFAULT '',
+			model             TEXT NOT NULL DEFAULT '',
+			base_url          TEXT NOT NULL DEFAULT '',
+			batch_no          INTEGER NOT NULL DEFAULT 0,
+			batch_total       INTEGER NOT NULL DEFAULT 0,
+			table_count       INTEGER NOT NULL DEFAULT 0,
+			question          TEXT NOT NULL DEFAULT '',
+			sql_text          TEXT NOT NULL DEFAULT '',
+			content           TEXT NOT NULL DEFAULT '',
+			prompt_tokens     INTEGER NOT NULL DEFAULT 0,
+			completion_tokens INTEGER NOT NULL DEFAULT 0,
+			total_tokens      INTEGER NOT NULL DEFAULT 0,
+			token_source      TEXT NOT NULL DEFAULT '',
+			elapsed_ms        INTEGER NOT NULL DEFAULT 0,
+			status            TEXT NOT NULL DEFAULT '',
+			error             TEXT NOT NULL DEFAULT '',
+			created_at        TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_mysql_ai_logs_created ON mysql_ai_logs(created_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_mysql_ai_logs_conn ON mysql_ai_logs(conn_id, id DESC)`,
+	}
+	for _, s := range stmts {
+		if _, err := db.Exec(s); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// migrateV34 工具-Redis：连接配置表，密码加密存储。
+// ssh_host_id 指向 hosts 表，非 0 时先借该主机建 SSH 隧道（内网实例走跳板机场景）。
+// 工具本身只读（只做 key 浏览与值预览），故没有 read_only 列。
+func migrateV34(db *sql.DB) error {
+	_, err := db.Exec(`CREATE TABLE IF NOT EXISTS redis_conns (
+			id               INTEGER PRIMARY KEY AUTOINCREMENT,
+			name             TEXT NOT NULL UNIQUE,
+			host             TEXT NOT NULL,
+			port             INTEGER NOT NULL DEFAULT 6379,
+			username         TEXT NOT NULL DEFAULT '',
+			encrypted_secret BLOB,
+			default_db       INTEGER NOT NULL DEFAULT 0,
+			ssh_host_id      INTEGER NOT NULL DEFAULT 0,
+			remark           TEXT NOT NULL DEFAULT '',
+			created_at       TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+			updated_at       TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+		)`)
+	return err
+}
+
+// migrateV32 工具-MySQL：AI 语义目录。
+// 按「连接 + 库 + 表」缓存 AI 依据表/字段注释归纳出的用途与字段含义，
+// 供自然语言生成 SQL 时充当上下文；fingerprint 记录生成时的表结构，变了才重生成。
+func migrateV32(db *sql.DB) error {
+	stmts := []string{
+		`CREATE TABLE IF NOT EXISTS mysql_ai_catalog (
+			id           INTEGER PRIMARY KEY AUTOINCREMENT,
+			conn_id      INTEGER NOT NULL,
+			schema_name  TEXT NOT NULL,
+			table_name   TEXT NOT NULL,
+			purpose      TEXT NOT NULL DEFAULT '',
+			columns_json TEXT NOT NULL DEFAULT '[]',
+			fingerprint  TEXT NOT NULL DEFAULT '',
+			generated_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+			UNIQUE(conn_id, schema_name, table_name)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_mysql_ai_catalog_conn ON mysql_ai_catalog(conn_id, schema_name)`,
+	}
+	for _, s := range stmts {
+		if _, err := db.Exec(s); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// migrateV31 工具-MySQL：数据库连接配置表，密码加密存储。
+// ssh_host_id 指向 hosts 表，非 0 时先借该主机建 SSH 隧道（内网库走跳板机场景）。
+func migrateV31(db *sql.DB) error {
+	_, err := db.Exec(`CREATE TABLE IF NOT EXISTS mysql_conns (
+			id               INTEGER PRIMARY KEY AUTOINCREMENT,
+			name             TEXT NOT NULL UNIQUE,
+			host             TEXT NOT NULL,
+			port             INTEGER NOT NULL DEFAULT 3306,
+			username         TEXT NOT NULL DEFAULT 'root',
+			encrypted_secret BLOB,
+			default_schema   TEXT NOT NULL DEFAULT '',
+			charset          TEXT NOT NULL DEFAULT 'utf8mb4',
+			read_only        INTEGER NOT NULL DEFAULT 1,
+			ssh_host_id      INTEGER NOT NULL DEFAULT 0,
+			remark           TEXT NOT NULL DEFAULT '',
+			created_at       TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+			updated_at       TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+		)`)
+	return err
+}
+
+// migrateV30 操作日志去身份化：删除 remote_ip/detail 列（桌面单机无远端身份语义，
+// 历史记录中的身份前缀随列删除一并清除），新增结果列 http_status/code/message，
+// 记录「何时做了什么、是否报错、返回了什么」；同时清理已废弃的认证配置（auth.*）。
+func migrateV30(db *sql.DB) error {
+	if err := dropColumnIfExists(db, "audit_logs", "remote_ip"); err != nil {
+		return err
+	}
+	if err := dropColumnIfExists(db, "audit_logs", "detail"); err != nil {
+		return err
+	}
+	if err := addColumnIfMissing(db, "audit_logs", "http_status", `INTEGER NOT NULL DEFAULT 0`); err != nil {
+		return err
+	}
+	if err := addColumnIfMissing(db, "audit_logs", "code", `INTEGER NOT NULL DEFAULT 0`); err != nil {
+		return err
+	}
+	if err := addColumnIfMissing(db, "audit_logs", "message", `TEXT NOT NULL DEFAULT ''`); err != nil {
+		return err
+	}
+	_, err := db.Exec(`DELETE FROM settings WHERE key LIKE 'auth.%'`)
+	return err
 }
 
 // migrateV29 部署任务增加 hub_host_id：选中已部署 Docker Registry 的主机作为镜像源时记录，
@@ -379,6 +542,27 @@ func addColumnIfMissing(db *sql.DB, table, col, ddl string) error {
 	}
 	if n == 0 {
 		_, err = db.Exec(`ALTER TABLE ` + table + ` ADD COLUMN ` + col + ` ` + ddl)
+		return err
+	}
+	return nil
+}
+
+// dropColumnIfExists 幂等删除表列（SQLite 3.35+ 支持 ALTER TABLE DROP COLUMN，
+// 仅当列未被索引/约束引用时可用）。
+func dropColumnIfExists(db *sql.DB, table, col string) error {
+	rows, err := db.Query(`SELECT COUNT(*) FROM pragma_table_info(?) WHERE name=?`, table, col)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	var n int
+	if rows.Next() {
+		if err := rows.Scan(&n); err != nil {
+			return err
+		}
+	}
+	if n > 0 {
+		_, err = db.Exec(`ALTER TABLE ` + table + ` DROP COLUMN ` + col)
 		return err
 	}
 	return nil
@@ -756,4 +940,162 @@ func migrateV4(db *sql.DB) error {
 		return err
 	}
 	return tx.Commit()
+}
+
+// migrateV35 工具-监控查询：Prometheus / VictoriaMetrics 连接配置表 + AI 调用记录表。
+// 指标数据都在远端、本地不落样本，故连接表只存端点与认证材料（密码 / Bearer Token 加密存储）；
+// metrics_ai_logs 记 AI 生成 PromQL 与解读查询结果的调用（含 token 用量），按保留期自动清理。
+func migrateV35(db *sql.DB) error {
+	stmts := []string{
+		`CREATE TABLE IF NOT EXISTS metrics_conns (
+			id               INTEGER PRIMARY KEY AUTOINCREMENT,
+			name             TEXT NOT NULL UNIQUE,
+			kind             TEXT NOT NULL DEFAULT 'prometheus',
+			url              TEXT NOT NULL,
+			insecure         INTEGER NOT NULL DEFAULT 0,
+			auth_type        TEXT NOT NULL DEFAULT 'none',
+			username         TEXT NOT NULL DEFAULT '',
+			encrypted_secret BLOB,
+			remark           TEXT NOT NULL DEFAULT '',
+			created_at       TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+			updated_at       TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+		)`,
+		`CREATE TABLE IF NOT EXISTS metrics_ai_logs (
+			id                INTEGER PRIMARY KEY AUTOINCREMENT,
+			conn_id           INTEGER NOT NULL DEFAULT 0,
+			conn_name         TEXT NOT NULL DEFAULT '',
+			kind              TEXT NOT NULL DEFAULT '',
+			model             TEXT NOT NULL DEFAULT '',
+			base_url          TEXT NOT NULL DEFAULT '',
+			metric_count      INTEGER NOT NULL DEFAULT 0,
+			question          TEXT NOT NULL DEFAULT '',
+			expr              TEXT NOT NULL DEFAULT '',
+			content           TEXT NOT NULL DEFAULT '',
+			prompt_tokens     INTEGER NOT NULL DEFAULT 0,
+			completion_tokens INTEGER NOT NULL DEFAULT 0,
+			total_tokens      INTEGER NOT NULL DEFAULT 0,
+			token_source      TEXT NOT NULL DEFAULT '',
+			elapsed_ms        INTEGER NOT NULL DEFAULT 0,
+			status            TEXT NOT NULL DEFAULT '',
+			error             TEXT NOT NULL DEFAULT '',
+			created_at        TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_metrics_ai_logs_created ON metrics_ai_logs(created_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_metrics_ai_logs_conn ON metrics_ai_logs(conn_id, id DESC)`,
+	}
+	for _, s := range stmts {
+		if _, err := db.Exec(s); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// migrateV36 统一 AI 调用记录：把两张各工具自建的 AI 记录表（mysql_ai_logs /
+// metrics_ai_logs）合并为一张 ai_logs，用 menu 区分归属工具。
+//
+// menu 存页面 id（metrics / mysql），展示名由前端路由表映射 —— 页面名称会改
+// （如「操作日志」→「审计日志」），id 才是稳定的关联键（与 audit_logs.target_type
+// 存页面 id 是同一口径）。旧数据原样搬迁（保留 created_at）；两张旧表的 id 各自从 1
+// 起会撞，故不带 id 搬、由新表自增重排，表内按 id 升序保持先后。
+// 搬迁与删表同事务，中途失败重跑不会重复搬。
+func migrateV36(db *sql.DB) error {
+	stmts := []string{
+		`CREATE TABLE IF NOT EXISTS ai_logs (
+			id                INTEGER PRIMARY KEY AUTOINCREMENT,
+			menu              TEXT NOT NULL DEFAULT '',
+			conn_id           INTEGER NOT NULL DEFAULT 0,
+			conn_name         TEXT NOT NULL DEFAULT '',
+			schema_name       TEXT NOT NULL DEFAULT '',
+			kind              TEXT NOT NULL DEFAULT '',
+			mode              TEXT NOT NULL DEFAULT '',
+			model             TEXT NOT NULL DEFAULT '',
+			base_url          TEXT NOT NULL DEFAULT '',
+			batch_no          INTEGER NOT NULL DEFAULT 0,
+			batch_total       INTEGER NOT NULL DEFAULT 0,
+			table_count       INTEGER NOT NULL DEFAULT 0,
+			metric_count      INTEGER NOT NULL DEFAULT 0,
+			question          TEXT NOT NULL DEFAULT '',
+			expr              TEXT NOT NULL DEFAULT '',
+			content           TEXT NOT NULL DEFAULT '',
+			prompt_tokens     INTEGER NOT NULL DEFAULT 0,
+			completion_tokens INTEGER NOT NULL DEFAULT 0,
+			total_tokens      INTEGER NOT NULL DEFAULT 0,
+			token_source      TEXT NOT NULL DEFAULT '',
+			elapsed_ms        INTEGER NOT NULL DEFAULT 0,
+			status            TEXT NOT NULL DEFAULT '',
+			error             TEXT NOT NULL DEFAULT '',
+			created_at        TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_ai_logs_created ON ai_logs(created_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_ai_logs_menu ON ai_logs(menu, id DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_ai_logs_conn ON ai_logs(conn_id, id DESC)`,
+	}
+	for _, s := range stmts {
+		if _, err := db.Exec(s); err != nil {
+			return err
+		}
+	}
+
+	// 列取两张旧表的并集：mysql 独有 schema_name / mode / batch_* / table_count
+	// （sql_text 映射到 expr），metrics 独有 metric_count（expr 本就同名），缺的列补零值。
+	candidates := []struct {
+		table string
+		stmt  string
+	}{
+		{"mysql_ai_logs", `INSERT INTO ai_logs(menu, conn_id, conn_name, schema_name, kind, mode, model, base_url,
+				batch_no, batch_total, table_count, metric_count, question, expr, content,
+				prompt_tokens, completion_tokens, total_tokens, token_source, elapsed_ms, status, error, created_at)
+			SELECT 'mysql', conn_id, conn_name, schema_name, kind, mode, model, base_url,
+				batch_no, batch_total, table_count, 0, question, sql_text, content,
+				prompt_tokens, completion_tokens, total_tokens, token_source, elapsed_ms, status, error, created_at
+			FROM mysql_ai_logs ORDER BY id`},
+		{"metrics_ai_logs", `INSERT INTO ai_logs(menu, conn_id, conn_name, schema_name, kind, mode, model, base_url,
+				batch_no, batch_total, table_count, metric_count, question, expr, content,
+				prompt_tokens, completion_tokens, total_tokens, token_source, elapsed_ms, status, error, created_at)
+			SELECT 'metrics', conn_id, conn_name, '', kind, '', model, base_url,
+				0, 0, 0, metric_count, question, expr, content,
+				prompt_tokens, completion_tokens, total_tokens, token_source, elapsed_ms, status, error, created_at
+			FROM metrics_ai_logs ORDER BY id`},
+	}
+	var moves []struct {
+		table string
+		stmt  string
+	}
+	for _, c := range candidates {
+		ok, err := tableExists(db, c.table)
+		if err != nil {
+			return err
+		}
+		if ok { // 历史库必然存在；表被人为删过就跳过，不让迁移失败
+			moves = append(moves, c)
+		}
+	}
+	if len(moves) == 0 {
+		return nil
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, m := range moves {
+		if _, err := tx.Exec(m.stmt); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`DROP TABLE ` + m.table); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// tableExists 判断表是否存在（迁移内部用：旧库结构存在差异时按需决定动作）。
+func tableExists(db *sql.DB, name string) (bool, error) {
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?`, name).Scan(&n); err != nil {
+		return false, err
+	}
+	return n > 0, nil
 }

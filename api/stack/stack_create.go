@@ -13,7 +13,7 @@ import (
 )
 
 // createAndRun 建单并启动套件运行：按 op 分支做参数合并、拓扑/角色校验、主机装配与角色物化。
-func (h *stackHandler) createAndRun(req stackRunReq, remoteIP string) (int64, error) {
+func (h *stackHandler) createAndRun(req stackRunReq) (int64, error) {
 	op := strings.TrimSpace(req.Op)
 	if op == "" {
 		op = "create"
@@ -239,11 +239,6 @@ func (h *stackHandler) createAndRun(req stackRunReq, remoteIP string) (int64, er
 		}
 		_ = h.repo.UpdateInstance(req.InstanceID, "", "deploying", persist, "")
 	}
-	h.auditRepo.Create(&model.AuditLog{
-		Action: "stack.run", TargetType: "stack_run", TargetID: runID,
-		Detail:   fmt.Sprintf("op=%s stack=%s mode=%s hosts=%d instance=%d", op, bp.Name, req.Mode, len(hosts), req.InstanceID),
-		RemoteIP: remoteIP,
-	})
 	go h.execute(runID)
 	return runID, nil
 }

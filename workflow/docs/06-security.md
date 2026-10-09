@@ -14,9 +14,13 @@
 ## 2. 主密钥（secret_key）管理
 
 - 算法：AES-256-GCM，密文结构 `nonce(12B) || ciphertext || tag`，整体存 BLOB。
-- 主密钥为 **32 字节随机数**，`infra-ops keygen` 子命令生成，输出 base64。
-- 装载顺序（与配置优先级一致）：env `INFRA_OPS_SECRET` 优先，config.yaml
-  `security.secret_key` 兜底。两者皆空则启动失败并提示生成命令。
+- 主密钥为 **32 字节随机数**，首次启动由 `settingsRepo.EnsureBootstrap` 配合
+  `icrypto.GenerateKey()` **自动生成并落库**（2026-09-17 更正）。
+- ⚠️ **装载来源是 `settings` 表的 `security.secret_key`**，既不是 env 也不是 config.yaml。
+  本文原「env `INFRA_OPS_SECRET` 优先、config.yaml 兜底、两者皆空则启动失败并提示生成命令」
+  一句**已作废**：`config.FromSettings` 只从 settings 读（`config/config.go:62`），
+  且首次启动必然生成，**代码里不存在「启动失败」这个分支**。
+  `infra-ops keygen` / `infra-ops gen-password` 子命令在 `main.go` 中同样不存在（无子命令分发）。
 - **禁止提交真实密钥**；config.yaml.example 仅留空占位，.gitignore 排除 config.yaml。
 - 轮换：提供 `infra-ops rekey --old --new`（二期实现，一期文档预埋），
   逐条解密重加密 credentials 表。
@@ -31,12 +35,29 @@
 
 ## 4. 登录鉴权（一期单管理员）
 
-- 账号：config `auth.username`；口令 bcrypt 哈希存 `auth.password_hash`，
-  由 `infra-ops gen-password` 生成（不存明文）。
-- 会话：登录成功后签发随机 session token，存内存 map + HttpOnly Cookie
-  （`infra_ops_session`，SameSite=Lax，Secure 按部署决定），有效期 12h。
-  一期单实例内存会话即可（重启需重新登录可接受）；不引入 Redis/JWT 状态。
-- 中间件统一拦截 `/api/v1/*`（login/healthz/version 除外），未登录返回 401。
+> ⚠️ **本节已整体废止**（2026-10 桌面化改造）：登录 / 鉴权 / 会话体系已从代码移除
+> （`api/auth/`、`common/middleware/auth.go` 已删除；`router` 全局仅审计中间件，
+> 业务接口为「桌面单机模式，无鉴权」）。以下内容仅存历史记录；
+> 节内原先引用的 `docs/web部署与加固清单.md` 已一并删除。
+
+- 账号：`settings` 表 `auth.username` / `auth.password_hash`（bcrypt），
+  **单账号、没有账号表**（2026-09-17 更正：不是 config `auth.*`）。
+- 会话（2026-09-17 按实现更正）：**无状态 HMAC-SHA256 签名 token**，
+  结构 `base64(payload).base64(hmac)`，payload = `username|expireUnix`，签名密钥复用主密钥；
+  存 `infra_ops_session` cookie，**有效期 12h，且服务重启不失效**
+  —— 与本文原先写的「随机 token 存内存 map、重启需重新登录」**正好相反**。
+  ⚠️ **实现里既没设 `SameSite` 也没设 `Secure`**：`api/auth/auth.go:63` 是
+  `c.SetCookie(SessionCookie, token, 12*3600, "/", "", false /*secure*/, true /*httpOnly*/)`，
+  且全仓 `SetSameSite` **零匹配**。本文原先写的「SameSite=Lax，Secure 按部署决定」
+  是**设计意图，从未落地**。
+- ⚠️ **会话无法在服务端吊销**：`middleware.SessionStore.Delete` 是空实现
+  （`common/middleware/auth.go:68`），且改密码不会使已签发 token 失效
+  —— 出事后的唯一手段是轮换 `security.secret_key`。
+- ⚠️ **审计来源 IP 可被伪造**：未调 `r.SetTrustedProxies`，gin 默认信任所有代理，
+  任何人发 `X-Forwarded-For` 都会成为 `c.ClientIP()`。已实测落库为伪造值。
+- 中间件统一拦截 `/api/*`（`/api/auth/login`、`/api/auth/logout`、`/api/healthz`、
+  `/api/version` 除外），未登录返回 401；另有 `RequirePasswordChanged` 强制改密拦截
+  （`router/router.go:80`，白名单为 password/me/logout）。
 - 连续登录失败 5 次锁定 5 分钟（内存计数）。
 
 ## 5. SSH host key TOFU

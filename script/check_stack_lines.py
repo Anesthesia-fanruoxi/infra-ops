@@ -924,7 +924,14 @@ def main():
                             "script/measure_error_notice.html。"
                             "本轮其余改动文件均不在受检清单内：router/router.go、main.go、template/static/app.js、"
                             "script/_fe_smoke.js（第 18 项：错误出口须存在且早于 app.js、拦截器真走它、"
-                            "describeApiError 对 404/超时/网络/空输入四类的行为断言、通知 duration:0 与超限关闭最早一条）。")
+                            "describeApiError 对 404/超时/网络/空输入四类的行为断言、通知 duration:0 与超限关闭最早一条）。"
+                            "2026-10-09 MySQL 导出双通道 + AI 全库语义目录轮：index.html +1（mysql_ai_catalog.js script，"
+                            "须早于 mysql_ai.js）；style.css +30（.mysql-detail-actions 转储/查询并排、语义目录抽屉"
+                            " .mysql-catalog-* 一组规则）。本轮新增文件（不参与劣化比对）："
+                            "template/static/pages/mysql_ai_catalog.js。"
+                            "2026-10-09 Certd 模板轮：store/builtin_templates.go 412→421（新增内置模板「部署 Certd」"
+                            "条目，脚本 store/builtin/install-certd.sh 新增不参与比对）；style.css 2242→2254 为并行"
+                            " Redis 会话的在改（本轮未触碰该文件）。")
         with BASELINE.open("w", encoding="utf-8", newline="\n") as f:
             json.dump(payload, f, ensure_ascii=False, indent=2, sort_keys=True)
             f.write("\n")

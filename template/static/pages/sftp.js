@@ -1,5 +1,5 @@
 window.SFTPPage = {
-  props: ['page', 'user', 'versionData'],
+  props: ['page', 'versionData'],
   template: `
 <div>
   <!-- 视图一：连接列表 -->
@@ -268,7 +268,24 @@ window.SFTPPage = {
     goTo(path) { this.cwd = path; this.loadBrowse() },
     openEntry(row) { if (row.is_dir) { this.cwd = row.path; this.loadBrowse() } },
     rowDbl(row) { if (row.is_dir) { this.cwd = row.path; this.loadBrowse() } },
-    pickUpload() { this.$refs.fileInput.value = ''; this.$refs.fileInput.click() },
+    pickUpload() {
+      // 桌面端：原生多选对话框 + Go 直传（大文件不经 webview 内存缓冲）
+      if (window.__INFRA_DESKTOP__) { this.desktopUpload(); return }
+      this.$refs.fileInput.value = ''
+      this.$refs.fileInput.click()
+    },
+    async desktopUpload() {
+      try {
+        const paths = await window.wails.Call.ByName('infra-ops/desktop.FileService.PickFiles', '选择要上传的文件')
+        if (!paths || !paths.length) return
+        const rs = await window.wails.Call.ByName('infra-ops/desktop.FileService.UploadToSFTP', this.current.id, paths, this.cwd) || []
+        const ok = rs.filter(r => !r.error)
+        const bad = rs.filter(r => r.error)
+        if (ok.length) ElMessage.success('已上传 ' + ok.length + ' 个文件')
+        if (bad.length) ElMessage.error(bad.length + ' 个文件失败：' + bad[0].name + ' — ' + bad[0].error)
+        this.loadBrowse()
+      } catch (e) { ElMessage.error(e?.message || '上传失败') }
+    },
     async onFilePicked(e) {
       const file = e.target.files && e.target.files[0]
       if (!file) return
@@ -281,6 +298,14 @@ window.SFTPPage = {
       } catch (err) { /* */ }
     },
     async download(row) {
+      // 桌面端：预检远程文件 → 原生保存对话框 → Go 流式落盘（不再走 axios blob）
+      if (window.__INFRA_DESKTOP__) {
+        try {
+          const saved = await window.wails.Call.ByName('infra-ops/desktop.FileService.DownloadFromSFTP', this.current.id, row.path)
+          if (saved) ElMessage.success('已保存到 ' + saved)
+        } catch (e) { ElMessage.error(e?.message || '下载失败') }
+        return
+      }
       try {
         const blob = await api.get('/sftp/' + this.current.id + '/download', { params: { path: row.path }, responseType: 'blob' })
         if (!(blob instanceof Blob)) { ElMessage.error(blob?.message || '下载失败'); return }

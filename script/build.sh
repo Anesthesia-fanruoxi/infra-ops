@@ -1,29 +1,33 @@
 #!/bin/bash
-# infra-ops 交叉编译脚本
+# infra-ops 桌面构建脚本（Linux / macOS 本地执行）
 # 用法: bash script/build.sh
+#
+# 说明：Wails v3 桌面应用不支持跨平台交叉构建，请在目标平台上运行本脚本。
+# Windows 桌面构建请使用: powershell -ExecutionPolicy Bypass -File script/build-desktop.ps1
+#
+# 开发调试无需本脚本：直接 `go run . -debug`（保留控制台日志，-debug 打开 DevTools）。
 
 set -e
+cd "$(dirname "$0")/.."
 
-VERSION="0.1.0"
-BUILD_TIME=$(date '+%Y-%m-%d %H:%M:%S')
-MODULE="github.com/Anesthesia-fanruoxi/infra-ops"
+APP_NAME="infra-ops"
+BIN_DIR="bin"
 
-LDFLAGS="-s -w"
+OS_NAME=$(uname -s)
+echo "=== Building $APP_NAME (Wails v3 desktop, $OS_NAME) ==="
 
-echo "=== Building infra-ops ==="
-echo "Version: $VERSION"
-echo "Build Time: $BUILD_TIME"
+# 图标：build/appicon.png 为入库的源图标；按平台生成缺失的图标产物
+if [ "$OS_NAME" = "Darwin" ] && [ ! -f build/darwin/icon.icns ]; then
+  echo "[1/2] generating icons from build/appicon.png ..."
+  wails3 generate icons -input build/appicon.png || echo "  (icon generation skipped)"
+else
+  echo "[1/2] icons ok"
+fi
 
-# Windows (开发环境)
-echo "[1/2] Building for Windows amd64..."
-GOOS=windows GOARCH=amd64 go build -ldflags="$LDFLAGS" -o dist/infra-ops.exe .
-echo "  -> dist/infra-ops.exe"
+# 编译（production 构建标签；macOS/Linux 为窗口子系统，无需 windowsgui）
+echo "[2/2] go build ..."
+mkdir -p "$BIN_DIR"
+go build -tags production -trimpath -buildvcs=false -ldflags="-w -s" -o "$BIN_DIR/$APP_NAME" .
 
-# Linux (生产环境)
-echo "[2/2] Building for Linux amd64..."
-GOOS=linux GOARCH=amd64 go build -ldflags="$LDFLAGS" -o dist/infra-ops .
-echo "  -> dist/infra-ops"
-
-echo ""
-echo "=== Build complete ==="
-ls -lh dist/
+echo "done -> $BIN_DIR/$APP_NAME"
+ls -lh "$BIN_DIR/$APP_NAME"

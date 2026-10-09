@@ -2,7 +2,6 @@ package stack
 
 import (
 	"encoding/json"
-	"fmt"
 	"strconv"
 	"strings"
 
@@ -111,10 +110,6 @@ func (h *stackHandler) DeleteInstance(c *gin.Context) {
 		resp.ErrHTTP(c, 500, resp.CodeInternal, "删除失败")
 		return
 	}
-	h.auditRepo.Create(&model.AuditLog{
-		Action: "stack.instance.delete", TargetType: "stack_instance", TargetID: id,
-		Detail: fmt.Sprintf("name=%s", inst.Name), RemoteIP: c.ClientIP(),
-	})
 	resp.OK(c, gin.H{"ok": true})
 }
 
@@ -152,7 +147,7 @@ func (h *stackHandler) Uninstall(c *gin.Context) {
 	for _, host := range activeInstanceHosts(inst) {
 		req.HostIDs = append(req.HostIDs, host.HostID)
 	}
-	runID, err := h.createAndRun(req, c.ClientIP())
+	runID, err := h.createAndRun(req)
 	if err != nil {
 		resp.Fail(c, resp.CodeBadRequest, err.Error())
 		return
@@ -172,7 +167,7 @@ func (h *stackHandler) Reinstall(c *gin.Context) {
 	if err := c.ShouldBindJSON(&body); err == nil && len(body.Params) > 0 {
 		req.Params = body.Params
 	}
-	runID, err := h.createAndRun(req, c.ClientIP())
+	runID, err := h.createAndRun(req)
 	if err != nil {
 		resp.Fail(c, resp.CodeBadRequest, err.Error())
 		return
@@ -194,7 +189,7 @@ func (h *stackHandler) runInstanceOp(c *gin.Context, op string) {
 	}
 	req.InstanceID = id
 	req.Op = op
-	runID, err := h.createAndRun(req, c.ClientIP())
+	runID, err := h.createAndRun(req)
 	if err != nil {
 		resp.Fail(c, resp.CodeBadRequest, err.Error())
 		return

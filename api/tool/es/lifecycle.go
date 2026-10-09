@@ -1,6 +1,7 @@
 // 生命周期管理（B11，§13.1/§13.2）：ILM 策略 CRUD + explain + retry + 数据流保留期。
-// 写操作 W1–W4（§3.3 登记项），四条硬约束逐条落地：
-// 名称白名单（4015）/ 内置资源只读（4013）/ 删除被引用策略回显原始报错（4014）/ 写操作落审计。
+// 写操作 W1–W4（§3.3 登记项），硬约束逐条落地：
+// 名称白名单（4015）/ 内置资源只读（4013）/ 删除被引用策略回显原始报错（4014）；
+// 写操作审计由全局审计中间件统一记录。
 package es
 
 import (
@@ -12,26 +13,7 @@ import (
 
 	"infra-ops/api/shared"
 	"infra-ops/common/resp"
-	"infra-ops/model"
-	"infra-ops/store/repo"
 )
-
-// WithAuditRepo 注入审计仓储（写操作落审计，§3.3 硬约束 4）。
-func (h *Handler) WithAuditRepo(ar *repo.AuditRepo) *Handler {
-	h.auditRepo = ar
-	return h
-}
-
-// auditWrite 写操作统一落审计。AuditLog.TargetID 为 int64，
-// 资源名称（策略/模板/数据流名）记入 Detail 字段。
-func (h *Handler) auditWrite(c *gin.Context, action, targetType, targetID string) {
-	if h.auditRepo == nil {
-		return
-	}
-	h.auditRepo.Create(&model.AuditLog{
-		Action: action, TargetType: targetType, Detail: targetID, RemoteIP: c.ClientIP(),
-	})
-}
 
 // validateResourceName 名称白名单（§3.3 硬约束 1）：非空、不含 * , ?、不以 _ 或 . 开头 → 4015。
 func validateResourceName(name string) *dslErr {
@@ -196,7 +178,6 @@ func (h *Handler) PutILMPolicy(c *gin.Context) {
 		resp.Fail(c, resp.CodeInternal, esErr(status, body, "保存策略失败").Error())
 		return
 	}
-	h.auditWrite(c, "es.ilm.put", "es_ilm_policy", name)
 	resp.OK(c, nil)
 }
 
@@ -226,7 +207,6 @@ func (h *Handler) DeleteILMPolicy(c *gin.Context) {
 		resp.ErrHTTP(c, http.StatusConflict, esCodePolicyInUse, esErr(status, body, "删除策略失败").Error())
 		return
 	}
-	h.auditWrite(c, "es.ilm.delete", "es_ilm_policy", name)
 	resp.OK(c, nil)
 }
 
@@ -286,7 +266,6 @@ func (h *Handler) RetryILM(c *gin.Context) {
 		resp.Fail(c, resp.CodeInternal, esErr(status, body, "重试失败").Error())
 		return
 	}
-	h.auditWrite(c, "es.ilm.retry", "es_index", req.Index)
 	resp.OK(c, nil)
 }
 
@@ -340,6 +319,5 @@ func (h *Handler) PutDataStreamLifecycle(c *gin.Context) {
 		resp.Fail(c, resp.CodeInternal, esErr(status, body, "设置保留期失败").Error())
 		return
 	}
-	h.auditWrite(c, "es.dlm.put", "es_data_stream", name)
 	resp.OK(c, nil)
 }

@@ -1,0 +1,15 @@
+{
+        "fixed": {
+                "file_version": "0.1.0"
+        },
+        "info": {
+                "0000": {
+                        "ProductVersion": "0.1.0",
+                        "CompanyName": "infra-ops",
+                        "FileDescription": "基建运维平台：服务器接入、巡检、初始化、中间件安装",
+                        "LegalCopyright": "© 2026, infra-ops",
+                        "ProductName": "infra-ops",
+                        "Comments": "桌面端（Wails v3）"
+                }
+        }
+}

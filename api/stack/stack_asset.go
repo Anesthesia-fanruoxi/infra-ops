@@ -295,6 +295,33 @@ func (h *assetHandler) Delete(c *gin.Context) {
 	resp.OK(c, gin.H{"deleted": id})
 }
 
+// StoreLocalAssetFile 桌面端（Wails 绑定）直存：从本地文件路径入库资产，
+// 与 HTTP Upload 相同的校验（命名规则、大小上限、文件名与套件声明一致）与落盘/登记路径。
+func StoreLocalAssetFile(key, version, fileName, localPath string) (*model.StackAsset, error) {
+	for _, s := range []string{key, version} {
+		if err := assetNameOK(s); err != nil {
+			return nil, err
+		}
+	}
+	if fileName == "" {
+		fileName = filepath.Base(localPath)
+	}
+	if filepath.Base(localPath) != fileName {
+		return nil, fmt.Errorf("文件名不匹配：期望 %s，实际 %s", fileName, filepath.Base(localPath))
+	}
+	if err := assetNameOK(fileName); err != nil {
+		return nil, err
+	}
+	fi, err := os.Stat(localPath)
+	if err != nil {
+		return nil, fmt.Errorf("读取本地文件失败: %w", err)
+	}
+	if fi.IsDir() || fi.Size() <= 0 || fi.Size() > assetMaxBytes {
+		return nil, fmt.Errorf("文件大小超出范围（1B ~ 256MB）")
+	}
+	return storeAssetFile(key, version, fileName, func() (io.ReadCloser, error) { return os.Open(localPath) }, "upload")
+}
+
 // storeAssetFile 流式写入资产文件（同目录临时文件 + sha256 校验后改名），并登记元数据。
 func storeAssetFile(key, version, fileName string, open func() (io.ReadCloser, error), source string) (*model.StackAsset, error) {
 	dir := assetDir(key, version)

@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>measure · 设置页</title>
+  <link rel="stylesheet" href="../template/static/vendor/element-plus.css">
+  <link rel="stylesheet" href="../template/static/style.css">
+  <style>
+    body { margin: 0; background: #F5F7FA; }
+    /* 模拟真实壳层：.content 是 flex 列里受高元素（app.js 里 .main-area > .content）
+       限高后设置页应整页撑满、内部页签内容层独立滚动 */
+    #app { height: 560px; display: flex; flex-direction: column; background: var(--bg-page, #F5F7FA); }
+    #out { margin: 12px 24px; padding: 12px; background: #111827; color: #A7F3D0; font: 12px/1.6 monospace; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <pre id="out"></pre>
+
+  <script src="../template/static/vendor/vue.global.prod.js"></script>
+  <script src="../template/static/vendor/element-plus.min.js"></script>
+  <script src="../template/static/vendor/element-plus-icons-vue.min.js"></script>
+  <script src="../template/static/vendor/element-plus-zh-cn.min.js"></script>
+  <script src="../template/static/vendor/axios.min.js"></script>
+
+  <!-- 被测组件（真实文件，顺序同 index.html） -->
+  <script src="../template/static/pages/settings_ai.js"></script>
+  <script src="../template/static/pages/settings_system.js"></script>
+  <script src="../template/static/pages/settings_tables.js"></script>
+  <script src="../template/static/pages/settings.js"></script>
+
+  <script>
+// ===================== URL 开关 =====================
+// ?plain ：AI 未启用 / 未配置密钥（冷启动态）
+// ?clear ：点「清除密钥」（确认框放行 → PUT clear_key）
+// ?save  ：点「保存」（验证提交字段 + 全局广播）
+// ?test  ：点「测试连接」（?testfail 时假服务报错）
+const P = new URLSearchParams(location.search)
+const PLAIN = P.has('plain')
+const TEST_FAIL = P.has('testfail')
+
+// ===================== mock 后端 =====================
+window.__calls = [] // 记录 PUT/POST 的 url+body，用来核对提交字段
+window.__events = [] // 记录组件广播的全局事件
+window.addEventListener('ai-config-changed', () => window.__events.push('ai-config-changed'))
+
+const AI_STATE = PLAIN
+  ? { enabled: false, base_url: '', model: '', has_key: false, timeout: 90 }
+  : { enabled: true, base_url: 'https://api.deepseek.com/v1', model: 'deepseek-chat', has_key: true, timeout: 90 }
+const TABLES = [
+  { name: 'stack_run_logs', rows: 128420 },
+  { name: 'stack_run_steps', rows: 44610 },
+  { name: 'audit_logs', rows: 9821 },
+  { name: 'deploy_tasks', rows: 2710 },
+  { name: 'orchestration_runs', rows: 1180 },
+  { name: 'host_keys', rows: 96 },
+  { name: 'hosts', rows: 42 },
+  { name: 'stack_instances', rows: 31 },
+  { name: 'mysql_ai_logs', rows: 17 },
+  { name: 'settings', rows: 16 },
+  { name: 'mysql_sql_logs', rows: 9 },
+  { name: 'credentials', rows: 6 },
+  { name: 'mysql_conns', rows: 3 },
+  { name: 'empty_a', rows: 0 },
+  { name: 'empty_b', rows: 0 }
+]
+const SYSTEM = {
+  version: '0.1.0-dev', go_version: 'go1.27.1',
+  started_at: '2026-10-08 18:20:00', uptime_sec: 3720,
+  work_dir: 'C:\\Users\\anesthesia\\AppData\\Roaming\\infra-ops',
+  db_path: 'C:\\Users\\anesthesia\\AppData\\Roaming\\infra-ops\\data\\infra-ops.db',
+  db_size_bytes: 4938342, tables: TABLES, table_total_rows: 138319
+}
+
+window.api = {
+  get(url) {
+    if (url === '/settings/ai') return Promise.resolve({ code: 0, data: AI_STATE })
+    if (url === '/settings/system') return Promise.resolve({ code: 0, data: SYSTEM })
+    return Promise.resolve({ code: 0, data: {} })
+  },
+  put(url, body) {
+    window.__calls.push({ url: url, body: body || null })
+    if (url === '/settings/ai') {
+      const next = Object.assign({}, AI_STATE, body)
+      next.has_key = body && body.clear_key ? false : (AI_STATE.has_key || !!(body && body.api_key))
+      Object.assign(AI_STATE, next)
+      return Promise.resolve({ code: 0, data: Object.assign({}, next, { api_key: undefined }) })
+    }
+    return Promise.resolve({ code: 0, data: {} })
+  },
+  post(url, body, cfg) {
+    window.__calls.push({ url: url, body: body || null, timeout: (cfg && cfg.timeout) || 0 })
+    if (url === '/settings/ai/test') {
+      if (TEST_FAIL) {
+        return Promise.resolve({ code: 0, data: { ok: false, error: 'dial tcp 127.0.0.1:11434: connect: connection refused', latency_ms: 3002 } })
+      }
+      return Promise.resolve({ code: 0, data: { ok: true, model: 'deepseek-chat', reply: '可用', latency_ms: 842, total_tokens: 15, token_source: 'api' } })
+    }
+    return Promise.resolve({ code: 0, data: {} })
+  }
+}
+
+const { createApp } = Vue
+const { ElMessage, ElMessageBox } = ElementPlus
+const errors = []
+window.addEventListener('error', e => errors.push('JS错误: ' + (e.message || e)))
+
+const app = createApp({
+  // 带上 .content > .page-fade 两层壳，才能命中设置页的限高规则（见 style.css）
+  template: '<div class="content"><div class="page-fade"><page-settings /></div></div>',
+  components: { 'page-settings': window.SettingsPage }
+})
+app.use(ElementPlus, { locale: ElementPlusLocaleZhCn })
+for (const [name, comp] of Object.entries(ElementPlusIconsVue)) app.component(name, comp)
+app.config.globalProperties.$message = ElMessage
+app.config.globalProperties.$confirm = (m, t, o) => ElMessageBox.confirm(m, t, o)
+app.mount('#app')
+
+// ===================== 断言 =====================
+const q = s => document.querySelector(s)
+const qa = s => Array.from(document.querySelectorAll(s))
+const sleep = ms => new Promise(r => setTimeout(r, ms))
+const out = []
+const push = s => out.push(s)
+const txt = el => (el ? el.textContent.replace(/\s+/g, ' ').trim() : '')
+const cut = (s, n) => { s = s || ''; return s.length > n ? s.slice(0, n) + '…' : s }
+
+function tabLabels() { return qa('.set-tabs .el-tabs__item').map(e => txt(e)) }
+// 页签名即断言入口：非默认页签 lazy，必须先切换才会渲染并拉取数据
+async function switchTab(label) {
+  const tab = qa('.set-tabs .el-tabs__item').find(e => txt(e) === label)
+  if (tab) { tab.click(); await sleep(400) }
+  return !!tab
+}
+function formItem(label) {
+  const item = qa('.el-form-item').find(e => txt(e.querySelector('.el-form-item__label')) === label)
+  if (!item) return null
+  return item
+}
+function inputVal(label) {
+  const it = formItem(label)
+  const inp = it && it.querySelector('input')
+  return inp ? inp.value : '(无)'
+}
+function gridRow(label) {
+  const it = qa('.set-kv-item').find(e => txt(e.querySelector('span')) === label)
+  return it ? txt(it) : '(无)'
+}
+
+async function collectBase() {
+  push('页头: ' + txt(q('.tool-intro h1')) + ' | ' + txt(q('.tool-intro p')))
+  push('标签: ' + tabLabels().join(' / '))
+  push('JS 错误: ' + (errors.length ? errors.join(' | ') : '无'))
+}
+
+async function collectAI() {
+  push('—— AI 接入 ——')
+  push('开关: ' + !!q('.set-grid input[type=checkbox], .el-switch'))
+  push('启用?: ' + (q('.el-switch') ? q('.el-switch').classList.contains('is-checked') : '(无)'))
+  push('密钥徽标: ' + (qa('.card-header .el-tag').map(e => txt(e)).join(',') || '(无)'))
+  push('地址: ' + JSON.stringify(inputVal('接口地址')))
+  push('模型: ' + JSON.stringify(inputVal('模型名称')))
+  const keyInput = formItem('API 密钥') && formItem('API 密钥').querySelector('input')
+  push('密钥框: type=' + (keyInput ? keyInput.type : '?') + ' 占位=' + JSON.stringify(cut(keyInput ? keyInput.placeholder : '', 30)))
+  push('超时: ' + JSON.stringify(inputVal('调用超时（秒）')))
+  push('保存/测试按钮: ' + qa('.set-actions .el-button').map(e => txt(e)).join(' / '))
+}
+
+async function collectTest() {
+  const btn = qa('.set-actions .el-button').find(b => b.textContent.includes('测试连接'))
+  push('测试按钮存在: ' + !!btn)
+  if (!btn) return
+  btn.click()
+  await sleep(600)
+  const alert = q('.set-alert')
+  push('测试结果: ' + txt(alert))
+  push('结果 type: ' + (alert ? Array.from(alert.classList).filter(c => c.indexOf('el-alert--') === 0).join(',') : '(无)'))
+  const call = window.__calls.filter(c => c.url === '/settings/ai/test').pop()
+  push('测试请求: ' + (call ? 'body=' + JSON.stringify(call.body) + ' timeout=' + call.timeout : '(没发出)'))
+}
+
+async function collectSave() {
+  const btn = qa('.set-actions .el-button').find(b => b.textContent.trim() === '保存')
+  if (!btn) { push('未找到保存按钮'); return }
+  // 改两个字段再保存，验证提交的就是表单当前值
+  const base = formItem('接口地址') && formItem('接口地址').querySelector('input')
+  if (base) { base.value = 'http://10.0.0.21:8000/v1'; base.dispatchEvent(new Event('input')) }
+  await sleep(150)
+  btn.click()
+  await sleep(600)
+  const call = window.__calls.filter(c => c.url === '/settings/ai').pop()
+  push('保存请求: ' + (call ? JSON.stringify(call.body) : '(没发出)'))
+  push('保存后广播: ' + JSON.stringify(window.__events))
+}
+
+async function collectClearKey() {
+  const btn = qa('.set-actions .el-button').find(b => b.textContent.includes('清除密钥'))
+  push('清除密钥按钮存在: ' + !!btn)
+  if (!btn) return
+  btn.click()
+  await sleep(400)
+  const box = q('.el-message-box')
+  push('确认框: ' + (box ? JSON.stringify(cut(txt(box), 50)) : '(无)'))
+  const ok = box ? q('.el-message-box__btns .el-button--primary') : null
+  if (ok) ok.click()
+  await sleep(500)
+  const call = window.__calls.filter(c => c.url === '/settings/ai').pop()
+  push('清除请求: ' + (call ? JSON.stringify(call.body) : '(没发出)'))
+}
+
+async function collectSystem() {
+  push('—— 系统信息 ——')
+  push('切到系统页签: ' + await switchTab('系统信息'))
+  push('版本: ' + gridRow('版本'))
+  push('Go 版本: ' + gridRow('Go 版本'))
+  push('启动时间: ' + gridRow('启动时间'))
+  push('已运行: ' + gridRow('已运行'))
+  push('工作目录: ' + gridRow('工作目录'))
+  push('数据库: ' + gridRow('数据库'))
+  push('系统页无数据表: ' + !q('#pane-system .set-table'))
+}
+
+async function collectTables() {
+  push('—— 数据表 ——')
+  push('切到数据表页签: ' + await switchTab('数据表'))
+  push('表统计: ' + txt(q('#pane-tables .tool-list-sub')))
+  const rows = qa('#pane-tables .set-table .el-table__row')
+  push('表行数前几行: ' + rows.slice(0, 3).map(r => txt(r)).join(' | '))
+  push('空表已折叠(默认不显示 0 行): ' + !txt(q('#pane-tables .set-table')).includes('empty_a'))
+  const more = q('#pane-tables .set-more .el-button')
+  push('展开按钮: ' + (more ? txt(more) : '(无)'))
+  if (more) {
+    more.click()
+    await sleep(300)
+    push('展开后行数: ' + qa('#pane-tables .set-table .el-table__row').length + ' | 按钮: ' + txt(q('#pane-tables .set-more .el-button')))
+  }
+}
+
+// 滚动层归属：数据表滚动应发生在页签内容层，标签条/页头不能跟着滚
+async function collectScroll() {
+  push('—— 滚动层归属 ——')
+  const outer = q('.content')
+  const pane = q('.set-tabs > .el-tabs__content')
+  const header = q('.set-tabs > .el-tabs__header')
+  const firstRow = q('#pane-tables .set-table .el-table__row')
+  // 标签条必须在内容层上方：Element Plus 的 DOM 是 content 在前、header 在后，
+  // 靠 .el-tabs--top 的 flex-direction:column-reverse 翻回来；若覆盖了
+  // flex-direction，标签条会掉到内容下方（位移断言拦不住，必须测几何顺序）
+  push('标签条在内容层上方: ' + (header.getBoundingClientRect().bottom <= pane.getBoundingClientRect().top + 1))
+  push('外层 .content 可滚高度(应为 0): ' + (outer.scrollHeight - outer.clientHeight))
+  push('内容层可滚高度(应 > 0): ' + (pane.scrollHeight - pane.clientHeight))
+  const hTop = Math.round(header.getBoundingClientRect().top)
+  const rowTop = Math.round(firstRow.getBoundingClientRect().top)
+  pane.scrollTop = 160
+  await sleep(150)
+  push('内容层滚 160px 后 标签条位移(应为 0): ' + (Math.round(header.getBoundingClientRect().top) - hTop))
+  push('表格首行位移(应约 -160): ' + (Math.round(firstRow.getBoundingClientRect().top) - rowTop))
+  push('外层 scrollTop(应为 0): ' + outer.scrollTop)
+  // 切页签应回到顶部（settings.js watch）
+  await switchTab('AI 接入')
+  push('切页签后内容层 scrollTop(应为 0): ' + pane.scrollTop)
+}
+
+;(async () => {
+  await sleep(700)
+  if (P.has('test')) await collectTest()
+  if (P.has('save')) await collectSave()
+  if (P.has('clear') && !PLAIN) await collectClearKey()
+  await collectBase()
+  await collectAI()
+  await collectSystem()
+  await collectTables()
+  await collectScroll()
+  push('JS 错误(最终): ' + (errors.length ? errors.join(' | ') : '无'))
+  q('#out').textContent = out.join('\n')
+})()
+  </script>
+</body>
+</html>

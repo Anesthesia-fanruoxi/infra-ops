@@ -20,6 +20,7 @@ dist/
 bin/
 *.exe
 *.out
+*.syso
 
 # 本机二进制备份/临时副本（如 infra-ops-server.exe~ / .bak-<时间戳>）
 *.exe~

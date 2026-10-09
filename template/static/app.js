@@ -6,6 +6,9 @@ const api = axios.create({ baseURL: '/api', withCredentials: true, timeout: 1500
 api.interceptors.response.use(
   res => res.data,
   err => {
+    // 用户主动中断的请求（如目录生成点「停止」走 AbortController）不是故障：
+    // 静默交给调用方收尾，否则会弹一条「canceled」的红色错误通知
+    if (err && (err.code === 'ERR_CANCELED' || err.name === 'CanceledError' || err.name === 'AbortError')) return Promise.reject(err)
     // 错误提示走统一出口（error_notice.js）：不自动消失、带方法与路径，
     // 桌面模式打不开 F12，3 秒 toast 等于没报。
     const msg = err.response?.data?.message || err.message || '请求失败'
@@ -50,6 +53,7 @@ const ICONS = {
   sftp: '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><path d="M12 11v6"/><path d="m9 14 3 3 3-3"/></svg>',
   mysql: '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg>',
   redis: '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>',
+  metrics: '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 12 7 12 10 5 14 19 17 12 21 12"/></svg>',
   settings: '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>'
 }
 
@@ -57,7 +61,7 @@ const routes = {
   overview: { title: '主机概览', sub: '运行状态一览' },
   hosts: { title: '主机管理', sub: '纳管服务器凭据与连接' },
   credentials: { title: '凭据管理', sub: 'SSH 私钥与密码加密托管' },
-  audit: { title: '操作日志', sub: '全量写操作记录与结果' },
+  audit: { title: '审计日志', sub: '操作日志与 AI 调用台账' },
   templates: { title: '部署模板', sub: '管理部署脚本与变量' },
   deploy: { title: '基础建设', sub: '批量部署与实时监控' },
   orchestrations: { title: '任务编排', sub: '多模板顺序编排执行' },
@@ -67,8 +71,12 @@ const routes = {
   sftp: { title: 'SFTP', sub: '远程文件浏览 · 上传 · 下载' },
   mysql: { title: 'MySQL', sub: '库表浏览 · SQL 查询 · 结果导出' },
   redis: { title: 'Redis', sub: 'Key 浏览 · 结尾模糊匹配 · 值预览' },
-  settings: { title: '设置', sub: 'AI 接入 · 运行参数 · 系统信息' }
+  metrics: { title: '监控查询', sub: 'PromQL 查询 · AI 生成与解读 · 趋势绘图' },
+  settings: { title: '设置', sub: 'AI 接入 · 系统信息 · 数据表' }
 }
+// 页面 id → 标题的映射对全局开放：统一 AI 调用记录组件（ai_records.js）按 menu
+// 存页面 id，展示名必须与路由表同源，避免两处维护、改名后对不上
+window.INFRA_ROUTES = routes
 
 const app = createApp({
   template: `
@@ -136,6 +144,10 @@ app.component('empty-state', {
   template: '<div class="empty-state"><p>{{text}}</p></div>'
 })
 
+// 全局组件：统一 AI 调用记录（审计页 AI 标签页与各工具的调用记录入口共用，
+// 定义于 pages/ai_records.js，全局注册后工具页面模板可直接以 <ai-records> 引用）
+app.component('ai-records', window.AIRecords)
+
 // 布局
 app.component('app-layout', {
   props: ['currentPage', 'tabs', 'version'],
@@ -158,17 +170,28 @@ app.component('app-layout', {
       <div class="nav-item" :class="{active:currentPage==='sftp'}" @click="$emit('nav','sftp')"><span class="nav-icon">` + ICONS.sftp + `</span>SFTP</div>
       <div class="nav-item" :class="{active:currentPage==='mysql'}" @click="$emit('nav','mysql')"><span class="nav-icon">` + ICONS.mysql + `</span>MySQL</div>
       <div class="nav-item" :class="{active:currentPage==='redis'}" @click="$emit('nav','redis')"><span class="nav-icon">` + ICONS.redis + `</span>Redis</div>
+      <div class="nav-item" :class="{active:currentPage==='metrics'}" @click="$emit('nav','metrics')"><span class="nav-icon">` + ICONS.metrics + `</span>监控查询</div>
       <div class="nav-group">安全审计</div>
       <div class="nav-item" :class="{active:currentPage==='credentials'}" @click="$emit('nav','credentials')"><span class="nav-icon">` + ICONS.credentials + `</span>凭据管理</div>
-      <div class="nav-item" :class="{active:currentPage==='audit'}" @click="$emit('nav','audit')"><span class="nav-icon">` + ICONS.audit + `</span>操作日志</div>
+      <div class="nav-item" :class="{active:currentPage==='audit'}" @click="$emit('nav','audit')"><span class="nav-icon">` + ICONS.audit + `</span>审计日志</div>
       <div class="nav-group">系统</div>
       <div class="nav-item" :class="{active:currentPage==='settings'}" @click="$emit('nav','settings')"><span class="nav-icon">` + ICONS.settings + `</span>设置</div>
     </div>
     <div class="sidebar-footer">v{{version || '—'}}</div>
   </div>
   <div class="main-area">
-    <div class="header">
+    <div class="header" @dblclick="winDblClick">
       <div style="display:flex;align-items:baseline"><span class="header-title">{{pageTitle}}</span><span class="header-sub">{{pageSub}}</span></div>
+      <!-- 无边框窗口的自绘控制（仅桌面模式；浏览器调试隐藏）。最大化/还原两枚图标
+           的互斥显示由 CSS 按 html[data-win-maximised] 切换（wails-shim.js 维护该属性） -->
+      <div class="win-ctls" v-if="winDesktop">
+        <button class="win-ctl" title="最小化" @click="winMin"><svg viewBox="0 0 12 12" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.1"><path d="M2.5 6h7"/></svg></button>
+        <button class="win-ctl" title="最大化 / 还原" @click="winMax">
+          <svg class="win-ico-max" viewBox="0 0 12 12" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.1"><rect x="2.5" y="2.5" width="7" height="7" rx="1.2"/></svg>
+          <svg class="win-ico-restore" viewBox="0 0 12 12" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.1"><path d="M4.4 2.1h3.7c1 0 1.8.8 1.8 1.8v3.7"/><rect x="2.1" y="4.4" width="5.5" height="5.5" rx="1.2"/></svg>
+        </button>
+        <button class="win-ctl win-ctl-close" title="关闭窗口" @click="winClose"><svg viewBox="0 0 12 12" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.1"><path d="M3 3l6 6M9 3l-6 6"/></svg></button>
+      </div>
     </div>
     <div class="tab-bar">
       <div v-for="t in tabs" :key="t.name" class="tab-item" :class="{active:t.name===currentPage}" @click="$emit('nav',t.name)">
@@ -185,10 +208,18 @@ app.component('app-layout', {
   emits: ['nav', 'close-tab', 'refresh-tab'],
   computed: {
     pageTitle() { return routes[this.currentPage]?.title || '' },
-    pageSub() { return routes[this.currentPage]?.sub || '' }
+    pageSub() { return routes[this.currentPage]?.sub || '' },
+    // 仅桌面窗口（Wails）渲染自绘窗口控制按钮；浏览器调试不显示
+    winDesktop() { return !!window.__INFRA_DESKTOP__ }
   },
   methods: {
-    tabTitle(name) { return routes[name]?.title || name } // routes 是闭包变量，模板内不可直接访问
+    tabTitle(name) { return routes[name]?.title || name }, // routes 是闭包变量，模板内不可直接访问
+    // 窗口控制桥在 wails-shim.js（window.__INFRA_WIN__，运行时未就绪时为 undefined）
+    winMin() { if (window.__INFRA_WIN__) window.__INFRA_WIN__.minimise() },
+    winMax() { if (window.__INFRA_WIN__) window.__INFRA_WIN__.toggleMaximise() },
+    winClose() { if (window.__INFRA_WIN__) window.__INFRA_WIN__.close() },
+    // 双击顶栏 = 最大化/还原（仿原生标题栏；点按控制按钮时不触发）
+    winDblClick(e) { if (!this.winDesktop || (e.target.closest && e.target.closest('.win-ctls'))) return; this.winMax() }
   }
 })
 
@@ -214,6 +245,8 @@ app.component('page-sftp', window.SFTPPage)
 app.component('page-mysql', window.MySQLPage)
 // Redis 工具：key 浏览器与值预览都是子组件，由 RedisPage 自行引用
 app.component('page-redis', window.RedisPage)
+// 监控查询：图表 / AI 面板由 MetricsPage 自行引用（metrics.js 内部已完成注册依赖）
+app.component('page-metrics', window.MetricsPage)
 // 设置：三张卡片同样是子组件，由 SettingsPage 自行引用
 app.component('page-settings', window.SettingsPage)
 

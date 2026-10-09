@@ -1,5 +1,5 @@
 window.DeployPage = {
-  props: ['page', 'user', 'versionData'],
+  props: ['page', 'versionData'],
   template: `
 <div class="deploy-page">
   <section class="deploy-hero">

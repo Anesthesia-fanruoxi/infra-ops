@@ -52,28 +52,12 @@ type DeployTask struct {
 	Total        int     `json:"total"`
 	SuccessCnt   int     `json:"success_cnt"`
 	FailCnt      int     `json:"fail_cnt"`
-	TriggerType  string  `json:"trigger_type"` // manual/schedule
-	ScheduleID   int64   `json:"schedule_id"`  // 定时触发时的 schedule ID，手动为 0
+	TriggerType  string  `json:"trigger_type"` // 触发方式，当前恒为 manual
+	ScheduleID   int64   `json:"schedule_id"`  // 历史列（库中保留），当前恒为 0
 	HubHostID    int64   `json:"hub_host_id"`  // 镜像源 hub 主机（须已部署 Docker Registry）；0=直连拉取
 	ParamsJSON   string  `json:"params_json"`  // 任务级默认变量(JSON)，空为"{}"
 	CreatedAt    string  `json:"created_at"`
 	FinishedAt   *string `json:"finished_at"`
-}
-
-// DeploySchedule 定时部署任务。
-type DeploySchedule struct {
-	ID         int64           `json:"id"`
-	Name       string          `json:"name"`
-	TemplateID int64           `json:"template_id"`
-	HostIDs    json.RawMessage `json:"host_ids"` // [1,2,3]
-	Params     json.RawMessage `json:"params"`   // {"k":"v"}
-	CronExpr   string          `json:"cron_expr"`
-	Enabled    bool            `json:"enabled"`
-	LastTaskID int64           `json:"last_task_id"`
-	LastRunAt  *string         `json:"last_run_at"`
-	NextRunAt  *string         `json:"next_run_at"`
-	CreatedAt  string          `json:"created_at"`
-	UpdatedAt  string          `json:"updated_at"`
 }
 
 // DeployTaskHost 任务中单台主机的执行记录。

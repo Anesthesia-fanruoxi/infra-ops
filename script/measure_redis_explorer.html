@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>measure · Redis key 浏览器</title>
+  <link rel="stylesheet" href="../template/static/vendor/element-plus.css">
+  <link rel="stylesheet" href="../template/static/style.css">
+  <style>
+    body { margin: 0; background: #F5F7FA; }
+    #out { margin: 12px 24px; padding: 12px; background: #111827; color: #A7F3D0; font: 12px/1.6 monospace; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <pre id="out"></pre>
+<!--
+  用法（无头 Chrome，实测版式与请求契约，不估算）：
+    "C:/Program Files/Google/Chrome/Application/chrome.exe" --headless=new --disable-gpu --no-sandbox \
+      --window-size=1280,780 --virtual-time-budget=9000 --dump-dom \
+      "file:///D:/project/go/infra-ops/script/measure_redis_explorer.html?stage=none"
+    场景：none（初始）/ search（首批 50 条）/ more（点过「展示更多」）/ all（点过「展示全部」）
+          / empty（一批都没命中）/ limit（命中数超单次上限）/ value（打开值预览抽屉）
+  输出：<pre id="out"> 内的断言与几何（--dump-dom 抓，比截图省事）。
+
+  为什么要建这个台子：这个页面是纯 CSS 撑版式的地方——搜索行（库下拉 + 输入 + 按钮）不能被长地址挤破，
+  结果区是「固定头 + 滚动体 + 固定尾部按钮」的高度受限 flex 列，矮视口下尾部按钮必须留在屏幕内；
+  还有一条安全边界只有在这里能验：没有命中时「展示全部」必须不可点（它没匹配时就是换了名字的 KEYS *）。
+  这几条看代码都推不出来，project 在 es_template_quick 上已经为「内容比视口高」返工过一次。
+
+  开关：?stage=… 见上；?shot=true 只渲染不打断言（出确定性截图用）；?longkey=true 给超长 key 名压省略号分支。
+-->
+  <script src="../template/static/vendor/vue.global.prod.js"></script>
+  <script src="../template/static/vendor/element-plus.min.js"></script>
+  <script src="../template/static/vendor/element-plus-icons-vue.min.js"></script>
+  <script src="../template/static/vendor/element-plus-zh-cn.min.js"></script>
+  <script src="../template/static/vendor/axios.min.js"></script>
+
+  <!-- 被测组件（真实文件，顺序同 index.html：util → value → explorer） -->
+  <script src="../template/static/pages/redis_util.js"></script>
+  <script src="../template/static/pages/redis_value.js"></script>
+  <script src="../template/static/pages/redis_explorer.js"></script>
+
+  <script>
+const QS = new URLSearchParams(location.search)
+const STAGE = QS.get('stage') || 'none'
+const SHOT = QS.get('shot') === 'true'
+const LONGKEY = QS.get('longkey') === 'true'
+
+// ===================== mock 后端 =====================
+// 必须挂到 window：组件脚本在 IIFE 里按 window.api 取（局部 var 看不到，异常还会被 catch 吞掉）
+window.__posts = []
+window.__gets = []
+
+function delay(ms, v) { return new Promise(function (res) { setTimeout(function () { res(v) }, ms) }) }
+
+const KEY_TYPES = ['string', 'hash', 'list', 'set', 'zset']
+// ?longkey=true：给一个明显超出 Key 列可用宽度的名字，压 .redis-key 的 ellipsis 分支。
+// 列宽由 min-width:320 撑到容器剩余宽（实测 872px ≈ 122 个 monospace 字符）。
+// 96 字符仍放得下（量到的就是 872/872），所以这里给到 ~170 字符 —— 数据不够长不是样式没问题。
+function mkKey(i) {
+  if (LONGKEY) return 'order:202610080930112233445566778899:settlement:detail:subitem:region:'
+    + 'shenzhen:guangdong:batch:20261008:page:0001:row:000042:column-cell-value-overflow:' + i
+  return 'order:20261008000' + (i % 100) + ':detail'
+}
+function mkKeys(from, n) {
+  const out = []
+  for (let i = from; i < from + n; i++) {
+    out.push({
+      key: mkKey(i),
+      type: KEY_TYPES[i % KEY_TYPES.length],
+      ttl: i % 4 === 0 ? -1 : (60 + i * 7)
+    })
+  }
+  return out
+}
+
+window.api = {
+  get: function (url) {
+    window.__gets.push(url)
+    if (/\/databases$/.test(url)) {
+      return Promise.resolve({ code: 0, data: [
+        { index: 0, keys: 1284, expires: 0 },
+        { index: 3, keys: 42, expires: 2 }
+      ] })
+    }
+    if (/\/ping$/.test(url)) return Promise.resolve({ code: 0, data: { ok: true, elapsed_ms: 3, server: 'redis 7.2.4' } })
+    return Promise.resolve({ code: 1, message: '未桩住的 GET ' + url })
+  },
+  post: function (url, body, cfg) {
+    window.__posts.push({ url: url, body: body || {}, cfg: cfg || {} })
+    if (/\/keys$/.test(url)) {
+      if (body.scan_id) {
+        // 续推：从 100 开始再给 50 条
+        return delay(600, { code: 0, data: {
+          scan_id: body.scan_id, pattern: '*order:1001', keys: mkKeys(100, 50),
+          found: 214, returned: 150, scanned: 3120, done: false, has_more: true,
+          limit_hit: false, max_keys: 20000, elapsed_ms: 41, db: body.db || 0 } })
+      }
+      if (STAGE === 'empty') {
+        return delay(500, { code: 0, data: {
+          scan_id: 'sc_1', pattern: '*' + body.suffix, keys: [], found: 0, returned: 0,
+          scanned: 3120, done: true, has_more: false, limit_hit: false,
+          max_keys: 20000, elapsed_ms: 33, db: body.db || 0 } })
+      }
+      if (STAGE === 'limit') {
+        return delay(500, { code: 0, data: {
+          scan_id: 'sc_1', pattern: '*' + body.suffix, keys: mkKeys(0, 50), found: 50, returned: 50,
+          scanned: 20000, done: true, has_more: false, limit_hit: true,
+          max_keys: 20000, elapsed_ms: 980, db: body.db || 0 } })
+      }
+      // 首批：拖 500ms，检验 loading 与尾随按钮的禁用态确实在「进行中」出现
+      return delay(500, { code: 0, data: {
+        scan_id: 'sc_1', pattern: '*' + body.suffix, keys: mkKeys(0, 50),
+        found: 214, returned: 50, scanned: 820, done: false, has_more: true,
+        limit_hit: false, max_keys: 20000, elapsed_ms: 28, db: body.db || 0 } })
+    }
+    if (/\/value$/.test(url)) {
+      return Promise.resolve({ code: 0, data: { key: body.key_name, type: 'hash', rows: [
+        { field: 'id', value: '10014' }, { field: 'status', value: 'PAID' },
+        { field: 'amount', value: '1280.00' }
+      ], count: 3, truncated: false } })
+    }
+    return Promise.resolve({ code: 1, message: '未桩住的 POST ' + url })
+  }
+}
+
+// ===================== 挂载 =====================
+const app = Vue.createApp(window.RedisExplorer, { conn: {
+  id: 1, name: 'prod-cache-03', host: '10.20.30.41', port: 6379,
+  username: 'ops', default_db: 0, ssh_host_name: 'jump-01'
+} })
+app.use(ElementPlus)
+app.use(ElementPlusIconsVue)
+app.component('empty-state', { props: ['text'], template: '<div class="empty-state">{{text}}</div>' })
+const vm = app.mount('#app')
+
+function rect(sel) {
+  const el = document.querySelector(sel)
+  if (!el) return null
+  const r = el.getBoundingClientRect()
+  return { w: Math.round(r.width), h: Math.round(r.height), top: Math.round(r.top), bottom: Math.round(r.bottom), left: Math.round(r.left), right: Math.round(r.right) }
+}
+function num(v) { return (typeof v === 'number' && isFinite(v)) ? Math.round(v) : '—' }
+function btn(text) {
+  return [].slice.call(document.querySelectorAll('.redis-actions button, .redis-search button')).filter(function (b) {
+    return b.textContent.replace(/\s+/g, '').indexOf(text.replace(/\s+/g, '')) >= 0
+  })[0]
+}
+const L = []
+function push(s) { L.push(s) }
+
+function snapshot(tag) {
+  const vh = window.innerHeight
+  push('-- [' + tag + '] --')
+  push('可见视口 = ' + window.innerWidth + '×' + vh)
+
+  // 搜索行：库下拉 + 输入 + 按钮，三者不得互相挤破
+  const bar = document.querySelector('.redis-search')
+  if (bar) {
+    const rr = bar.getBoundingClientRect()
+    let ok = 'YES', detail = ''
+    ;[].slice.call(bar.children).forEach(function (ch, i) {
+      const cr = ch.getBoundingClientRect()
+      if (cr.right > rr.right + 1) { ok = 'NO'; detail += ' 第' + (i + 1) + '子项右溢 ' + num(cr.right - rr.right) + 'px;' }
+      if (cr.width < 4) { ok = 'NO'; detail += ' 第' + (i + 1) + '子项被压扁到 ' + num(cr.width) + 'px;' }
+    })
+    push('搜索行子项不溢出 = ' + ok + detail + '  行宽 = ' + num(rr.width))
+    const inp = document.querySelector('.redis-input input')
+    push('.redis-input 实际输入框 = ' + (inp ? num(inp.getBoundingClientRect().width) + 'px' : '—'))
+  }
+
+  // 结果区：头 + 滚动体 + 尾部按钮。尾部门槛必须在视口内（矮视口是这次的主要风险）
+  const panel = document.querySelector('.redis-result')
+  const body = document.querySelector('.redis-result .el-table__body-wrapper')
+  const acts = document.querySelector('.redis-actions')
+  push('.redis-result = ' + JSON.stringify(rect('.redis-result')))
+  if (panel) push('整块不出视口 = ' + (panel.getBoundingClientRect().bottom <= vh + 1 ? 'YES' : 'NO')
+    + '（底边 ' + num(panel.getBoundingClientRect().bottom) + ' vs ' + vh + '）')
+  if (body) push('表体横向未溢出 = ' + (body.scrollWidth <= body.clientWidth + 1 ? 'YES' : 'NO')
+    + '（' + num(body.scrollWidth) + ' vs ' + num(body.clientWidth) + '）')
+  // 内容被裁掉时必须真的出滚动条，而不是被悄悄压扁（项目铁律：判据是 scrollHeight > clientHeight）
+  const scroller = document.querySelector('.redis-table .el-scrollbar__wrap')
+  if (scroller) push('表体内部滚动 = ' + (scroller.scrollHeight > scroller.clientHeight + 1 ? 'YES' : 'NO')
+    + '（内容 ' + num(scroller.scrollHeight) + ' vs 可视 ' + num(scroller.clientHeight)
+    + '，即约可见 ' + Math.round(scroller.clientHeight / 34) + ' 行 / 共 50 行）')
+  if (acts) {
+    push('.redis-actions = ' + JSON.stringify(rect('.redis-actions')))
+    push('尾部门槛在视口内 = ' + (acts.getBoundingClientRect().bottom <= vh + 1 ? 'YES' : 'NO'))
+  }
+
+  // Key 列：列宽是 min-width:320（会撑到容器剩余宽），所以长 key 名不会「撑破列」，
+  // 该验的是它被 ellipsis 截掉、以及整表有没有被迫横向滚动。
+  const k = document.querySelector('.redis-key')
+  if (k) {
+    push('.redis-key 首个 = ' + (k.scrollWidth > k.clientWidth + 1
+      ? '已截断（内容 ' + num(k.scrollWidth) + ' > 框 ' + num(k.clientWidth) + '）'
+      : '未超宽（' + num(k.scrollWidth) + ' / ' + num(k.clientWidth) + '）')
+      + '  text-overflow = ' + getComputedStyle(k).textOverflow)
+  }
+  const wrap = document.querySelector('.redis-table .el-scrollbar__wrap')
+  if (wrap) push('整表未被迫横向滚动 = ' + (wrap.scrollWidth <= wrap.clientWidth + 1 ? 'YES' : 'NO')
+    + '（' + num(wrap.scrollWidth) + ' vs ' + num(wrap.clientWidth) + '）')
+
+  // 行数与按钮可用态
+  const rows = document.querySelectorAll('.redis-table .el-table__row').length
+  push('表格行数 = ' + rows + '  摘要 = ' + (document.querySelector('.tool-list-sub') ? document.querySelector('.tool-list-sub').textContent.trim() : '—'))
+  const more = btn('展示更多'), all = btn('展示全部')
+  push('「展示更多」可用 = ' + (more && !more.disabled ? 'YES' : 'NO')
+    + '   「展示全部」可用 = ' + (all && !all.disabled ? 'YES' : 'NO'))
+  push('操作提示 = ' + (document.querySelector('.redis-actions-note') ? document.querySelector('.redis-actions-note').textContent.trim() : '—'))
+  push('')
+}
+
+function finish() {
+  if (SHOT) return
+  document.getElementById('out').textContent = L.join('\n')
+}
+
+// ===================== 驱动真实链路 =====================
+// 量出「结果区以上」占了多少视口高度 —— tableMaxHeight 的余量必须按实测反推，不能估。
+// 做法：在表格未渲染前（v-if 未成立）读 .redis-result 的 top，它就是上方的固定开销。
+setTimeout(function () {
+  const panel = document.querySelector('.redis-result')
+  if (panel) push('[布局常数] .redis-result 顶边 = ' + num(panel.getBoundingClientRect().top)
+    + 'px（视口 ' + window.innerHeight + '，即上方固定开销占 '
+    + Math.round(panel.getBoundingClientRect().top / window.innerHeight * 100) + '%）；'
+    + 'tableMaxHeight 目前按 vh-400 留量')
+  push('')
+}, 500)
+
+if (STAGE === 'none') {
+  setTimeout(function () { snapshot('初始（未查询）'); finish() }, 600)
+} else {
+  // 输入结尾串 → 点「查询」
+  setTimeout(function () {
+    const inp = document.querySelector('.redis-input input')
+    if (inp) {
+      inp.value = 'order:1001'
+      inp.dispatchEvent(new Event('input', { bubbles: true }))
+    } else push('!! 未找到匹配串输入框')
+  }, 400)
+  setTimeout(function () { snapshot('进行中'); push('请求 = ' + JSON.stringify(window.__posts)); push('') }, 700)
+  setTimeout(function () {
+    const b = btn('查询')
+    if (b) b.click(); else push('!! 未找到「查询」按钮')
+  }, 900)
+  setTimeout(function () { snapshot('首批返回后'); push('请求 = ' + JSON.stringify(window.__posts)); push('') }, 1800)
+
+  if (STAGE === 'more' || STAGE === 'value') {
+    setTimeout(function () { const b = btn('展示更多'); if (b) b.click() }, 2000)
+    // 二次取回后必须再量一次：这一段才是「分页是否真在累加」的证据（首批快照量不到）
+    setTimeout(function () { snapshot('点过「展示更多」后'); finish() }, 2900)
+  }
+  if (STAGE === 'all') {
+    setTimeout(function () { const b = btn('展示全部'); if (b) b.click() }, 2000)
+    setTimeout(function () { snapshot('点过「展示全部」后'); finish() }, 2900)
+  }
+  if (STAGE === 'value') {
+    setTimeout(function () {
+      const row = document.querySelector('.redis-table .el-table__row')
+      if (row) row.click(); else push('!! 表格无行可点')
+    }, 3100)
+    setTimeout(function () {
+      push('-- [值预览抽屉] --')
+      push('.el-drawer = ' + JSON.stringify(rect('.el-drawer')))
+      push('抽屉未横向溢出 = ' + (function () {
+        const b = document.querySelector('.redis-value')
+        return b ? (b.scrollWidth <= b.clientWidth + 1 ? 'YES' : 'NO') : '—'
+      })())
+      push('')
+    }, 3900)
+  }
+  // empty / limit 两态没有后续动作，首批快照就是终态
+  if (STAGE === 'empty' || STAGE === 'limit') {
+    setTimeout(finish, 2900)
+  }
+}
+  </script>
+</body>
+</html>

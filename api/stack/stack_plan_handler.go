@@ -2,7 +2,6 @@ package stack
 
 import (
 	"encoding/json"
-	"fmt"
 	"strconv"
 	"strings"
 
@@ -151,10 +150,5 @@ func (h *stackHandler) ReplanPlan(c *gin.Context) {
 	if b := encodeRolePlan(&plan); b != "" {
 		_ = h.repo.SetInstanceRolePlan(inst.ID, b)
 	}
-	h.auditRepo.Create(&model.AuditLog{
-		Action: "stack.plan.replan", TargetType: "stack_instance", TargetID: inst.ID,
-		Detail:   fmt.Sprintf("name=%s rev=%d hosts=%d", inst.Name, plan.Rev, len(all)),
-		RemoteIP: c.ClientIP(),
-	})
 	resp.OK(c, plan)
 }

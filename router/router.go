@@ -13,6 +13,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"infra-ops/api/ailog"
 	"infra-ops/api/credential"
 	"infra-ops/api/deploy"
 	"infra-ops/api/host"
@@ -22,6 +23,7 @@ import (
 	"infra-ops/api/sse"
 	"infra-ops/api/stack"
 	esapi "infra-ops/api/tool/es"
+	metricsapi "infra-ops/api/tool/metrics"
 	mysqlapi "infra-ops/api/tool/mysql"
 	redisapi "infra-ops/api/tool/redis"
 	regapi "infra-ops/api/tool/registry"
@@ -287,14 +289,15 @@ func Setup(staticFS fs.FS, deps Deps) *gin.Engine {
 	// 工具-MySQL 连接、库表浏览与 SQL 执行
 	mysqlRepo := repo.NewMySQLRepo()
 	mysqlHandler := mysqlapi.NewHandler(mysqlapi.Deps{
-		Repo:     mysqlRepo,
-		AIRepo:   repo.NewMySQLAIRepo(),
-		LogRepo:  repo.NewMySQLLogRepo(),
-		HostRepo: hostRepo,
-		CredRepo: credRepo,
-		CryptoS:  deps.CryptoService,
-		SSHC:     deps.SSHClient,
-		Settings: deps.Settings,
+		Repo:      mysqlRepo,
+		AIRepo:    repo.NewMySQLAIRepo(),
+		LogRepo:   repo.NewMySQLLogRepo(),
+		AILogRepo: repo.NewAILogRepo(),
+		HostRepo:  hostRepo,
+		CredRepo:  credRepo,
+		CryptoS:   deps.CryptoService,
+		SSHC:      deps.SSHClient,
+		Settings:  deps.Settings,
 	})
 	my := protected.Group("/mysql")
 	{
@@ -310,21 +313,30 @@ func Setup(staticFS fs.FS, deps Deps) *gin.Engine {
 		my.GET("/:id/mode", mysqlHandler.GetMode)
 		my.PUT("/:id/mode", mysqlHandler.SetMode)
 		my.POST("/:id/query", mysqlHandler.Query)
+		my.POST("/:id/query/cancel", mysqlHandler.CancelQuery)
+		my.POST("/:id/query/analyze", mysqlHandler.AnalyzeExplain)
 		// AI：接入配置（全局）+ 语义目录 + 自然语言生成 SQL
 		// AI 接入配置已上提为平台设置（/api/settings/ai），工具内不再自带配置读写接口
 		my.GET("/:id/ai/catalog", mysqlHandler.GetCatalog)
 		my.POST("/:id/ai/catalog", mysqlHandler.BuildCatalog)
+		// 批量生成目录走后台任务：启动后即可关弹框 / 切页，任务照跑；进度 / 停止另走 task 接口
+		my.POST("/:id/ai/catalog/task", mysqlHandler.StartCatalogTask)
+		my.GET("/:id/ai/catalog/task", mysqlHandler.GetCatalogTask)
+		my.POST("/:id/ai/catalog/task/stop", mysqlHandler.StopCatalogTask)
 		my.POST("/:id/ai/sql", mysqlHandler.GenerateSQL)
-		// 使用记录：SQL 执行记录（人在工具里执行的语句）与 AI 调用记录（含 token 用量），各查各的
+		// 使用记录：SQL 执行记录（人在工具里执行的语句）；AI 调用记录走统一入口 /api/ai/logs
 		my.GET("/sql-logs", mysqlHandler.GetSQLLogs)
 		my.DELETE("/sql-logs", mysqlHandler.ClearSQLLogs)
-		my.GET("/ai/logs", mysqlHandler.GetAILogs)
-		my.DELETE("/ai/logs", mysqlHandler.ClearAILogs)
 		// 导入导出：边查边写 / 边读边执行，走本地文件（大文件不经 webview 缓冲）
 		my.POST("/:id/export", mysqlHandler.Export)
 		my.POST("/:id/import", mysqlHandler.Import)
 		my.GET("/:id/transfer/progress", mysqlHandler.TransferProgress)
 	}
+
+	// 统一 AI 调用记录：各工具写进一张 ai_logs（menu 存页面 id），查询 / 清空按 menu + conn_id 过滤
+	aiLogHandler := ailog.NewHandler(repo.NewAILogRepo(), deps.Settings)
+	protected.GET("/ai/logs", aiLogHandler.List)
+	protected.DELETE("/ai/logs", aiLogHandler.Clear)
 
 	// 工具-Redis 连接、key 浏览与值预览（只读工具，无写入门禁）
 	redisHandler := redisapi.NewHandler(redisapi.Deps{
@@ -347,7 +359,22 @@ func Setup(staticFS fs.FS, deps Deps) *gin.Engine {
 		rd.GET("/:id/key", redisHandler.Key)
 	}
 
-	// 平台设置：AI 接入、运行参数与系统信息（设置页唯一的入口，任何功能要调模型都走这套配置）
+	// 工具-监控查询：Prometheus / VictoriaMetrics 查询（AI 生成 PromQL / 解读结果）
+	metricsHandler := metricsapi.NewHandler(repo.NewMetricsRepo(), deps.CryptoService, deps.Settings, repo.NewAILogRepo())
+	mt := protected.Group("/metrics")
+	{
+		mt.GET("/conns", metricsHandler.List)
+		mt.POST("/conns", metricsHandler.Create)
+		mt.PUT("/conns/:id", metricsHandler.Update)
+		mt.DELETE("/conns/:id", metricsHandler.Delete)
+		mt.POST("/conns/:id/ping", metricsHandler.Ping)
+		mt.GET("/conns/:id/metric-names", metricsHandler.MetricNames)
+		mt.POST("/conns/:id/query", metricsHandler.Query)
+		mt.POST("/conns/:id/ai/promql", metricsHandler.GeneratePromQL)
+		mt.POST("/conns/:id/ai/explain", metricsHandler.ExplainResult)
+	}
+
+	// 平台设置：AI 接入与系统信息（设置页唯一的入口，任何功能要调模型都走这套配置）
 	settingsHandler := settingsapi.NewHandler(settingsapi.Deps{
 		Settings: deps.Settings,
 		CryptoS:  deps.CryptoService,
@@ -358,9 +385,11 @@ func Setup(staticFS fs.FS, deps Deps) *gin.Engine {
 		st.PUT("/ai", settingsHandler.SaveAI)
 		st.POST("/ai/test", settingsHandler.TestAI)
 		st.POST("/ai/models", settingsHandler.ListAIModels)
-		st.GET("/platform", settingsHandler.GetPlatform)
-		st.PUT("/platform", settingsHandler.SavePlatform)
 		st.GET("/system", settingsHandler.GetSystem)
+		// 备份恢复：导出（加密落盘）/ 恢复前预览 / 恢复（暂存，重启换入）
+		st.POST("/backup/export", settingsHandler.BackupExport)
+		st.POST("/backup/preview", settingsHandler.BackupPreview)
+		st.POST("/backup/restore", settingsHandler.BackupRestore)
 	}
 
 	// 总览 & 审计日志（审计日志统一走 /api/sse/audits 单一查询流）

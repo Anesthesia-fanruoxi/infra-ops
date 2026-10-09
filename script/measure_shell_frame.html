@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<!--
+  常驻测量台：应用壳（顶栏/侧栏）与无边框窗口控制（main.go Frameless: true）。
+  用真实文件挂载整个壳：style.css + wails-shim.js（适配层）+ app.js（app-layout），
+  页面组件用最小桩替换——壳断言不依赖具体页面内容。
+  为什么 file:// 就能测桌面形态：wails-shim.js 把非 http(s) 协议判为桌面环境
+  （__INFRA_DESKTOP__=true），窗口控制按钮随桌面模式渲染；而运行时
+  （/wails/runtime.js）在 file:// 下拿不到 → __INFRA_WIN__ 保持 undefined，
+  按钮点击/双击顶栏应无操作且不报错（降级路径）。
+
+  用法：
+    node .workbuddy/run_measure.cjs "file:///D:/project/go/infra-ops/script/measure_shell_frame.html" 9000
+  预期：desktopFlag=true / ctlCount=3 / dragHeader=drag / dragHeaderTitle=drag（继承）/
+        dragLogo=drag / dragCtls=no-drag / dragCtlsBtn=no-drag /
+        iconDefault: max=block restore=none → iconMaximised: max=none restore=block →
+        iconRestored 复原 / winBridge=undefined / errors=none
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>measure · 应用壳与窗口控制</title>
+<link rel="stylesheet" href="../template/static/vendor/element-plus.css">
+<link rel="stylesheet" href="../template/static/style.css">
+<style>
+  body { margin: 0; }
+  #app { height: 700px; }
+  #out { margin: 8px; padding: 10px; background: #111827; color: #A7F3D0; font: 12px/1.6 monospace; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<pre id="out">running…</pre>
+
+<script src="../template/static/vendor/vue.global.prod.js"></script>
+<script src="../template/static/vendor/element-plus.min.js"></script>
+<script src="../template/static/vendor/element-plus-icons-vue.min.js"></script>
+<script src="../template/static/vendor/element-plus-zh-cn.min.js"></script>
+<script src="../template/static/vendor/axios.min.js"></script>
+
+<script>
+// 页面组件桩：app.js 挂载壳时需要这些全局组件已存在（壳断言不看页面内容）
+;['OverviewPage','HostsPage','CredentialsPage','AuditPage','TemplatesPage','DeployPage','OrchestrationsPage','StacksPage','RegistryPage','ESPage','SFTPPage','MySQLPage','RedisPage','SettingsPage','StackFormBigdataSelect','StackFormBigdataOp','StackFormBigdataRoles','StackFormRedisTopo','StackFormElasticsearchRoles'].forEach(function (n) {
+  window[n] = { template: '<div class="page-stub"></div>' }
+})
+window.__err = ''
+window.addEventListener('error', function (e) { window.__err += ' | ' + e.message })
+</script>
+
+<!-- 真实适配层：file:// 判定为桌面模式（__INFRA_DESKTOP__=true）→ 走桌面分支 -->
+<script src="../template/static/wails-shim.js"></script>
+<!-- 真实应用壳 -->
+<script src="../template/static/app.js"></script>
+
+<script>
+;(async function () {
+  const out = {}
+  const q = (s) => document.querySelector(s)
+  await Vue.nextTick()
+
+  out.desktopFlag = !!window.__INFRA_DESKTOP__
+  out.shellRendered = !!q('.layout') && !!q('.sidebar') && !!q('.main-area') && !!q('.tab-bar')
+  out.logoText = q('.sidebar-logo') ? q('.sidebar-logo').textContent.trim() : '(none)'
+  out.headerTitle = q('.header-title') ? q('.header-title').textContent.trim() : '(none)'
+
+  const ctls = q('.win-ctls')
+  const btns = document.querySelectorAll('.win-ctls .win-ctl')
+  out.winCtlsFound = !!ctls
+  out.ctlCount = btns.length
+  out.ctlTitles = Array.prototype.map.call(btns, (b) => b.title).join(',')
+
+  // 拖拽协议：顶栏/Logo 区为 drag（须能继承到文字，才能从标题文字拖窗），
+  // 控制按钮区为 no-drag（防止按住按钮误拖窗）
+  const dragVar = (el) => el ? getComputedStyle(el).getPropertyValue('--wails-draggable').trim() : '(no el)'
+  out.dragHeader = dragVar(q('.header'))
+  out.dragHeaderTitle = dragVar(q('.header-title'))
+  out.dragLogo = dragVar(q('.sidebar-logo'))
+  out.dragCtls = dragVar(ctls)
+  out.dragCtlsBtn = dragVar(btns[0])
+
+  // 最大化/还原图标互斥：由 html[data-win-maximised] 切换（wails-shim.js 维护）
+  const dsp = (s) => { const el = q(s); return el ? getComputedStyle(el).display : '(no el)' }
+  out.iconDefault = 'max=' + dsp('.win-ico-max') + ' restore=' + dsp('.win-ico-restore')
+  document.documentElement.setAttribute('data-win-maximised', '')
+  out.iconMaximised = 'max=' + dsp('.win-ico-max') + ' restore=' + dsp('.win-ico-restore')
+  document.documentElement.removeAttribute('data-win-maximised')
+  out.iconRestored = 'max=' + dsp('.win-ico-max') + ' restore=' + dsp('.win-ico-restore')
+
+  // 运行时未就绪（file:// 无 /wails/runtime.js）：按钮点击与双击顶栏必须无操作、不报错
+  Array.prototype.forEach.call(btns, (b) => b.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+  q('.header').dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))
+  out.winBridge = String(window.__INFRA_WIN__)
+  out.errors = window.__err || 'none'
+  document.getElementById('out').textContent = JSON.stringify(out, null, 1)
+})()
+</script>
+</body>
+</html>

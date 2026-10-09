@@ -1,5 +1,5 @@
 window.OrchestrationsPage = {
-  props: ['page', 'user', 'versionData'],
+  props: ['page', 'versionData'],
   mixins: [window.OrchDrawerMixin],
   template: `
 <div class="orch-page">

@@ -99,7 +99,6 @@ func (h *Handler) PutIndexTemplate(c *gin.Context) {
 		resp.Fail(c, resp.CodeInternal, esErr(status, body, "保存模板失败").Error())
 		return
 	}
-	h.auditWrite(c, "es.index_template.put", "es_index_template", name)
 	resp.OK(c, nil)
 }
 
@@ -128,7 +127,6 @@ func (h *Handler) DeleteIndexTemplate(c *gin.Context) {
 		resp.Fail(c, resp.CodeInternal, esErr(status, body, "删除模板失败").Error())
 		return
 	}
-	h.auditWrite(c, "es.index_template.delete", "es_index_template", name)
 	resp.OK(c, nil)
 }
 
@@ -199,7 +197,6 @@ func (h *Handler) PutComponentTemplate(c *gin.Context) {
 		resp.Fail(c, resp.CodeInternal, esErr(status, body, "保存组件模板失败").Error())
 		return
 	}
-	h.auditWrite(c, "es.component_template.put", "es_component_template", name)
 	resp.OK(c, nil)
 }
 
@@ -228,7 +225,6 @@ func (h *Handler) DeleteComponentTemplate(c *gin.Context) {
 		resp.Fail(c, resp.CodeInternal, esErr(status, body, "删除组件模板失败").Error())
 		return
 	}
-	h.auditWrite(c, "es.component_template.delete", "es_component_template", name)
 	resp.OK(c, nil)
 }
 

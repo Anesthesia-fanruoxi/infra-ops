@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>measure · MySQL 导入 / 导出对话框</title>
+  <link rel="stylesheet" href="../template/static/vendor/element-plus.css">
+  <link rel="stylesheet" href="../template/static/style.css">
+  <style>
+    body { margin: 0; background: #F5F7FA; }
+    #out { margin: 12px 24px; padding: 12px; background: #111827; color: #A7F3D0; font: 12px/1.6 monospace; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <pre id="out"></pre>
+<!--
+  用法（无头 Chrome，实测版式与请求契约，不估算）：
+    "C:/Program Files/Google/Chrome/Application/chrome.exe" --headless=new --disable-gpu --no-sandbox \
+      --window-size=1280,780 --virtual-time-budget=9000 --dump-dom \
+      "file:///D:/project/go/infra-ops/script/measure_mysql_transfer.html?mode=export"
+    …?mode=import 换导入；?longpath=true 给一个深层真实路径压省略号分支。
+    矮视口务必也跑一遍（--window-size=1280,620，可见高约 525）：加了 .mysql-transfer-dialog
+    之前这里就是红的（整框底边 636 vs 525、页脚按钮出屏），这正是本次修版的起因。
+  输出：<pre id="out"> 内的断言与几何（--dump-dom 抓，比截图省事）。
+  与 measure_mysql_wb.html 的分工：那边量工作台整体，这边只量两个传输对话框。
+
+  为什么要建这个台子：这两个对话框在「进行中」与「已完成」两态下高度差很大
+  （进度条 + 结果块都是 v-if），只看代码估算不出视口里底部按钮会不会被顶出屏幕——
+  项目在 es_template_quick 上已经为「对话框比视口高」返工过一次。
+  开关：?mode=export（默认）| import ；?longpath=true ；?shot=true 只渲染不打断言（出确定性截图用）。
+-->
+  <script src="../template/static/vendor/vue.global.prod.js"></script>
+  <script src="../template/static/vendor/element-plus.min.js"></script>
+  <script src="../template/static/vendor/element-plus-icons-vue.min.js"></script>
+  <script src="../template/static/vendor/element-plus-zh-cn.min.js"></script>
+  <script src="../template/static/vendor/axios.min.js"></script>
+
+  <!-- 被测组件（真实文件，顺序同 index.html：util 必须先于两个对话框） -->
+  <script src="../template/static/pages/mysql_transfer_util.js"></script>
+  <script src="../template/static/pages/mysql_export.js"></script>
+  <script src="../template/static/pages/mysql_import.js"></script>
+
+  <script>
+const QS = new URLSearchParams(location.search)
+const MODE = QS.get('mode') === 'import' ? 'import' : 'export'
+const SHOT = QS.get('shot') === 'true'
+// ?longpath=true：给一个真实的深层 Windows 路径，压一压 .mysql-transfer-path 的省略号分支
+// （flex:1 + min-width:0 缺一个，长路径就会把整行撑宽、把按钮挤出去）
+const LONGPATH = QS.get('longpath') === 'true'
+const LONG_FILE = 'C:\\Users\\anesthesia\\Documents\\生产环境\\公司主数据库\\2026-10-08_全量备份\\demo_20261008.sql'
+
+// ===================== mock 后端 =====================
+// 必须挂到 window：组件脚本在 IIFE 里按 window.api 取（局部 var 看不到，异常还会被 catch 吞掉）
+window.__posts = []
+window.__polls = 0
+window.__calls = []
+window.__prog = { rows: 0, statements: 0, bytes: 0, elapsed_ms: 0 }
+
+function delay(ms, v) { return new Promise(function (res) { setTimeout(function () { res(v) }, ms) }) }
+
+const EXPORT_SQL = "SELECT id, name, email, created_at FROM demo.users WHERE status = 1 ORDER BY id"
+
+window.api = {
+  get: function (url) {
+    if (/\/transfer\/progress/.test(url)) {
+      window.__polls++
+      window.__prog.rows += 5000
+      window.__prog.statements += 40
+      window.__prog.bytes += 40960
+      window.__prog.elapsed_ms += 500
+      return Promise.resolve({ code: 0, data: { found: true, active: true, status: Object.assign({}, window.__prog) } })
+    }
+    return Promise.resolve({ code: 1, message: '未桩住的 GET ' + url })
+  },
+  post: function (url, body, cfg) {
+    window.__posts.push({ url: url, body: body || {}, cfg: cfg || {} })
+    if (/\/export$/.test(url)) {
+      // 拖 1.5s 才回：检验进度条与表单锁定态确实在「进行中」出现，而不是一闪而过
+      return delay(1500, { code: 0, data: {
+        target: body.target, format: body.format,
+        rows: 128467, bytes: 38940123, batches: 643, elapsed_ms: 14200 } })
+    }
+    if (/\/import$/.test(url)) {
+      if (!body.confirmed) {
+        // 第一段：只回待确认信息，让前端把文件与目标库摆出来再确认一次
+        return Promise.resolve({ code: 0, data: {
+          need_confirm: true, source: body.source, size: 7340032,
+          schema: body.schema, batch_size: body.batch_size, on_error: body.on_error, allow_schema: false } })
+      }
+      return delay(1500, { code: 0, data: {
+        source: body.source, schema: body.schema,
+        statements: 20481, affected: 103344, batches: 41, skipped: 2,
+        errors: ['第 88 条执行失败：Duplicate entry …', '第 900 条执行失败：Unknown column …'],
+        bytes: 7340032, elapsed_ms: 26400 } })
+    }
+    return Promise.resolve({ code: 1, message: '未桩住的 POST ' + url })
+  }
+}
+
+// 原生文件对话框：桌面端才有。这里桩住并记录调用参数，验证传给 SaveFile 的过滤器与默认文件名。
+window.__INFRA_DESKTOP__ = true
+window.wails = { Call: { ByName: function (name, a, b, c, d) {
+  window.__calls.push([name, a, b, c, d])
+  if (/PickSQLFile$/.test(name)) return Promise.resolve(LONGPATH ? LONG_FILE : 'D:\\dump\\demo_20261008.sql')
+  return Promise.resolve(LONGPATH ? LONG_FILE : 'D:\\dump\\users_20261008.sql')
+} } }
+
+// ===================== 挂载 =====================
+const Comps = { export: window.MySQLExport, import: window.MySQLImport }
+const PROPS = MODE === 'export'
+  ? { connId: 1, sql: EXPORT_SQL, schema: 'demo' }
+  : { connId: 1, schema: 'demo' }
+const app = Vue.createApp(Comps[MODE], PROPS)
+app.use(ElementPlus)
+app.use(ElementPlusIconsVue)
+const vm = app.mount('#app')
+
+function rect(sel) {
+  const el = document.querySelector(sel)
+  if (!el) return null
+  const r = el.getBoundingClientRect()
+  return { w: Math.round(r.width), h: Math.round(r.height), top: Math.round(r.top), bottom: Math.round(r.bottom), left: Math.round(r.left), right: Math.round(r.right) }
+}
+function num(v) { return (typeof v === 'number' && isFinite(v)) ? Math.round(v) : '—' }
+function btn(root, text) {
+  return [].slice.call(document.querySelectorAll(root + ' button')).filter(function (b) {
+    return b.textContent.replace(/\s+/g, '').indexOf(text) >= 0
+  })[0]
+}
+const L = []
+function push(s) { L.push(s) }
+
+// 一屏快照：进度/锁定态只在「进行中」存在，结束态量不到，所以两态各量一次
+function snapshot(tag) {
+  const vh = window.innerHeight
+  const dlg = document.querySelector('.el-dialog')
+  const body = document.querySelector('.el-dialog__body')
+  const footer = document.querySelector('.el-dialog__footer')
+  const bar = document.querySelector('.mysql-transfer-bar span')
+  const form = document.querySelector('.mysql-transfer-form')
+  push('-- [' + tag + '] --')
+  push('可见视口 = ' + window.innerWidth + '×' + vh)
+  push('.el-dialog = ' + JSON.stringify(rect('.el-dialog')))
+  push('.el-dialog__footer = ' + JSON.stringify(rect('.el-dialog__footer')))
+  push('整框不超出视口 = ' + (dlg && dlg.getBoundingClientRect().bottom <= vh + 1 ? 'YES' : 'NO')
+    + '（底边 ' + num(dlg ? dlg.getBoundingClientRect().bottom : NaN) + ' vs ' + vh + '）')
+  push('页脚按钮在视口内 = ' + (footer && footer.getBoundingClientRect().bottom <= vh + 1 ? 'YES' : 'NO'))
+  push('正文未横向溢出 = ' + (body && body.scrollWidth <= body.clientWidth + 1 ? 'YES' : 'NO')
+    + '（' + num(body ? body.scrollWidth : NaN) + ' vs ' + num(body ? body.clientWidth : NaN) + '）')
+  // 路径行：flex:1 + min-width:0 + ellipsis，长路径必须被裁掉而不是把行撑宽
+  const rows = [].slice.call(document.querySelectorAll('.mysql-transfer-row'))
+  let ok = 'YES', detail = ''
+  rows.forEach(function (row, i) {
+    const rr = row.getBoundingClientRect()
+    ;[].slice.call(row.children).forEach(function (ch) {
+      const cr = ch.getBoundingClientRect()
+      if (cr.right > rr.right + 1) { ok = 'NO'; detail += ' 第' + (i + 1) + '行子项右溢 ' + num(cr.right - rr.right) + 'px;' }
+    })
+  })
+  push('表单各行子项不溢出 = ' + ok + detail)
+  const path = document.querySelector('.mysql-transfer-path')
+  if (path) {
+    push('.mysql-transfer-path = ' + JSON.stringify(rect('.mysql-transfer-path'))
+      + ' → 文本被截断 = ' + (path.scrollWidth > path.clientWidth ? 'YES' : 'NO（未超宽）'))
+  }
+  const locked = form ? getComputedStyle(form).opacity : '—'
+  push('表单锁定态 opacity = ' + locked + '（is-locked=' + (form ? form.classList.contains('is-locked') : '—') + '）')
+  push('进度条 = ' + (bar ? ('宽 ' + num(bar.getBoundingClientRect().width) + 'px') : '（未显示）')
+    + '  动画 = ' + (bar ? getComputedStyle(bar).animationName : '—'))
+  push('进度条出现（应仅在进行中）= ' + (document.querySelector('.mysql-transfer-progress') ? 'YES' : 'NO'))
+  push('结果块出现 = ' + (document.querySelector('.mysql-transfer-result') ? 'YES' : 'NO'))
+  push('')
+}
+
+// ===================== 驱动真实链路 =====================
+if (MODE === 'export') {
+  setTimeout(function () {
+    const b = btn('.el-dialog__body', '选择位置')
+    if (b) b.click(); else push('!! 未找到「选择位置」按钮')
+  }, 300)
+  setTimeout(function () {
+    const b = btn('.el-dialog__footer', '开始导出')
+    if (b) b.click(); else push('!! 未找到「开始导出」按钮')
+  }, 700)
+  setTimeout(function () { snapshot('进行中') }, 1200)
+  setTimeout(function () { snapshot('已结束'); finish() }, 3200)
+} else {
+  setTimeout(function () {
+    const b = btn('.el-dialog__body', '选择文件')
+    if (b) b.click(); else push('!! 未找到「选择文件」按钮')
+  }, 300)
+  setTimeout(function () {
+    const b = btn('.el-dialog__footer', '开始导入')
+    if (b) b.click(); else push('!! 未找到「开始导入」按钮')
+  }, 700)
+  // 第一段请求立即回 need_confirm，$confirm 弹框出现 → 点确认走第二段
+  setTimeout(function () {
+    const box = document.querySelector('.el-message-box')
+    push('确认框出现 = ' + (box ? 'YES' : 'NO'))
+    if (box) {
+      push('确认框文案 = ' + box.textContent.replace(/\s+/g, ' ').trim().slice(0, 200))
+    }
+    const ok = document.querySelector('.el-message-box__btns .el-button--primary')
+    if (ok) ok.click(); else push('!! 确认框没有主按钮')
+  }, 1500)
+  setTimeout(function () { snapshot('进行中') }, 2200)
+  setTimeout(function () { snapshot('已结束'); finish() }, 5200)
+}
+
+// ===================== 汇总 =====================
+function finish() {
+  push('== 请求契约 ==')
+  window.__posts.forEach(function (p, i) {
+    push('#' + (i + 1) + ' POST ' + p.url)
+    push('    config = ' + JSON.stringify(p.cfg))
+    push('    timeout 未设 = ' + (p.cfg.timeout === 0 ? '0（不超时，本地直连）' : JSON.stringify(p.cfg.timeout)))
+    push('    body = ' + JSON.stringify(p.body).slice(0, 240))
+  })
+  push('进度轮询次数 = ' + window.__polls + '（>0 说明旁路进度确实在跑）')
+  push('原生对话框调用 = ' + JSON.stringify(window.__calls))
+  push('')
+  push('== 关键断言 ==')
+  const t0 = window.__posts.length ? window.__posts[0] : null
+  const tLast = window.__posts.length ? window.__posts[window.__posts.length - 1] : null
+  if (MODE === 'export') {
+    push('导出请求 timeout=0 = ' + (t0 && t0.cfg.timeout === 0 ? 'YES' : 'NO'))
+    push('带 progress_key = ' + (t0 && !!t0.body.progress_key ? 'YES' : 'NO'))
+    push('默认每批 200 行 = ' + (t0 && t0.body.batch_rows === 200 ? 'YES' : 'NO'))
+    push('格式 sql = ' + (t0 && t0.body.format === 'sql' ? 'YES' : 'NO'))
+    push('保存路径已回填 = ' + (vm.target === (LONGPATH ? LONG_FILE : 'D:\\dump\\users_20261008.sql') ? 'YES' : 'NO（' + vm.target + '）'))
+    push('完成后 busy 复位 = ' + (vm.busy === false ? 'YES' : 'NO'))
+    push('结果行数 = ' + (vm.result ? vm.result.rows : '—'))
+  } else {
+    push('请求条数 = ' + window.__posts.length + '（应为 2：先探后提交）')
+    push('第一段 confirmed=false = ' + (t0 && t0.body.confirmed === false ? 'YES' : 'NO'))
+    push('第一段未设 timeout = ' + (t0 && t0.cfg.timeout === undefined ? 'YES（探测很快，走默认）' : JSON.stringify(t0 && t0.cfg.timeout)))
+    push('第二段 confirmed=true = ' + (tLast && window.__posts.length > 1 && tLast.body.confirmed === true ? 'YES' : 'NO'))
+    push('第二段 timeout=0 = ' + (tLast && window.__posts.length > 1 && tLast.cfg.timeout === 0 ? 'YES' : 'NO'))
+    push('文件已回填 = ' + (vm.source === 'D:\\dump\\demo_20261008.sql' ? 'YES' : 'NO（' + vm.source + '）'))
+    push('完成后 busy 复位 = ' + (vm.busy === false ? 'YES' : 'NO'))
+    push('跳过明细 = ' + (vm.result && vm.result.errors ? vm.result.errors.length : '—') + ' 条')
+  }
+  document.getElementById('out').textContent = L.join('\n')
+  document.title = 'rendered:' + MODE + '|' + (document.querySelector('.el-dialog') ? 'ok' : 'fail')
+    + '|posts:' + window.__posts.length + '|polls:' + window.__polls
+}
+</script>
+</body>
+</html>

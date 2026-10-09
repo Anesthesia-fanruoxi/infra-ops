@@ -1,5 +1,5 @@
 window.RegistryPage = {
-  props: ['page', 'user', 'versionData'],
+  props: ['page', 'versionData'],
   template: `
 <div>
   <!-- 视图一：连接列表 -->

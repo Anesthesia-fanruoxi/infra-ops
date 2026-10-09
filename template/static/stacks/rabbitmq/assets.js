@@ -46,7 +46,20 @@ window.StackFormRabbitmqAssets = {
       } catch (e) { ctx.assetCheck = [] }
       finally { ctx.assetCheckBusy = false }
     },
-    pickAsset(a) { this._assetPick = a; this.$refs.assetFile.value = ''; this.$refs.assetFile.click() },
+    pickAsset(a) {
+      // 桌面端：原生选文件 + Go 直存（大文件不经 webview 内存缓冲）
+      if (window.__INFRA_DESKTOP__) { this.desktopPickAsset(a); return }
+      this._assetPick = a; this.$refs.assetFile.value = ''; this.$refs.assetFile.click()
+    },
+    async desktopPickAsset(it) {
+      if (!it) return
+      try {
+        const localPath = await window.wails.Call.ByName('infra-ops/desktop.FileService.PickAssetFile', it.file_name || '')
+        if (!localPath) return
+        await window.wails.Call.ByName('infra-ops/desktop.FileService.StoreAsset', it.key, it.version, it.file_name, localPath)
+        ElMessage.success('已上传到服务端：' + it.file_name); this.checkAssets()
+      } catch (e) { ElMessage.error(e?.message || '上传失败') }
+    },
     async onAssetPicked(e) {
       const file = e.target.files && e.target.files[0]
       const it = this._assetPick

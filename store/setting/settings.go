@@ -9,18 +9,22 @@ import (
 
 // settings 表键常量。
 const (
-	SettingServerHost       = "server.host"
-	SettingServerPort       = "server.port"
 	SettingSecretKey        = "security.secret_key"
-	SettingAuthUsername     = "auth.username"
-	SettingAuthPasswordHash = "auth.password_hash"
-	SettingAuthMustChange   = "auth.must_change_password"
 	SettingSSHTimeout       = "ssh.timeout"
 	SettingSSHHostKeyPolicy = "ssh.host_key_policy"
 	SettingProbeInterval    = "probe.interval"
 	SettingProbeConcurrency = "probe.concurrency"
 	SettingDeployConc       = "deploy.concurrency"
 	SettingLogRetentionDays = "deploy.log_retention_days"
+
+	// AI（MySQL 工具的「自然语言生成 SQL」）：内置厂商 + OpenAI 兼容接口三件套 + 超时。
+	// 选定内置厂商后接口地址由平台派生，用户只需填密钥；密钥以密文（Base64 包裹）存库，读取时由 crypto.Service 解密。
+	SettingAIProvider = "ai.provider"
+	SettingAIEnabled  = "ai.enabled"
+	SettingAIBaseURL  = "ai.base_url"
+	SettingAIModel    = "ai.model"
+	SettingAIAPIKey   = "ai.api_key"
+	SettingAITimeout  = "ai.timeout"
 )
 
 // SettingsRepo settings 表 KV 存取。
@@ -68,7 +72,7 @@ func (r *SettingsRepo) Set(key, value string) error {
 
 // EnsureBootstrap 首次启动写入默认配置；已初始化则跳过。
 // 返回是否执行了本次初始化。
-func (r *SettingsRepo) EnsureBootstrap(secretKey, passwordHash string) (bool, error) {
+func (r *SettingsRepo) EnsureBootstrap(secretKey string) (bool, error) {
 	v, err := r.Get(SettingSecretKey)
 	if err != nil {
 		return false, err
@@ -77,12 +81,7 @@ func (r *SettingsRepo) EnsureBootstrap(secretKey, passwordHash string) (bool, er
 		return false, nil
 	}
 	defaults := [][2]string{
-		{SettingServerHost, "127.0.0.1"},
-		{SettingServerPort, "8090"},
 		{SettingSecretKey, secretKey},
-		{SettingAuthUsername, "admin"},
-		{SettingAuthPasswordHash, passwordHash},
-		{SettingAuthMustChange, "1"},
 		{SettingSSHTimeout, "8"},
 		{SettingSSHHostKeyPolicy, "tofu"},
 		{SettingProbeInterval, "60"},
@@ -106,6 +105,11 @@ func (r *SettingsRepo) EnsureRuntimeDefaults() error {
 		{SettingProbeConcurrency, "auto"},
 		{SettingDeployConc, "auto"},
 		{SettingLogRetentionDays, "30"},
+		{SettingAIProvider, ""},
+		{SettingAIEnabled, "0"},
+		{SettingAIBaseURL, ""},
+		{SettingAIModel, ""},
+		{SettingAITimeout, "90"},
 	}
 	for _, kv := range defaults {
 		if _, err := store.DB.Exec(`INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO NOTHING`, kv[0], kv[1]); err != nil {

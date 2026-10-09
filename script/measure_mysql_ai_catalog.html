@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>measure · MySQL 语义目录抽屉 / 导出双模式</title>
+  <link rel="stylesheet" href="../template/static/vendor/element-plus.css">
+  <link rel="stylesheet" href="../template/static/style.css">
+  <style>
+    body { margin: 0; background: #F5F7FA; }
+    #out { margin: 12px 24px; padding: 12px; background: #111827; color: #A7F3D0; font: 12px/1.6 monospace; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <pre id="out"></pre>
+<!--
+  用法（无头 Chrome，实测行为，不估算）：
+    "C:/Program Files/Google/Chrome/Application/chrome.exe" --headless=new --disable-gpu \
+      --window-size=1280,780 --virtual-time-budget=9000 --dump-dom \
+      "file:///D:/project/go/infra-ops/script/measure_mysql_ai_catalog.html?mode=catalog"
+    ?mode=catalog（默认）语义目录抽屉：分组渲染 / 过滤 / 字段展开。
+    ?mode=dump        整表转储模式：标题、固定 SELECT * 语句、INSERT 目标表默认值、POST 报文。
+    ?mode=query       查询导出模式：标题与预览仍按编辑器 SQL。
+
+  与 measure_mysql_transfer.html 的分工：那边量导入导出对话框的版式与进度，
+  这边量本轮新增的「整表转储」双模式分支与语义目录抽屉的交互行为。
+-->
+  <script src="../template/static/vendor/vue.global.prod.js"></script>
+  <script src="../template/static/vendor/element-plus.min.js"></script>
+  <script src="../template/static/vendor/element-plus-icons-vue.min.js"></script>
+  <script src="../template/static/vendor/element-plus-zh-cn.min.js"></script>
+  <script src="../template/static/vendor/axios.min.js"></script>
+
+  <!-- 被测组件（真实文件，顺序同 index.html） -->
+  <script src="../template/static/pages/mysql_transfer_util.js"></script>
+  <script src="../template/static/pages/mysql_ai_catalog.js"></script>
+  <script src="../template/static/pages/mysql_export.js"></script>
+
+  <script>
+const QS = new URLSearchParams(location.search)
+const MODE = QS.get('mode') || 'catalog'
+
+// ===================== mock 后端 =====================
+// 必须挂到 window：组件按 window.api 取（局部 var 看不到，异常还会被 catch 吞掉）
+window.__gets = []
+window.__posts = []
+
+const CATALOG = {
+  code: 0,
+  data: {
+    total: 4,
+    schemas: [{ name: 'demo', total: 3 }, { name: 'erp', total: 1 }],
+    list: [
+      { schema_name: 'demo', table_name: 't_order', purpose: '订单主表，业务下单与支付流水都查它',
+        columns: [{ name: 'id', note: '主键' }, { name: 'amount', note: '订单金额' }] },
+      { schema_name: 'demo', table_name: 't_user', purpose: '用户表',
+        columns: [{ name: 'id', note: '主键' }, { name: 'phone', note: '手机号' }] },
+      { schema_name: 'demo', table_name: 't_log', purpose: '操作日志', columns: [] },
+      { schema_name: 'erp', table_name: 't_dept', purpose: '部门表',
+        columns: [{ name: 'dept_no', note: '部门编号' }] }
+    ]
+  }
+}
+
+window.api = {
+  get: function (url) {
+    window.__gets.push(url)
+    if (/\/ai\/catalog$/.test(url)) return Promise.resolve(CATALOG)
+    if (/\/transfer\/progress/.test(url)) {
+      return Promise.resolve({ code: 0, data: { found: true, active: true,
+        status: { rows: 5000, statements: 40, bytes: 40960, elapsed_ms: 500 } } })
+    }
+    return Promise.resolve({ code: 1, message: '未桩住的 GET ' + url })
+  },
+  post: function (url, body) {
+    window.__posts.push({ url: url, body: body || {} })
+    if (/\/export$/.test(url)) {
+      return Promise.resolve({ code: 0, data: {
+        target: body.target, format: body.format, rows: 128, bytes: 38940, batches: 2, elapsed_ms: 1420 } })
+    }
+    return Promise.resolve({ code: 1, message: '未桩住的 POST ' + url })
+  }
+}
+window.__INFRA_DESKTOP__ = true
+window.wails = { Call: { ByName: function () { return Promise.resolve('D:\\dump\\t_order_20261009.sql') } } }
+
+// ===================== 挂载 =====================
+const Comps = { catalog: window.MySQLAICatalog, dump: window.MySQLExport, query: window.MySQLExport }
+const PROPS = MODE === 'catalog'
+  ? { connId: 1 }
+  : MODE === 'dump'
+    ? { connId: 1, sql: '', schema: 'demo', table: 't_order' }
+    : { connId: 1, sql: 'SELECT id, name FROM demo.users WHERE status = 1', schema: 'demo', table: '' }
+const app = Vue.createApp(Comps[MODE], PROPS)
+app.use(ElementPlus)
+app.use(ElementPlusIconsVue)
+// 页面里全局注册的 empty-state 在台子里补一个桩
+app.component('empty-state', { props: ['text'], template: '<div class="empty-stub">{{ text }}</div>' })
+const vm = app.mount('#app')
+
+const L = []
+function push(s) { L.push(s) }
+function ok(cond, name, detail) { push((cond ? 'PASS ' : 'FAIL ') + name + (detail ? ' | ' + detail : '')) }
+function txt(sel) {
+  const el = document.querySelector(sel)
+  return el ? el.textContent.replace(/\s+/g, ' ').trim() : null
+}
+function btn(root, text) {
+  return [].slice.call(document.querySelectorAll(root + ' button')).filter(function (b) {
+    return b.textContent.replace(/\s+/g, '').indexOf(text) >= 0
+  })[0]
+}
+
+if (MODE === 'catalog') {
+  setTimeout(function () {
+    ok(window.__gets.some(u => /\/mysql\/1\/ai\/catalog$/.test(u)), '不带 schema 请求整个连接的目录',
+      JSON.stringify(window.__gets))
+    ok(!!txt('.mysql-catalog-total'), '总量文案已渲染', txt('.mysql-catalog-total') || '缺失')
+    ok(txt('.mysql-catalog-total') === '2 个库 · 4 张表', '库 / 表计数正确', txt('.mysql-catalog-total') || '')
+    const dbs = document.querySelectorAll('.mysql-catalog-db')
+    ok(dbs.length === 2, '按库分组渲染', 'groups=' + dbs.length)
+    const rows = document.querySelectorAll('.mysql-catalog-table')
+    ok(rows.length === 4, '四张表全部展开列出', 'rows=' + rows.length)
+
+    // 点表行 → 字段说明展开（Vue 更新异步，等一拍再量）
+    rows[0].click()
+    setTimeout(function () {
+      const cols = document.querySelectorAll('.mysql-catalog-cols .mysql-catalog-col')
+      ok(cols.length === 2, '点表行展开字段说明', 'cols=' + cols.length)
+
+      // 过滤：命中用途的关键词
+      vm.kw = '部门'
+      setTimeout(function () {
+        const filtered = document.querySelectorAll('.mysql-catalog-table')
+        ok(filtered.length === 1 && txt('.mysql-catalog-tname') === 't_dept',
+          '按用途过滤命中唯一表', 'rows=' + filtered.length)
+        vm.kw = '不存在的词xyz'
+        setTimeout(function () {
+          ok(document.querySelectorAll('.mysql-catalog-table').length === 0
+            && !!document.querySelector('.empty-stub'), '全部滤空时出空态')
+          push('DONE catalog')
+          document.getElementById('out').textContent = L.join('\n')
+        }, 300)
+      }, 300)
+    }, 300)
+  }, 500)
+} else {
+  setTimeout(function () {
+    const isDump = MODE === 'dump'
+    ok(txt('.el-dialog__header') .indexOf(isDump ? '整表转储' : '导出查询结果') >= 0,
+      '对话框标题随模式切换', txt('.el-dialog__header') || '缺失')
+    const preview = txt('.mysql-transfer-preview')
+    if (isDump) {
+      ok(preview === 'SELECT * FROM `demo`.`t_order`', '转储模式固定整表查询', preview || '缺失')
+      const input = document.querySelector('.mysql-transfer-form input.el-input__inner')
+      ok(input && input.value === 'demo.t_order', 'INSERT 目标表默认带库名', input ? input.value : '缺失')
+      ok(txt('.mysql-transfer-note').indexOf('demo.t_order') >= 0, '说明文案点明转储对象')
+    } else {
+      ok(preview.indexOf('SELECT id, name FROM demo.users') === 0, '查询模式仍用编辑器 SQL', preview || '缺失')
+    }
+
+    // 走真实链路：选位置 → 开始导出 → 校验 POST 报文
+    const pick = btn('.el-dialog__body', '选择位置')
+    if (pick) pick.click(); else push('!! 未找到「选择位置」按钮')
+    setTimeout(function () {
+      const go = btn('.el-dialog__footer', '开始导出')
+      if (go) go.click(); else push('!! 未找到「开始导出」按钮')
+      setTimeout(function () {
+        const p = window.__posts[0] || {}
+        ok(/\/mysql\/1\/export$/.test(p.url || ''), '请求打到导出接口', p.url || '缺失')
+        if (isDump) {
+          ok(p.body && p.body.sql === 'SELECT * FROM `demo`.`t_order`', 'POST 的 SQL 为整表查询',
+            JSON.stringify(p.body && p.body.sql))
+          ok(p.body && p.body.table === 'demo.t_order', 'INSERT 目标表随报文下发',
+            JSON.stringify(p.body && p.body.table))
+        } else {
+          ok(p.body && p.body.sql.indexOf('SELECT id, name FROM demo.users') === 0, 'POST 的 SQL 为编辑器语句')
+        }
+        ok(!!document.querySelector('.mysql-transfer-result'), '结果块出现')
+        push('DONE ' + MODE)
+        document.getElementById('out').textContent = L.join('\n')
+      }, 800)
+    }, 300)
+  }, 500)
+}
+  </script>
+</body>
+</html>

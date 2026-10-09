@@ -1,7 +1,7 @@
 // ES 控制台主页面（F1 瘦身）：连接管理 + 集群概览/节点 tab + tab 壳。
 // 索引 / 数据视图(Discover) / 生命周期 / 索引模板拆分到 es_index / es_views / es_lifecycle / es_templates。
 window.ESPage = {
-  props: ['page', 'user', 'versionData'],
+  props: ['page', 'versionData'],
   components: {
     'es-index-tab': window.EsIndexTab,
     'es-views-tab': window.EsViewsTab,

@@ -1,5 +1,5 @@
 window.AuditPage = {
-  props: ['page', 'user', 'versionData'],
+  props: ['page', 'versionData'],
   emits: ['navigate'],
   template: `
 <div class="audit-page">
@@ -9,40 +9,52 @@ window.AuditPage = {
     <div class="audit-hero-glow"></div>
     <div class="audit-hero-content">
       <div class="audit-eyebrow">AUDIT TRAIL</div>
-      <h1>操作日志</h1>
-      <p>系统关键操作全链路审计，实时追踪每一次变更</p>
+      <h1>审计日志</h1>
+      <p>全量台账：写操作与 AI 调用，何时做了什么、结果与用量</p>
     </div>
     <div class="audit-hero-stats">
       <div class="audit-hero-stat">
         <span class="audit-hero-stat-val">{{stats.today_count}}</span>
         <span class="audit-hero-stat-lbl">今日操作</span>
       </div>
-      <div class="audit-hero-stat" :class="{'audit-hero-stat--warn': stats.fail_login_24h > 0}">
-        <span class="audit-hero-stat-val">{{stats.fail_login_24h}}</span>
-        <span class="audit-hero-stat-lbl">24h 失败登录</span>
+      <div class="audit-hero-stat" :class="{'audit-hero-stat--warn': stats.fail_24h > 0}">
+        <span class="audit-hero-stat-val">{{stats.fail_24h}}</span>
+        <span class="audit-hero-stat-lbl">24h 失败</span>
       </div>
       <div class="audit-hero-stat">
-        <span class="audit-hero-stat-val">{{stats.active_ips}}</span>
-        <span class="audit-hero-stat-lbl">活跃 IP</span>
+        <span class="audit-hero-stat-val">{{stats.total_count}}</span>
+        <span class="audit-hero-stat-lbl">累计记录</span>
       </div>
     </div>
   </section>
 
+  <!-- 标签页：操作日志（SSE 时间线） / AI 调用日志（统一记录组件，看全部菜单） -->
+  <div class="audit-tabs">
+    <button type="button" class="audit-tab" :class="{active: tab==='ops'}" @click="switchTab('ops')">操作日志</button>
+    <button type="button" class="audit-tab" :class="{active: tab==='ai'}" @click="switchTab('ai')">AI 调用日志</button>
+  </div>
+
+  <template v-if="tab==='ops'">
   <!-- 筛选栏 -->
   <div class="page-card audit-filter-card">
     <div class="audit-filters">
-      <el-select v-model="filters.action" placeholder="操作类型" clearable @change="onFilterChange">
-        <el-option label="全部" value="" />
-        <el-option label="认证" value="auth" />
-        <el-option label="主机" value="host" />
-        <el-option label="凭据" value="credential" />
+      <el-select v-model="filters.action" placeholder="业务模块" clearable @change="onFilterChange">
+        <el-option label="全部模块" value="" />
+        <el-option label="主机" value="hosts" />
+        <el-option label="凭据" value="credentials" />
+        <el-option label="部署" value="deploy" />
+        <el-option label="任务编排" value="orchestrations" />
+        <el-option label="套件部署" value="stacks" />
+        <el-option label="镜像仓库" value="registry" />
+        <el-option label="Elasticsearch" value="es" />
+        <el-option label="SFTP" value="sftp" />
       </el-select>
       <el-select v-model="filters.status" placeholder="状态" clearable @change="onFilterChange">
         <el-option label="全部" value="" />
         <el-option label="成功" value="success" />
         <el-option label="失败" value="fail" />
       </el-select>
-      <el-input v-model="filters.keyword" placeholder="关键词（详情 / IP）" clearable style="width:200px" @keyup.enter="onFilterChange" @clear="onFilterChange" />
+      <el-input v-model="filters.keyword" placeholder="搜索操作 / 返回消息" clearable style="width:200px" @keyup.enter="onFilterChange" @clear="onFilterChange" />
       <el-date-picker
         v-model="dateRange"
         type="datetimerange"
@@ -76,25 +88,29 @@ window.AuditPage = {
           v-for="item in list"
           :key="item.id"
           class="audit-node"
-          :class="{'audit-node--fail': isFail(item.action), 'audit-node--new': item._isNew}"
+          :class="{'audit-node--fail': isFail(item), 'audit-node--new': item._isNew}"
         >
-          <div class="audit-node-dot" :class="actionDotClass(item.action)"></div>
+          <div class="audit-node-dot" :class="isFail(item) ? 'dot--fail' : 'dot--ok'"></div>
           <div class="audit-node-body">
             <div class="audit-node-head">
-              <span class="action-badge" :class="actionBadgeClass(item.action)">{{item.action}}</span>
+              <span class="audit-node-action">
+                <span class="action-badge" :class="methodClass(item.action)">{{methodOf(item.action)}}</span>
+                <span class="audit-path" :title="item.action">{{pathOf(item.action)}}</span>
+              </span>
               <span class="audit-node-time" :title="item.created_at">{{relativeTime(item.created_at)}}</span>
             </div>
-            <div class="audit-node-detail" v-if="item.detail">{{item.detail}}</div>
+            <div class="audit-node-result">
+              <span class="audit-result-tag" :class="isFail(item) ? 'fail' : 'ok'">{{isFail(item) ? '失败' : '成功'}}</span>
+              <span class="audit-result-msg" v-if="resultText(item)" :title="item.message">{{resultText(item)}}</span>
+              <span class="audit-result-code" v-if="isFail(item)">code {{item.code}}</span>
+            </div>
             <div class="audit-node-meta">
-              <span v-if="item.remote_ip" class="audit-meta-ip" :title="item.remote_ip">
-                <svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor"><path d="M0 8a8 8 0 1 1 16 0A8 8 0 0 1 0 8zm8-5a.5.5 0 0 0-.5.5v5.243l1.72 1.72a.5.5 0 0 0 .708-.708L8.5 8.293V3.5A.5.5 0 0 0 8 3z"/></svg>
-                {{item.remote_ip}}
-              </span>
               <span v-if="item.target_type || item.target_id" class="audit-meta-target">
                 <svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor"><path d="M2 2a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V2zm2-1a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V2a1 1 0 0 0-1-1H4z"/><path d="M9.5 4a.5.5 0 0 1 .5.5v3a.5.5 0 0 1-.5.5h-3a.5.5 0 0 1-.5-.5v-3a.5.5 0 0 1 .5-.5h3z"/></svg>
                 <template v-if="item.target_type">{{item.target_type}}</template>
                 <template v-if="item.target_id"> / {{item.target_id}}</template>
               </span>
+              <span class="audit-meta-http" v-if="item.http_status > 0">HTTP {{item.http_status}}</span>
             </div>
           </div>
         </div>
@@ -120,10 +136,17 @@ window.AuditPage = {
       有新日志
     </div>
   </transition>
+  </template>
+
+  <!-- AI 调用日志：统一记录组件，不传 menu 看全部（含按菜单用量汇总） -->
+  <div v-else class="page-card audit-ai-card">
+    <ai-records show-menu />
+  </div>
 </div>`,
 
   data() {
     return {
+      tab: 'ops',
       list: [],
       loading: false,
       loadingMore: false,
@@ -132,7 +155,7 @@ window.AuditPage = {
       pageSize: 20,
       filters: { action: '', status: '', keyword: '' },
       dateRange: null,
-      stats: { today_count: 0, fail_login_24h: 0, active_ips: 0 },
+      stats: { today_count: 0, fail_24h: 0, total_count: 0 },
       eventSource: null,
       showNewTip: false,
       newTipTimer: null,
@@ -187,8 +210,8 @@ window.AuditPage = {
         try {
           const d = JSON.parse(e.data)
           this.stats.today_count = d.today_count || 0
-          this.stats.fail_login_24h = d.fail_login_24h || 0
-          this.stats.active_ips = d.active_ips || 0
+          this.stats.fail_24h = d.fail_24h || 0
+          this.stats.total_count = d.total_count || 0
         } catch (err) { /* 静默 */ }
       })
 
@@ -222,6 +245,19 @@ window.AuditPage = {
       source.onerror = () => { /* EventSource 自动重连 */ }
     },
 
+    /* ===== 标签页切换 ===== */
+    // SSE 长连接只在「操作日志」页签存活：切到 AI 页签即断开，切回来重新拉取最新
+    switchTab(t) {
+      if (this.tab === t) return
+      this.tab = t
+      this.showNewTip = false
+      if (t === 'ops') {
+        this.connectSSE(1, 'replace')
+      } else {
+        this.closeSSE()
+      }
+    },
+
     /* ===== 筛选 ===== */
     onFilterChange() { this.connectSSE(1, 'replace') },
     onDateChange() { this.connectSSE(1, 'replace') },
@@ -251,21 +287,24 @@ window.AuditPage = {
     },
 
     /* ===== 判定 & 分类 ===== */
-    isFail(action) { return (action || '').endsWith('_fail') },
-    actionBadgeClass(action) {
-      const a = (action || '').toLowerCase()
-      if (a.startsWith('auth')) return 'auth'
-      if (a.startsWith('host')) return 'host'
-      if (a.startsWith('credential')) return 'credential'
+    // 失败判定与后端一致：业务码非 0 或 HTTP 状态 >= 400
+    isFail(item) { return (Number(item.code) || 0) !== 0 || (Number(item.http_status) || 0) >= 400 },
+    splitAction(action) {
+      const s = String(action || '')
+      const i = s.indexOf(' ')
+      return i < 0 ? { method: s, path: '' } : { method: s.slice(0, i), path: s.slice(i + 1) }
+    },
+    methodOf(action) { return this.splitAction(action).method },
+    pathOf(action) { return this.splitAction(action).path },
+    methodClass(action) {
+      const m = this.methodOf(action).toLowerCase()
+      if (m === 'post' || m === 'put' || m === 'patch' || m === 'delete') return m
       return 'other'
     },
-    actionDotClass(action) {
-      if (this.isFail(action)) return 'dot--fail'
-      const a = (action || '').toLowerCase()
-      if (a.startsWith('auth')) return 'dot--auth'
-      if (a.startsWith('host')) return 'dot--host'
-      if (a.startsWith('credential')) return 'dot--credential'
-      return 'dot--other'
+    resultText(item) {
+      const msg = item.message || ''
+      if (this.isFail(item)) return msg || '未知错误'
+      return msg === 'ok' ? '' : msg
     },
 
     /* ===== 相对时间 ===== */

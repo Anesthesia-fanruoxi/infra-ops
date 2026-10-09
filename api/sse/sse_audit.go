@@ -90,21 +90,22 @@ func (h *Handler) Audits(c *gin.Context) {
 
 // matchAuditQuery 内存侧筛选判定，与 store 层 SQL 条件保持一致。
 func matchAuditQuery(a model.AuditLog, q repo.AuditQuery) bool {
-	if q.Action != "" && !strings.HasPrefix(a.Action, q.Action) {
+	if q.Action != "" && a.TargetType != q.Action {
 		return false
 	}
+	fail := a.Code != 0 || a.HTTPStatus >= 400
 	switch q.Status {
 	case "fail":
-		if !strings.HasSuffix(a.Action, "_fail") {
+		if !fail {
 			return false
 		}
 	case "success":
-		if strings.HasSuffix(a.Action, "_fail") {
+		if fail {
 			return false
 		}
 	}
 	if kw := strings.TrimSpace(q.Keyword); kw != "" {
-		if !strings.Contains(a.Detail, kw) && !strings.Contains(a.RemoteIP, kw) {
+		if !strings.Contains(a.Action, kw) && !strings.Contains(a.Message, kw) {
 			return false
 		}
 	}

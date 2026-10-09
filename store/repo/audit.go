@@ -26,9 +26,9 @@ func NewAuditRepo(bus ...*eventbus.Bus) *AuditRepo {
 
 // AuditQuery 审计日志查询条件。
 type AuditQuery struct {
-	Action   string // action 前缀匹配，空为全部
-	Status   string // "" 全部 / "success" / "fail"（action 以 _fail 结尾判定）
-	Keyword  string // detail/remote_ip 模糊匹配
+	Action   string // 业务模块（target_type，如 hosts/credentials）精确匹配，空为全部
+	Status   string // "" 全部 / "success" / "fail"（业务码非 0 或 HTTP >= 400 判定）
+	Keyword  string // action/message 模糊匹配
 	From     string // 起始时间 "YYYY-MM-DD HH:mm:ss"，空忽略
 	To       string // 结束时间，空忽略
 	Page     int
@@ -37,26 +37,27 @@ type AuditQuery struct {
 
 // AuditStats 审计统计概览。
 type AuditStats struct {
-	TodayCount   int64 `json:"today_count"`
-	FailLogin24h int64 `json:"fail_login_24h"`
-	ActiveIPs    int64 `json:"active_ips"`
+	TodayCount int64 `json:"today_count"`
+	Fail24h    int64 `json:"fail_24h"`
+	TotalCount int64 `json:"total_count"`
 }
 
-const auditCols = "id,action,target_type,target_id,detail,remote_ip,created_at"
+const auditCols = "id,action,target_type,target_id,http_status,code,message,created_at"
+
+// failCond 失败判定：业务码非 0 或 HTTP 状态 >= 400。
+const failCond = "(code<>0 OR http_status>=400)"
 
 // Create 写入审计日志。
 func (r *AuditRepo) Create(logEntry *model.AuditLog) error {
-	res, err := store.DB.Exec(
-		"INSERT INTO audit_logs(action,target_type,target_id,detail,remote_ip) VALUES(?,?,?,?,?)",
-		logEntry.Action, logEntry.TargetType, logEntry.TargetID, logEntry.Detail, logEntry.RemoteIP,
-	)
+	// RETURNING 回读自增 ID 与落库时间，保证 SSE 实时推送携带完整字段
+	err := store.DB.QueryRow(
+		"INSERT INTO audit_logs(action,target_type,target_id,http_status,code,message) VALUES(?,?,?,?,?,?) RETURNING id, created_at",
+		logEntry.Action, logEntry.TargetType, logEntry.TargetID, logEntry.HTTPStatus, logEntry.Code, logEntry.Message,
+	).Scan(&logEntry.ID, &logEntry.CreatedAt)
 	if err != nil {
 		return err
 	}
 
-	if id, err := res.LastInsertId(); err == nil {
-		logEntry.ID = id
-	}
 	if r.bus != nil {
 		r.bus.Publish(eventbus.TopicAuditCreated, *logEntry)
 	}
@@ -96,10 +97,10 @@ func (r *AuditRepo) Stats() (*AuditStats, error) {
 	err := store.DB.QueryRow(
 		`SELECT
 			COALESCE(SUM(CASE WHEN date(created_at)=date('now','localtime') THEN 1 ELSE 0 END),0),
-			COALESCE(SUM(CASE WHEN action='auth.login_fail' AND created_at>=datetime('now','localtime','-24 hours') THEN 1 ELSE 0 END),0),
-			COALESCE(COUNT(DISTINCT CASE WHEN created_at>=datetime('now','localtime','-24 hours') THEN remote_ip END),0)
+			COALESCE(SUM(CASE WHEN `+failCond+` AND created_at>=datetime('now','localtime','-24 hours') THEN 1 ELSE 0 END),0),
+			COALESCE(COUNT(*),0)
 		FROM audit_logs`,
-	).Scan(&s.TodayCount, &s.FailLogin24h, &s.ActiveIPs)
+	).Scan(&s.TodayCount, &s.Fail24h, &s.TotalCount)
 	if err != nil {
 		return nil, fmt.Errorf("audit stats: %w", err)
 	}
@@ -116,23 +117,23 @@ func (r *AuditRepo) Recent(limit int) ([]model.AuditLog, error) {
 	return scanAuditRows(rows)
 }
 
-// buildAuditWhere 拼接查询条件；失败判定用 substr(action,-5)='_fail' 精确匹配后缀。
+// buildAuditWhere 拼接查询条件；失败判定 = 业务码非 0 或 HTTP 状态 >= 400。
 func buildAuditWhere(q AuditQuery) (string, []interface{}) {
 	var conds []string
 	var args []interface{}
 
 	if q.Action != "" {
-		conds = append(conds, "action LIKE ?")
-		args = append(args, q.Action+"%")
+		conds = append(conds, "target_type = ?")
+		args = append(args, q.Action)
 	}
 	switch q.Status {
 	case "fail":
-		conds = append(conds, "substr(action,-5)='_fail'")
+		conds = append(conds, failCond)
 	case "success":
-		conds = append(conds, "substr(action,-5)<>'_fail'")
+		conds = append(conds, "NOT "+failCond)
 	}
 	if kw := strings.TrimSpace(q.Keyword); kw != "" {
-		conds = append(conds, "(detail LIKE ? OR remote_ip LIKE ?)")
+		conds = append(conds, "(action LIKE ? OR message LIKE ?)")
 		kw = "%" + kw + "%"
 		args = append(args, kw, kw)
 	}
@@ -155,7 +156,7 @@ func scanAuditRows(rows *sql.Rows) ([]model.AuditLog, error) {
 	var items []model.AuditLog
 	for rows.Next() {
 		var a model.AuditLog
-		if err := rows.Scan(&a.ID, &a.Action, &a.TargetType, &a.TargetID, &a.Detail, &a.RemoteIP, &a.CreatedAt); err != nil {
+		if err := rows.Scan(&a.ID, &a.Action, &a.TargetType, &a.TargetID, &a.HTTPStatus, &a.Code, &a.Message, &a.CreatedAt); err != nil {
 			return nil, fmt.Errorf("audit scan: %w", err)
 		}
 		items = append(items, a)

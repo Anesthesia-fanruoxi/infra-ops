@@ -27,29 +27,20 @@ const (
 
 // deployHandler 部署执行与任务查询。
 type deployHandler struct {
-	tplRepo   *repo.DeployRepo
-	schedRepo *repo.DeployScheduleRepo
-	hostRepo  *repo.HostRepo
-	credRepo  *repo.CredentialRepo
-	cryptoS   *icrypto.Service
-	sshC      *sshx.Client
-	bus       *eventbus.Bus
-	auditRepo *repo.AuditRepo
-	sched     *deployScheduler
-	conc      int // 执行并发数；<=0 表示按主机数自适应
+	tplRepo  *repo.DeployRepo
+	hostRepo *repo.HostRepo
+	credRepo *repo.CredentialRepo
+	cryptoS  *icrypto.Service
+	sshC     *sshx.Client
+	bus      *eventbus.Bus
+	conc     int // 执行并发数；<=0 表示按主机数自适应
 }
 
-// StartScheduler 启动定时任务调度器（随进程生命周期运行）。
-func (h *deployHandler) StartScheduler() {
-	h.sched = newScheduler(h)
-	h.sched.start()
-}
-
-func NewDeployHandler(tplRepo *repo.DeployRepo, schedRepo *repo.DeployScheduleRepo, hostRepo *repo.HostRepo,
+func NewDeployHandler(tplRepo *repo.DeployRepo, hostRepo *repo.HostRepo,
 	credRepo *repo.CredentialRepo, cryptoS *icrypto.Service, sshC *sshx.Client,
-	bus *eventbus.Bus, auditRepo *repo.AuditRepo, concurrency int) *deployHandler {
-	return &deployHandler{tplRepo: tplRepo, schedRepo: schedRepo, hostRepo: hostRepo, credRepo: credRepo,
-		cryptoS: cryptoS, sshC: sshC, bus: bus, auditRepo: auditRepo, conc: concurrency}
+	bus *eventbus.Bus, concurrency int) *deployHandler {
+	return &deployHandler{tplRepo: tplRepo, hostRepo: hostRepo, credRepo: credRepo,
+		cryptoS: cryptoS, sshC: sshC, bus: bus, conc: concurrency}
 }
 
 type runReq struct {
@@ -100,7 +91,7 @@ func (h *deployHandler) Run(c *gin.Context) {
 		return
 	}
 	taskID, err := h.createAndRun(tpl, req.HostIDs, req.Params, req.HostParams, req.Configs, req.HostConfigs,
-		req.HubHostID, req.HubAutoInsecure, "manual", 0, c.ClientIP())
+		req.HubHostID, req.HubAutoInsecure)
 	if err != nil {
 		resp.Fail(c, resp.CodeBadRequest, err.Error())
 		return
@@ -108,7 +99,7 @@ func (h *deployHandler) Run(c *gin.Context) {
 	resp.OK(c, gin.H{"task_id": taskID})
 }
 
-// createAndRun 校验渲染脚本、落库建任务并异步执行；手动与定时触发共用。
+// createAndRun 校验渲染脚本、落库建任务并异步执行。
 // 主机列表允许为空：任务照常创建并落执行记录（total=0）。
 // hostParams 为逐主机变量覆盖（host_id -> {k:v}），为空则所有主机共用 params。
 // configs/hostConfigs 为任务级/主机级自定义配置覆盖（config_key -> 内容），非空内容会在渲染期覆盖默认配置文件。
@@ -116,8 +107,7 @@ func (h *deployHandler) Run(c *gin.Context) {
 func (h *deployHandler) createAndRun(tpl *model.DeployTemplate, hostIDs []int64,
 	params map[string]string, hostParams map[int64]map[string]string,
 	taskConfigs map[string]string, hostConfigs map[int64]map[string]string,
-	hubHostID int64, hubAutoInsecure bool,
-	triggerType string, scheduleID int64, remoteIP string) (int64, error) {
+	hubHostID int64, hubAutoInsecure bool) (int64, error) {
 	ids := DedupInt64(hostIDs)
 
 	// hub 镜像源解析：地址 + image 变量改写准备（v1 仅覆盖模板声明的 image 变量）
@@ -138,7 +128,7 @@ func (h *deployHandler) createAndRun(tpl *model.DeployTemplate, hostIDs []int64,
 	for _, id := range ids {
 		hh, err := h.hostRepo.GetByID(id)
 		if err != nil || hh == nil {
-			continue // 台账中已删除的主机自动跳过（定时触发容错）
+			continue // 台账中已删除的主机自动跳过（容错）
 		}
 		// 合并变量（模板默认 < 任务默认 < 主机覆盖）并做渲染校验，提前暴露缺参
 		merged, err := mergeParams(tpl.Variables, params, hostParams[id])
@@ -188,25 +178,13 @@ func (h *deployHandler) createAndRun(tpl *model.DeployTemplate, hostIDs []int64,
 	taskParamsJSON, _ := json.Marshal(taskParams)
 	task := &model.DeployTask{
 		TemplateID: tpl.ID, TemplateName: tpl.Name, Total: len(hosts),
-		TriggerType: triggerType, ScheduleID: scheduleID, ParamsJSON: string(taskParamsJSON),
+		TriggerType: "manual", ParamsJSON: string(taskParamsJSON),
 		HubHostID: hubHostID,
 	}
 	taskID, err := h.tplRepo.CreateTask(task, hosts)
 	if err != nil {
 		return 0, fmt.Errorf("创建任务失败: %w", err)
 	}
-
-	detail := fmt.Sprintf("template=%s hosts=%d", tpl.Name, len(hosts))
-	if hub != nil {
-		detail += fmt.Sprintf(" hub=%s(%s)", hub.IP, hub.remote)
-	}
-	if triggerType == "schedule" {
-		detail += fmt.Sprintf(" trigger=schedule:%d", scheduleID)
-	}
-	h.auditRepo.Create(&model.AuditLog{
-		Action: "deploy.run", TargetType: "deploy_task", TargetID: taskID,
-		Detail: detail, RemoteIP: remoteIP,
-	})
 
 	go h.execute(taskID)
 	return taskID, nil

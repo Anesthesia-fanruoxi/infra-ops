@@ -23,13 +23,12 @@ type stackHandler struct {
 	cryptoS   *icrypto.Service
 	sshC      *sshx.Client
 	bus       *eventbus.Bus
-	auditRepo *repo.AuditRepo
 	conc      int
 }
 
 func NewStackHandler(repo *repo.StackRepo, tplRepo *repo.DeployRepo, hostRepo *repo.HostRepo,
 	credRepo *repo.CredentialRepo, cryptoS *icrypto.Service, sshC *sshx.Client,
-	bus *eventbus.Bus, auditRepo *repo.AuditRepo, concurrency int) *stackHandler {
+	bus *eventbus.Bus, concurrency int) *stackHandler {
 	// 启动恢复：服务重启中断的流程标记为失败，避免实例被孤儿 run 锁死
 	if instIDs, err := repo.FailStaleRuns(); err == nil && len(instIDs) > 0 {
 		for _, id := range instIDs {
@@ -37,7 +36,7 @@ func NewStackHandler(repo *repo.StackRepo, tplRepo *repo.DeployRepo, hostRepo *r
 		}
 	}
 	return &stackHandler{repo: repo, tplRepo: tplRepo, hostRepo: hostRepo, credRepo: credRepo,
-		cryptoS: cryptoS, sshC: sshC, bus: bus, auditRepo: auditRepo, conc: concurrency}
+		cryptoS: cryptoS, sshC: sshC, bus: bus, conc: concurrency}
 }
 
 type stackPreflightReq struct {
@@ -124,7 +123,7 @@ func (h *stackHandler) Run(c *gin.Context) {
 		resp.Fail(c, resp.CodeBadRequest, "参数错误: "+err.Error())
 		return
 	}
-	runID, err := h.createAndRun(req, c.ClientIP())
+	runID, err := h.createAndRun(req)
 	if err != nil {
 		resp.Fail(c, resp.CodeBadRequest, err.Error())
 		return

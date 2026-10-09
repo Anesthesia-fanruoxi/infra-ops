@@ -1,5 +1,5 @@
 window.HostsPage = {
-  props: ['page', 'user', 'versionData'],
+  props: ['page', 'versionData'],
   template: `
 <div class="hosts-page">
   <section class="hosts-intro">

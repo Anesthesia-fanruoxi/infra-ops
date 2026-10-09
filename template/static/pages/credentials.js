@@ -1,5 +1,5 @@
 window.CredentialsPage = {
-  props: ['page', 'user', 'versionData'],
+  props: ['page', 'versionData'],
   template: `
 <div>
   <div class="page-card">

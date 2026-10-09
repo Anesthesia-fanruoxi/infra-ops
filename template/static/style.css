@@ -51,6 +51,23 @@ a { text-decoration: none; }
 .page-fade { animation: pageIn .25s ease; }
 @keyframes pageIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 
+/* ===== 无边框窗口（Frameless）：拖拽区与自绘窗口控制 =====
+   main.go 主窗口 Frameless: true —— 原生标题栏（顶部那条白色标题带）整体移除；
+   顶栏与侧边 Logo 区带 Wails 拖拽协议（运行时注入：mousedown+移动 = 原生
+   HTCAPTION 拖动），双击顶栏最大化在 app.js 里调 ToggleMaximise。
+   控制按钮仅桌面模式渲染（app.js v-if），浏览器调试不可见。 */
+.header, .sidebar-logo { --wails-draggable: drag; }
+.win-ctls { display: flex; align-items: center; gap: 2px; padding: 3px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-faint); user-select: none; --wails-draggable: no-drag; }
+.win-ctl { display: flex; align-items: center; justify-content: center; width: 32px; height: 26px; padding: 0; border: none; border-radius: 7px; background: transparent; color: var(--text-faint); cursor: default; transition: background .12s, color .12s, box-shadow .12s; }
+.win-ctl svg { display: block; }
+.win-ctl:hover { background: #fff; color: var(--text-main); box-shadow: 0 1px 2px rgba(15, 23, 42, .08); }
+.win-ctl:active { background: var(--bg-hover); }
+.win-ctl-close:hover { background: var(--danger); color: #fff; box-shadow: none; }
+/* 最大化/还原互斥图标：状态由 wails-shim.js 同步在 <html data-win-maximised> 上 */
+.win-ctl .win-ico-restore { display: none; }
+html[data-win-maximised] .win-ctl .win-ico-max { display: none; }
+html[data-win-maximised] .win-ctl .win-ico-restore { display: block; }
+
 /* ===== 卡片（§2.3） ===== */
 .page-card { background: var(--bg-card); border-radius: var(--radius-card); box-shadow: var(--shadow-card); padding: 24px; margin-bottom: 20px; }
 .card-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; gap: 16px; flex-wrap: wrap; }
@@ -587,6 +604,13 @@ a { text-decoration: none; }
   background: rgba(220,38,38,.15);
 }
 .audit-hero-stat--warn .audit-hero-stat-val { color: #fca5a5; }
+
+/* 标签页：操作日志 / AI 调用日志 */
+.audit-tabs { display: flex; gap: 6px; margin: -4px 0 16px; }
+.audit-tab { padding: 7px 18px; border: 1px solid var(--border); border-radius: 9px; background: var(--bg-card); color: var(--text-sub); font-size: 13px; cursor: pointer; transition: color .15s, border-color .15s, background .15s; }
+.audit-tab:hover { color: var(--text-main); border-color: var(--neutral); }
+.audit-tab.active { color: var(--brand); border-color: var(--brand); background: var(--brand-soft); font-weight: 600; }
+.audit-ai-card { padding: 18px 20px; }
 
 /* 筛选栏 */
 .audit-filter-card { padding: 16px 20px; margin-bottom: 16px; }
@@ -1693,27 +1717,16 @@ a { text-decoration: none; }
 .mysql-ai-tip { font-size: 11.5px; color: var(--text-faint); }
 .mysql-ai-error { flex-shrink: 0; padding: 10px 12px; border: 1px solid #FCA5A5; border-radius: 10px; background: #FEF2F2; color: #B91C1C; font-size: 12.5px; }
 .mysql-ai-error pre { margin: 0; font-family: var(--font-mono); font-size: 12px; white-space: pre-wrap; word-break: break-all; }
-.mysql-ai-result { flex-shrink: 0; display: flex; flex-direction: column; gap: 8px; }
-.mysql-ai-result-bar { display: flex; align-items: center; }
-.mysql-ai-result-title { font-size: 12.5px; font-weight: 600; color: var(--text-main); }
-.mysql-ai-sql { margin: 0; padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-faint);
-  color: var(--brand); font-family: var(--font-mono); font-size: 12.5px; line-height: 1.7; white-space: pre-wrap; word-break: break-word; }
-.mysql-ai-explain { padding: 8px 12px; border-radius: 8px; background: var(--brand-soft); font-size: 12.5px; line-height: 1.7; }
-.mysql-ai-tables { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+/* 生成反馈：涉及表徽标（左上角贴边，默认不伸缩） */
+.mysql-ai-tables { flex-shrink: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 
-/* 生成范围（跟读写模式走）与结果类型标签 */
+/* 生成范围（跟读写模式走） */
 .mysql-ai-scope { flex-shrink: 0; display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 10px; font-size: 11.5px; }
 .mysql-ai-scope.is-read { background: var(--ok-soft); color: #15803D; }
 .mysql-ai-scope.is-write { background: var(--warn-soft); color: var(--warn); }
 .mysql-ai-scope-tag { flex-shrink: 0; padding: 1px 7px; border-radius: 5px; font-size: 10.5px; font-weight: 700; letter-spacing: .4px; }
 .mysql-ai-scope.is-read .mysql-ai-scope-tag { background: #DCFCE7; color: #15803D; }
 .mysql-ai-scope.is-write .mysql-ai-scope-tag { background: #FDE9C8; color: #B45309; }
-.mysql-ai-type { flex-shrink: 0; padding: 1px 7px; border-radius: 5px; font-size: 10.5px; font-weight: 700; letter-spacing: .4px; background: var(--bg-faint); color: var(--text-sub); }
-.mysql-ai-type.is-dql { background: #ECFDF5; color: #047857; }
-.mysql-ai-type.is-session { background: #EFF6FF; color: #1D4ED8; }
-.mysql-ai-type.is-dml { background: var(--warn-soft); color: var(--warn); }
-.mysql-ai-type.is-ddl { background: #FEF2F2; color: #B91C1C; }
-.mysql-ai-type.is-other { background: #F5F3FF; color: #6D28D9; }
 .mysql-ai-warn { padding: 8px 12px; border-radius: 8px; background: var(--warn-soft); color: var(--warn); font-size: 12px; line-height: 1.7; }
 
 /* 结果网格 */
@@ -1728,6 +1741,38 @@ a { text-decoration: none; }
 .mysql-type-badge.t-ddl { background: #FEF2F2; color: #B91C1C; }
 .mysql-type-badge.t-other { background: #F5F3FF; color: #6D28D9; }
 .mysql-grid-warn { padding: 2px 8px; border-radius: 999px; background: var(--warn-soft); color: var(--warn); font-size: 11px; font-weight: 600; }
+
+/* AI 分析（仅 EXPLAIN 执行计划，MySQLGrid）：面板放在结果表格下方整块展开（EXPLAIN 计划行数少、
+   分析内容更长，先看结果后看分析）；打开时容器整体滚动、表格按内容高度完整展开，面板不设内部滚动 */
+.mysql-grid-wrap.is-explain-open { overflow-y: auto; }
+.mysql-grid-wrap.is-explain-open .mysql-grid { flex: 0 0 auto; }
+.mysql-explain { flex-shrink: 0; margin: 8px 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-faint); }
+.mysql-explain-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.mysql-explain-title { font-size: 12.5px; font-weight: 600; color: var(--text-main); }
+.mysql-explain-spacer { flex: 1; }
+.mysql-explain-loading { display: flex; align-items: center; gap: 8px; padding: 6px 0; font-size: 12.5px; color: var(--text-faint); }
+.mysql-explain-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--brand); animation: mysqlExplainPulse 1s infinite ease-in-out; }
+@keyframes mysqlExplainPulse { 0%, 100% { opacity: .25; transform: scale(.8); } 50% { opacity: 1; transform: scale(1.15); } }
+.mysql-explain-error { padding: 9px 12px; border: 1px solid var(--danger); border-radius: var(--radius-btn); background: var(--danger-soft); color: var(--danger); font-size: 12.5px; line-height: 1.7; }
+.mysql-explain-error pre { margin: 0; white-space: pre-wrap; word-break: break-all; font-family: var(--font-mono); font-size: 12px; }
+.mysql-explain-summary { font-size: 13px; line-height: 1.9; color: var(--text-main); }
+.mysql-explain-section { margin-top: 10px; }
+.mysql-explain-section-title { margin-bottom: 6px; font-size: 12.5px; font-weight: 600; color: var(--text-main); }
+.mysql-explain-list { margin: 0; padding-left: 18px; }
+.mysql-explain-list li { font-size: 12.5px; line-height: 1.9; color: var(--text-sub); }
+.mysql-explain-list.is-suggest li { color: var(--text-main); }
+/* 建索引语句 / 优化后语句代码块：右上角一键复制 */
+.mysql-explain-code { position: relative; margin-top: 6px; padding: 9px 66px 9px 12px; border: 1px solid var(--border); border-radius: 8px; background: #fff; }
+.mysql-explain-code pre { margin: 0; font-family: var(--font-mono); font-size: 12px; line-height: 1.8; white-space: pre-wrap; word-break: break-all; color: var(--text-main); }
+.mysql-explain-code .mysql-explain-copy { position: absolute; top: 5px; right: 8px; }
+.mysql-explain-digest { margin-top: 10px; }
+.mysql-explain-toggle { font-size: 11.5px; color: var(--brand); cursor: pointer; user-select: none; }
+.mysql-explain-digest-body { margin-top: 8px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: #fff; }
+.mysql-explain-line { font-size: 11.5px; line-height: 1.8; color: var(--text-sub); white-space: pre-wrap; word-break: break-all; }
+.mysql-explain-line.is-ts { margin-top: 8px; color: var(--text-main); }
+.mysql-explain-line.is-idx { color: var(--text-faint); }
+.mysql-explain-usage { margin-top: 8px; font-size: 11.5px; color: var(--text-faint); }
+.mysql-explain-usage b { color: var(--text-main); }
 .mysql-grid { flex: 1; min-height: 0; overflow: auto; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-card); }
 .mysql-table { border-collapse: separate; border-spacing: 0; width: max-content; min-width: 100%; font-size: 12.5px; }
 .mysql-table th { position: sticky; top: 0; z-index: 2; padding: 7px 10px; text-align: left; white-space: nowrap;
@@ -1742,7 +1787,8 @@ a { text-decoration: none; }
 .mysql-null { font-family: var(--font-mono); font-size: 11px; font-style: italic; color: #9CA3AF; }
 .mysql-rownum { width: 52px; text-align: right !important; font-family: var(--font-mono); font-size: 11px; color: var(--text-faint); background: var(--bg-faint); }
 
-/* 使用记录：SQL 执行记录 + AI 调用记录（两张互不关联的表，一个弹窗两个页签） */
+/* 使用记录 / 统一 AI 调用记录共用的日志面板原语：SQL 执行记录（mysql_logs.js）与
+   AI 调用记录（ai_records.js：审计页 AI 标签页与各工具的调用记录入口）复用这批样式 */
 .mysql-logs { display: flex; flex-direction: column; gap: 10px; }
 .mysql-logs-tabs { flex-shrink: 0; display: flex; align-items: center; gap: 8px; border-bottom: 1px solid var(--border); }
 .mysql-logs-tab { padding: 6px 2px; margin-right: 12px; border: 0; background: none; font-size: 13px; color: var(--text-sub); cursor: pointer; border-bottom: 2px solid transparent; transition: color .15s, border-color .15s; }
@@ -1768,12 +1814,79 @@ a { text-decoration: none; }
 .mysql-logs-detail { display: flex; flex-direction: column; gap: 8px; padding: 4px 10px 10px; }
 .mysql-logs-detail-label { font-size: 11.5px; color: var(--text-faint); }
 .mysql-logs-detail-text { font-size: 12.5px; line-height: 1.7; color: var(--text-main); white-space: pre-wrap; word-break: break-word; }
+/* 详情里的语句与模型返回原文：超长单行自动换行，不横向溢出（与表详情 DDL 块同款版式） */
+.mysql-logs-detail .mysql-ddl, .mysql-logs-detail .mysql-logs-ddl { flex: none; margin: 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--bg-faint); font-family: var(--font-mono); font-size: 12px; line-height: 1.7; white-space: pre-wrap; word-break: break-all; }
 .mysql-logs-detail-meta { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 11.5px; color: var(--text-faint); }
 .mysql-logs-pager { display: flex; justify-content: flex-end; }
+
+/* 使用记录弹窗：宽 65%（相对弹层容器，即视口宽）；高 70%、上下各留 15%（相对弹层容器高）。
+   注：CSS 里 margin 的百分比以宽度为基准，纵向留白不能用 margin 表达，改由 relative 位移实现；
+   头尾固定、正文内部滚动 —— 与 .mysql-transfer-dialog 同一范式 */
+.el-dialog.mysql-logs-dialog { display: flex; flex-direction: column; height: 70%; margin: 0 auto; position: relative; top: 15%; }
+.el-dialog.mysql-logs-dialog .el-dialog__header { flex-shrink: 0; }
+.el-dialog.mysql-logs-dialog .el-dialog__body { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+
+/* 统一 AI 调用记录（ai_records.js）：面板 / 汇总 / 表格沿用上面的 .mysql-logs-* 原语，
+   这里只补特有的筛选条与按菜单用量汇总 */
+.ai-records { display: flex; flex-direction: column; gap: 10px; }
+.ai-records-bar { flex-shrink: 0; display: flex; align-items: center; gap: 8px; }
+.ai-records-spacer { flex: 1; }
+.ai-records-menus { flex-shrink: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.ai-records-menu-chip { padding: 3px 10px; border: 1px solid var(--border); border-radius: 7px; background: var(--bg-faint); font-size: 11.5px; color: var(--text-sub); }
+.ai-records-menu-chip b { font-weight: 600; color: var(--text-main); }
 
 /* AI 面板：每次生成 / 上次目录生成的 token 用量条 */
 .mysql-ai-usage { flex-shrink: 0; font-size: 11.5px; line-height: 1.6; color: var(--text-faint); }
 .mysql-ai-usage b { font-weight: 600; color: var(--brand); }
+
+/* AI 面板：无缓存目录的行动提示（说明 + 立即生成）与批量生成弹框的库勾选列表 */
+.mysql-ai-nocatalog { display: flex; align-items: center; gap: 10px; }
+.mysql-ai-gen-tip { font-size: 12px; line-height: 1.7; color: var(--text-sub); }
+.mysql-ai-gen-bar { display: flex; align-items: center; margin: 10px 0 2px; }
+.mysql-ai-gen-count { font-size: 12px; color: var(--text-faint); }
+.mysql-ai-gen-dbs { max-height: 260px; overflow: auto; padding: 6px 10px; border: 1px solid var(--border); border-radius: 10px; }
+.mysql-ai-gen-db { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
+.mysql-ai-gen-cached { flex-shrink: 0; font-size: 11.5px; color: var(--brand); }
+/* 失败 / 停止的状态条：黄色提醒，出现时弹框留在原地等重试或补齐 */
+.mysql-ai-gen-failed, .mysql-ai-gen-stopped { margin-top: 10px; padding: 8px 11px; border-radius: 8px; background: var(--warn-soft); color: var(--warn); font-size: 12px; line-height: 1.7; }
+/* 语义生成弹框：宽 50%、上下各留 20% 视口高（高 60% 固定）；头尾固定、正文内部滚动 —— 与 .mysql-logs-dialog 同一范式 */
+.el-dialog.mysql-ai-gen-dialog { display: flex; flex-direction: column; height: 60%; margin: 0 auto; position: relative; top: 20%; }
+.el-dialog.mysql-ai-gen-dialog .el-dialog__header,
+.el-dialog.mysql-ai-gen-dialog .el-dialog__footer { flex-shrink: 0; }
+.el-dialog.mysql-ai-gen-dialog .el-dialog__body { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+/* 单库确认视图（生成 / 重建只针对当前库）：当前库目标框 */
+.mysql-ai-gen-cur { display: flex; align-items: center; gap: 10px; padding: 10px 13px; margin-bottom: 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-faint); }
+.mysql-ai-gen-cur-tag { flex-shrink: 0; padding: 1px 7px; border-radius: 5px; background: var(--brand-soft); color: var(--brand); font-size: 11px; font-weight: 600; }
+.mysql-ai-gen-cur-name { font-size: 13.5px; font-weight: 600; color: var(--text-main); }
+/* 弹框内的生成记录：运行中随任务进度逐批追加的调用明细（时间 / 库 / 批次 / 表数 / tokens / 耗时 / 成败） */
+.mysql-ai-gen-records { margin-top: 10px; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.mysql-ai-gen-records-head { display: flex; align-items: center; gap: 8px; padding: 7px 11px; background: var(--bg-faint); border-bottom: 1px solid var(--border); font-size: 12px; color: var(--text-sub); }
+.mysql-ai-gen-records-list { max-height: 220px; overflow-y: auto; padding: 4px 10px; }
+.mysql-ai-gen-record { display: flex; align-items: center; gap: 10px; padding: 5px 0; border-bottom: 1px dashed var(--border); font-size: 12px; color: var(--text-sub); }
+.mysql-ai-gen-record:last-child { border-bottom: 0; }
+.mysql-ai-gen-record-time { flex-shrink: 0; color: var(--text-faint); }
+.mysql-ai-gen-record-schema { flex-shrink: 0; font-weight: 600; color: var(--text-main); }
+.mysql-ai-gen-record-meta { flex-shrink: 0; font-size: 11.5px; }
+.mysql-ai-gen-record-est { margin-left: 4px; padding: 0 4px; border-radius: 4px; background: var(--warn-soft); color: var(--warn); font-size: 10px; font-style: normal; font-weight: 600; }
+.mysql-ai-gen-record-state { flex-shrink: 0; font-size: 11.5px; color: var(--ok); }
+.mysql-ai-gen-record.is-bad .mysql-ai-gen-record-state { color: var(--danger); cursor: help; }
+/* AI 面板：后台任务提示行——运行中（蓝）给进度与快捷查看/停止；结束后（黄）提醒待补齐 */
+.mysql-ai-task { display: flex; align-items: center; gap: 8px; margin-top: 8px; padding: 6px 11px; border-radius: 8px; background: var(--brand-soft); color: var(--brand); font-size: 12.5px; line-height: 1.6; }
+.mysql-ai-task.is-warn { background: var(--warn-soft); color: var(--warn); }
+.mysql-ai-task .el-button { padding: 0 4px; height: auto; font-size: 12.5px; }
+.mysql-ai-task-dot { flex-shrink: 0; width: 7px; height: 7px; border-radius: 50%; background: currentColor; animation: mysql-ai-pulse 1.2s ease-in-out infinite; }
+@keyframes mysql-ai-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }
+/* 批量生成弹框的进度视图：顶部计数 + 进度条，每库一行状态 */
+.mysql-ai-gen-progress { margin-top: 10px; }
+.mysql-ai-gen-progress-top { margin-bottom: 6px; font-size: 12.5px; color: var(--text-sub); }
+.mysql-ai-gen-progress-top b { color: var(--brand); }
+.mysql-ai-gen-state { flex-shrink: 0; font-size: 11.5px; }
+.mysql-ai-gen-state.is-done { color: var(--ok); }
+.mysql-ai-gen-state.is-running { color: var(--brand); }
+.mysql-ai-gen-state.is-warn { color: var(--warn); }
+.mysql-ai-gen-state.is-failed { color: var(--danger); }
+.mysql-ai-gen-state.is-stopped, .mysql-ai-gen-state.is-pending { color: var(--neutral); }
 .mysql-grid tbody .mysql-rownum { position: sticky; left: 0; z-index: 1; }
 .mysql-table thead .mysql-rownum { left: 0; z-index: 3; }
 .mysql-grid-empty { flex: 1; min-height: 0; overflow: auto; display: flex; align-items: center; justify-content: center; }
@@ -2116,6 +2229,11 @@ a { text-decoration: none; }
 
 /* ===== 设置页 ===== */
 .tool-page--settings .tool-intro { background: linear-gradient(115deg, #1e293b 0%, #334155 55%, #475569 100%); box-shadow: 0 12px 26px rgba(51, 65, 85, .18); }
+/* 标签条：AI 接入 / 系统信息 / 数据表；页签内不再重复卡头标题，子说明升为主描述行 */
+.set-tabs > .el-tabs__header { margin: 0 0 16px; }
+.set-tabs .el-tabs__item { font-size: 14px; font-weight: 600; height: 38px; line-height: 38px; }
+.set-tabs .el-tabs__nav-wrap::after { height: 1px; background: var(--border, #E5E7EB); }
+.set-tabs .tool-list-sub { font-size: 12.5px; color: var(--text-sub); }
 .set-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 20px; }
 .set-inline { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .set-tip { color: var(--text-sub); font-size: 12px; line-height: 1.6; }
@@ -2134,10 +2252,22 @@ a { text-decoration: none; }
 .set-kv-item code { font-family: var(--font-mono); color: var(--text-main); word-break: break-all; }
 .set-kv-item em { flex-shrink: 0; color: var(--text-faint); font-style: normal; }
 .set-kv-wide { grid-column: 1 / -1; }
-.set-sub { display: flex; align-items: baseline; gap: 10px; margin: 0 0 10px; }
-.set-sub .title { font-size: 14px; font-weight: 600; color: var(--text-main); }
 .set-table { border-top: 1px solid var(--border); }
 .set-more { padding-top: 6px; text-align: center; }
+
+/* 页签内容层独立滚动：整页高度受限于 .content，页头（.tool-intro）与标签条固定，
+   仅页签内容（.el-tabs__content）滚动。没有这层约束时整页跟内容一起滚，
+   数据表列表往下翻会把标签条一起滚走。（与 MySQL 工作台
+   .content > .page-fade:has(.mysql-workspace) 同一范式）
+   注意：不得覆盖 .set-tabs 的 flex-direction —— Element Plus 的 DOM 里
+   content 在 header 之前（.el-tabs--top 靠 flex-direction: column-reverse
+   把标签条翻到上面），覆盖成 column 会把标签条甩到内容下方。 */
+.content > .page-fade:has(.tool-page--settings) { height: 100%; }
+.content > .page-fade:has(.tool-page--settings) > .tool-page--settings { height: 100%; min-height: 0; }
+.tool-page--settings > .tool-intro { flex-shrink: 0; }
+.tool-page--settings .set-tabs { flex: 1 1 auto; min-height: 0; }
+.tool-page--settings .set-tabs > .el-tabs__header { flex-shrink: 0; }
+.tool-page--settings .set-tabs > .el-tabs__content { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
 
 /* ===== Redis 工具：主题色 + key 浏览器 + 值预览抽屉 =====
    本工具只读（只有 SCAN / TYPE / TTL / GET 这类读命令），故没有 MySQL 那套模式开关与确认弹窗。 */
@@ -2189,11 +2319,26 @@ a { text-decoration: none; }
 .redis-value-meta { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 14px; }
 .redis-value-meta-item { font-size: 12px; color: var(--text-faint); }
 .redis-value-meta-item b { color: var(--text-main); font-weight: 600; }
-.redis-value-pre {
-  margin: 0; padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-faint);
-  font-family: var(--font-mono); font-size: 12.5px; line-height: 1.7; color: var(--text-main);
-  white-space: pre-wrap; word-break: break-all; max-height: calc(100vh - 260px); overflow: auto;
+.redis-value-toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.redis-value-toolbar-spacer { flex: 1; }
+.redis-value-chip {
+  display: inline-flex; align-items: center; height: 20px; padding: 0 8px; border-radius: 999px;
+  font-size: 11px; font-weight: 600; letter-spacing: .02em; text-transform: uppercase;
+  color: var(--text-faint); background: var(--bg-faint); border: 1px solid var(--border);
 }
+.redis-value-chip--json { color: var(--brand); background: var(--brand-soft, rgba(99,102,241,.12)); border-color: transparent; }
+.redis-value-pre {
+  margin: 0; padding: 14px 16px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-faint);
+  font-family: var(--font-mono); font-size: 12.5px; line-height: 1.75; color: var(--text-main);
+  white-space: pre-wrap; word-break: break-all; max-height: calc(100vh - 260px); overflow: auto;
+  tab-size: 2;
+}
+.redis-value-pre--json { white-space: pre; word-break: normal; }
+.redis-value-pre .j-key { color: var(--brand); }
+.redis-value-pre .j-str { color: var(--ok); }
+.redis-value-pre .j-num { color: var(--warn); }
+.redis-value-pre .j-bool { color: var(--purple); }
+.redis-value-pre .j-null { color: var(--text-faint); font-style: italic; }
 .redis-value-table { border: 1px solid var(--border); border-radius: 10px; }
 .redis-value-text { color: var(--text-main); word-break: break-all; }
 .redis-value-note { margin-top: 10px; font-size: 11.5px; line-height: 1.7; color: var(--text-faint); }
@@ -2210,3 +2355,152 @@ a { text-decoration: none; }
 .infra-error-notice .el-notification__content { min-width: 0; word-break: break-all; }
 .infra-error-notice .el-notification__content { white-space: pre-wrap; line-height: 1.6; }
 .infra-error-notice .el-notification__title { font-weight: 600; }
+
+/* MySQL 表详情操作区：转储 + 查询数据 并排 */
+.mysql-detail-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+
+/* MySQL AI · 语义目录浏览抽屉（mysql_ai_catalog.js）：按库折叠，表行点开看字段说明 */
+.mysql-catalog-bar { display: flex; align-items: center; gap: 8px; }
+.mysql-catalog-kw { flex: 1 1 auto; min-width: 0; }
+.mysql-catalog-total { font-size: 12px; color: var(--text-faint); white-space: nowrap; }
+.mysql-catalog-tip { margin: 10px 0 6px; }
+.mysql-catalog-body { overflow: auto; }
+.mysql-catalog-db { margin-bottom: 10px; }
+.mysql-catalog-db-head { display: flex; align-items: center; gap: 6px; padding: 6px 8px;
+  border-radius: 6px; cursor: pointer; background: var(--bg-hover, rgba(127,127,127,.08)); user-select: none; }
+.mysql-catalog-db-head:hover { filter: brightness(.97); }
+.mysql-catalog-db-name { font-weight: 600; font-size: 13px; min-width: 0; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; }
+.mysql-catalog-tables { padding: 2px 0 0 14px; }
+.mysql-catalog-table { padding: 5px 6px; border-radius: 6px; cursor: pointer; }
+.mysql-catalog-table:hover { background: var(--bg-hover, rgba(127,127,127,.08)); }
+.mysql-catalog-table-row { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.mysql-catalog-tname { font-weight: 600; font-size: 12.5px; flex-shrink: 0; max-width: 45%;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mysql-catalog-purpose { font-size: 12px; color: var(--text-faint); min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mysql-catalog-table.expanded .mysql-catalog-purpose { white-space: normal; }
+.mysql-catalog-cols { margin: 4px 0 2px 24px; padding: 4px 8px; border-left: 2px solid var(--border-color, #dcdfe6); }
+.mysql-catalog-col { display: flex; gap: 8px; font-size: 12px; line-height: 1.7; min-width: 0; }
+.mysql-catalog-col > span:first-child { flex-shrink: 0; font-weight: 600; }
+.mysql-catalog-col-note { color: var(--text-faint); min-width: 0; word-break: break-all; }
+.mysql-catalog-col-empty { font-size: 12px; color: var(--text-faint); padding: 2px 0 4px 8px; }
+
+/* ===== 监控查询工具（Prometheus / VictoriaMetrics）：主题色 + 查询工作台 + AI 面板 =====
+   AI 生成与解读是这条工具的主线（「结合 ai 进行查询使用绘图」），工作台按
+   生成面板 → 表达式框 → 时间行 → 结果卡 → 解读卡 纵向流动，靠页面滚动浏览。 */
+.tool-page--metrics .tool-intro { background: linear-gradient(115deg, #4C1D95 0%, #7C3AED 55%, #A78BFA 100%); box-shadow: 0 12px 26px rgba(124, 58, 237, .18); }
+.tool-card--metrics::before { background: linear-gradient(180deg, #7C3AED, #A78BFA); }
+.tool-card--metrics .tool-card-icon { background: linear-gradient(135deg, #7C3AED, #A78BFA); box-shadow: 0 4px 10px rgba(124, 58, 237, .28); }
+.action-badge.vm { background: var(--purple-soft); color: var(--purple); }
+.metrics-two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 0 14px; }
+.metrics-form-hint { margin-top: 4px; font-size: 11.5px; line-height: 1.6; color: var(--text-faint); }
+
+/* 工作台顶栏：连接身份 + 状态灯 + 操作 */
+.metrics-bar { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 14px; }
+.metrics-bar-id { display: flex; align-items: center; gap: 10px; min-width: 0; flex-wrap: wrap; }
+.metrics-bar-name { font-size: 15px; font-weight: 600; color: var(--text-main); }
+.metrics-bar-addr { color: var(--text-faint); word-break: break-all; }
+.metrics-bar-ops { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+
+/* AI 生成区与手写表达式之间用虚分隔：先让 AI 起草，再落到表达式框微调 */
+.metrics-ai-gen { padding-bottom: 14px; margin-bottom: 14px; border-bottom: 1px dashed var(--border); }
+
+/* 表达式输入：等宽字体多行，执行按钮贴底右侧 */
+.metrics-expr { display: flex; align-items: stretch; gap: 10px; }
+.metrics-expr-input {
+  flex: 1; min-width: 0; min-height: 74px; resize: vertical;
+  padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-btn);
+  background: var(--bg-faint); color: var(--text-main); outline: none; tab-size: 2;
+  font-family: var(--font-mono); font-size: 12.5px; line-height: 1.7;
+}
+.metrics-expr-input:focus { border-color: var(--brand); background: #fff; }
+.metrics-expr-input:disabled { opacity: .6; }
+.metrics-expr-side { display: flex; align-items: flex-end; flex-shrink: 0; }
+
+/* 时间行：模式开关 / 预设 chips / 自定义区间 / 步长 */
+.metrics-time { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
+.metrics-mode-switch { flex-shrink: 0; }
+.metrics-chips { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.metrics-chip {
+  display: inline-flex; align-items: center; height: 24px; padding: 0 10px; cursor: pointer;
+  border: 1px solid var(--border); border-radius: 999px; user-select: none;
+  background: var(--bg-faint); color: var(--text-sub);
+  font-family: var(--font-mono); font-size: 11.5px; transition: color .15s, border-color .15s, background .15s;
+}
+.metrics-chip:hover { border-color: var(--brand); color: var(--brand); }
+.metrics-chip.active { border-color: var(--brand); background: var(--brand-soft); color: var(--brand); font-weight: 600; }
+.metrics-range-picker { width: 380px; }
+.metrics-time-note { font-size: 12px; color: var(--text-faint); }
+.metrics-step { width: 158px; }
+.metrics-time-hint { font-size: 11.5px; color: var(--text-faint); }
+
+/* 结果卡 */
+.metrics-result-body { min-height: 220px; }
+.metrics-error { padding: 10px 12px; border: 1px solid var(--danger); border-radius: var(--radius-btn); background: var(--danger-soft); color: var(--danger); font-size: 12.5px; line-height: 1.7; word-break: break-all; }
+.metrics-warnings { margin-bottom: 10px; padding: 8px 12px; border: 1px solid var(--warn); border-radius: var(--radius-btn); background: var(--warn-soft); color: var(--warn); font-size: 12px; line-height: 1.7; }
+.metrics-series-cell { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* 图表容器：定高交给 ECharts（resize 由组件监听窗口变化） */
+.metrics-chart-wrap { width: 100%; }
+.metrics-chart-box { width: 100%; height: 340px; }
+.metrics-chart-trunc { margin-top: 6px; font-size: 11.5px; color: var(--text-faint); }
+
+/* AI 面板（生成 + 解读共用骨架） */
+.metrics-ai-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.metrics-ai-title { font-size: 13.5px; font-weight: 600; color: var(--text-main); }
+.metrics-ai-spacer { flex: 1; }
+.metrics-ai-model { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; color: var(--text-faint); }
+.metrics-ai-blank { padding: 14px 16px; border: 1px dashed var(--border); border-radius: 10px; background: var(--bg-faint); }
+.metrics-ai-blank p { margin: 0 0 6px; font-size: 12.5px; color: var(--text-sub); }
+.metrics-ai-blank-hint { color: var(--text-faint) !important; font-size: 11.5px !important; line-height: 1.7; }
+.metrics-ai-blank .el-button { margin-top: 4px; }
+.metrics-ai-input {
+  width: 100%; box-sizing: border-box; min-height: 56px; resize: vertical;
+  padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-btn);
+  background: #fff; color: var(--text-main); outline: none; font-family: inherit;
+  font-size: 12.5px; line-height: 1.7;
+}
+.metrics-ai-input:focus { border-color: var(--brand); }
+.metrics-ai-input:disabled { background: var(--bg-faint); }
+.metrics-ai-actions { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.metrics-ai-tip { font-size: 11.5px; color: var(--text-faint); }
+.metrics-ai-error { margin-top: 10px; padding: 9px 12px; border: 1px solid var(--danger); border-radius: var(--radius-btn); background: var(--danger-soft); color: var(--danger); font-size: 12.5px; line-height: 1.7; }
+.metrics-ai-error pre { margin: 0; white-space: pre-wrap; word-break: break-all; font-family: var(--font-mono); font-size: 12px; }
+/* 生成开销（头部行内）：token / 参考指标 / 耗时 */
+.metrics-ai-head .metrics-ai-usage { margin-top: 0; }
+.metrics-ai-range { margin-top: 10px; font-size: 12px; line-height: 1.7; color: var(--text-sub); }
+.metrics-ai-range b { color: var(--text-main); }
+.metrics-ai-warn { margin-top: 8px; padding: 8px 10px; border: 1px solid var(--warn); border-radius: 8px; background: var(--warn-soft); color: var(--warn); font-size: 12px; line-height: 1.7; }
+.metrics-ai-usage { margin-top: 8px; font-size: 11.5px; color: var(--text-faint); }
+.metrics-ai-usage b { color: var(--text-main); }
+
+/* 解读卡（MetricsAIExplain） */
+.metrics-ai-focus { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.metrics-ai-focus .el-input { flex: 1; min-width: 0; }
+.metrics-ai-summary { font-size: 13px; line-height: 1.9; color: var(--text-main); }
+.metrics-ai-summary.mono-hint { margin-bottom: 10px; font-size: 11.5px; color: var(--text-faint); }
+.metrics-ai-loading { display: flex; align-items: center; gap: 8px; padding: 12px 0; font-size: 12.5px; color: var(--text-faint); }
+.metrics-ai-loading-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--brand); animation: metricsPulse 1s infinite ease-in-out; }
+@keyframes metricsPulse { 0%, 100% { opacity: .25; transform: scale(.8); } 50% { opacity: 1; transform: scale(1.15); } }
+.metrics-ai-section { margin-top: 12px; }
+.metrics-ai-section-title { margin-bottom: 6px; font-size: 12.5px; font-weight: 600; color: var(--text-main); }
+.metrics-ai-list { margin: 0; padding-left: 18px; }
+.metrics-ai-list li { font-size: 12.5px; line-height: 1.9; color: var(--text-sub); }
+.metrics-ai-list.is-suggest li { color: var(--text-main); }
+.metrics-ai-digest { margin-top: 12px; }
+.metrics-ai-digest-toggle { font-size: 11.5px; color: var(--brand); cursor: pointer; user-select: none; }
+.metrics-ai-digest-body { margin-top: 8px; max-height: 260px; overflow: auto; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-faint); }
+.metrics-ai-digest-line { font-size: 11.5px; line-height: 1.8; color: var(--text-sub); white-space: pre-wrap; word-break: break-all; }
+
+/* 设置 · 备份恢复（settings_backup.js）：左右两栏，路径输入 + 浏览并排 */
+.bk-pane { display: flex; flex-direction: column; gap: 12px; padding: 14px 16px;
+  border: 1px solid var(--border); border-radius: 10px; background: var(--bg-faint); min-width: 0; }
+.bk-title { font-weight: 600; font-size: 14px; }
+.bk-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.bk-label { font-size: 12px; color: var(--text-sub); }
+.bk-path { display: flex; gap: 8px; min-width: 0; }
+.bk-path .bk-path-input { flex: 1 1 auto; min-width: 0; }
+.bk-alert { margin: 2px 0; }
+.bk-result { font-size: 12px; color: var(--text-sub); word-break: break-all; }
+.bk-files { margin-top: 10px; }

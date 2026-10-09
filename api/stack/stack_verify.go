@@ -97,10 +97,6 @@ func (h *stackHandler) VerifyInstance(c *gin.Context) {
 	wg.Wait()
 
 	result := assembleStackVerify(inst, instParams, outHosts)
-	h.auditRepo.Create(&model.AuditLog{
-		Action: "stack.instance.verify", TargetType: "stack_instance", TargetID: id,
-		Detail: fmt.Sprintf("name=%s ok=%v %s", inst.Name, result.OK, result.Summary), RemoteIP: c.ClientIP(),
-	})
 	resp.OK(c, result)
 }
 

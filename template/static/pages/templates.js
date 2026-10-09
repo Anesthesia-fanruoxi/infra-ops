@@ -1,5 +1,5 @@
 window.TemplatesPage = {
-  props: ['page', 'user', 'versionData'],
+  props: ['page', 'versionData'],
   template: `
 <div class="tpl-page">
   <section class="tpl-hero">

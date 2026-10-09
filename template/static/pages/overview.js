@@ -1,5 +1,5 @@
 window.OverviewPage = {
-  props: ['page', 'user', 'versionData'],
+  props: ['page', 'versionData'],
   template: `
 <div class="overview-page">
   <section class="overview-hero">
@@ -78,7 +78,7 @@ window.OverviewPage = {
       <div v-if="recentAudits.length" class="audit-timeline">
         <div v-for="a in recentAudits" :key="a.id" class="audit-item">
           <div class="audit-marker"><span></span></div>
-          <div class="audit-content"><div class="audit-topline"><span class="action-badge" :class="actionClass(a.action)">{{a.action}}</span><span class="mono audit-time">{{formatTime(a.created_at)}}</span></div><div class="audit-detail">{{auditDetail(a)}}</div></div>
+          <div class="audit-content"><div class="audit-topline"><span class="audit-topline-main"><span class="action-badge" :class="actionClass(a)">{{methodOf(a.action)}}</span><span class="audit-path" :title="a.action">{{pathOf(a.action)}}</span></span><span class="mono audit-time">{{formatTime(a.created_at)}}</span></div><div class="audit-detail" :class="{'audit-detail--fail': isFail(a)}">{{auditDetail(a)}}</div></div>
         </div>
       </div>
       <div v-else class="empty-state overview-empty"><span class="empty-icon">✓</span><strong>暂无操作记录</strong><span>系统产生操作后会实时出现在这里</span></div>
@@ -133,14 +133,15 @@ window.OverviewPage = {
       if (status === 'offline') return '离线'
       return '未验证'
     },
-    actionClass(action) {
-      const value = (action || '').toLowerCase()
-      if (value.startsWith('auth')) return 'auth'
-      if (value.startsWith('host')) return 'host'
-      if (value.startsWith('credential')) return 'credential'
+    actionClass(a) {
+      const m = String(a?.action || '').split(' ')[0].toLowerCase()
+      if (m === 'post' || m === 'put' || m === 'patch' || m === 'delete') return m
       return 'other'
     },
-    auditDetail(a) { return a.detail || a.target_type || '系统操作' },
+    methodOf(action) { return String(action || '').split(' ')[0] },
+    pathOf(action) { const i = String(action || '').indexOf(' '); return i < 0 ? '' : String(action).slice(i + 1) },
+    isFail(a) { return (Number(a?.code) || 0) !== 0 || (Number(a?.http_status) || 0) >= 400 },
+    auditDetail(a) { return a.message || a.action || '系统操作' },
     formatTime(t) { if (!t) return '-'; const d = new Date(t.replace(' ', 'T')); return String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')+' '+String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0') },
     parseInfo(row) { if (!row?.info_json || row.info_json === '{}') return null; try { return typeof row.info_json === 'string' ? JSON.parse(row.info_json) : row.info_json } catch (e) { return null } },
     memPct(row) { const i = this.parseInfo(row); return i?.mem_used_percent ? Math.round(i.mem_used_percent) : 0 },

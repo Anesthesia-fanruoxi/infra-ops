@@ -1,0 +1,591 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>measure · 监控查询（Prometheus / VictoriaMetrics）</title>
+  <link rel="stylesheet" href="../template/static/vendor/element-plus.css">
+  <link rel="stylesheet" href="../template/static/style.css">
+  <style>
+    body { margin: 0; background: #F5F7FA; }
+    #app { min-height: 100vh; }
+    #out { margin: 12px 24px; padding: 12px; background: #111827; color: #A7F3D0; font: 12px/1.6 monospace; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <pre id="out"></pre>
+<!--
+  用法（无头 Chrome，实测链路与版式，不估算）：
+    "C:/Program Files/Google/Chrome/Application/chrome.exe" --headless=new --disable-gpu --no-sandbox \
+      --window-size=1440,900 --virtual-time-budget=12000 --dump-dom \
+      "file:///D:/project/go/infra-ops/script/measure_metrics.html?view=workbench&stage=chain"
+    截图：把 --dump-dom 换成 --screenshot=xxx.png 并加 &shot=true（shot 模式不打断言、不写 #out）。
+
+  场景（?stage=…，默认 view=workbench）：
+    view=page                连接列表：表格 → 卡片 → 点「查询」进入工作台
+    view=workbench&stage=initial   工作台初始布局（顶栏 / 表达式行 / 时间行 / 三个空态）
+    view=workbench&stage=chain     AI 生成 → 填入表达式 → 执行 → 图表/统计表 → AI 解读 → 依据展开（全链）
+    view=workbench&stage=preset    时间预设：默认 1h/15s → 切 24h（步长应随 preset 变 60）→ 执行
+    view=workbench&stage=instant   即时查询：切 instant → 执行 → 单点序列照样出图
+    view=workbench&stage=airange   AI 时间范围：生成即自动填入；命中预设切 chip（6h）、「今天」走自定义冻结区间
+  开关：?verify=1 让 AI 生成返回 verify_error（压黄色「试跑未通过」分支）。
+
+  为什么建这个台子：这条工具的主链全在前端编排——AI 生成结果要能「填入表达式」、
+  执行参数（毫秒时间戳 / 秒步长 / preset 各带步长）要逐字段对得上、
+  ECharts(SVG) 在 v-show 容器里初始化会拿到 0×0 尺寸（必须 nextTick resize）、
+  解读面板在没有结果时必须停在引导态。这些看代码都推不出来，只能跑。
+-->
+  <script src="../template/static/vendor/vue.global.prod.js"></script>
+  <script src="../template/static/vendor/element-plus.min.js"></script>
+  <script src="../template/static/vendor/element-plus-icons-vue.min.js"></script>
+  <script src="../template/static/vendor/element-plus-zh-cn.min.js"></script>
+  <script src="../template/static/vendor/echarts.min.js"></script>
+  <script src="../template/static/vendor/axios.min.js"></script>
+
+  <!-- 被测组件（真实文件，顺序同 index.html：图表 → AI 面板 → 页面） -->
+  <script src="../template/static/pages/metrics_chart.js"></script>
+  <script src="../template/static/pages/metrics_ai.js"></script>
+  <script src="../template/static/pages/metrics.js"></script>
+
+  <script>
+const QS = new URLSearchParams(location.search)
+const VIEW = QS.get('view') || 'workbench'
+const STAGE = QS.get('stage') || 'initial'
+const SHOT = QS.get('shot') === 'true'
+const VERIFY = QS.get('verify') === '1'
+
+// 错误收集：任何 JS 异常都记账，末行断言看得见（组件内部的 catch 不该吞掉真错误）
+// file:// 下 vendor 脚本会被当作跨源，异常被掩码成 "Script error."，
+// 所以把 filename:lineno 一起记下来，便于回到 vendor 源码定位
+window.__errors = []
+window.addEventListener('error', function (e) {
+  window.__errors.push(String(e.message) + ' @ ' + String(e.filename || '?').split('/').pop() + ':' + String(e.lineno || 0) + ':' + String(e.colno || 0))
+})
+window.addEventListener('unhandledrejection', function (e) {
+  window.__errors.push('rejection: ' + String((e.reason && e.reason.message) || e.reason))
+})
+
+// 组件里直接引用了裸标识符 ElMessage（app.js 顶层 const 注入），measure 里补上
+window.ElMessage = ElementPlus.ElMessage
+window.ElMessageBox = ElementPlus.ElMessageBox
+
+// 连接列表视图模式会持久化到 localStorage（metrics.js 既有行为）。
+// 同一个 Chrome profile 连跑多次时，上次场景切到「卡片」的状态会残留，
+// 让「默认表格」的断言与截图变得不确定——每个场景启动前先清掉。
+try { localStorage.removeItem('metrics-view-mode') } catch (e) {}
+
+// 默认禁用模式开关按钮的 CSS 过渡（?trans=1 可恢复，仅排障用）。
+// 无头 + --virtual-time-budget 下 transition 推进异常缓慢且属性间不同步
+// （实测点击 1.7s 后 bg 已是终态、color/border 还在起点），
+// 让 computed style 读数和截图都停在「过渡中间态」，出现“样式颠倒”假象。
+// 渲染台测的是结构/编排/契约/几何的终态，动画不属于被测范畴——
+// 所以在台内统一禁用过渡，清除这个唯一的不确定性源。
+// 对照：notrans 前读数颠倒/像素错位，notrans 后全通道正常。
+if (!/trans=1/.test(location.search)) {
+  const st = document.createElement('style')
+  st.textContent = '.metrics-mode-switch .el-radio-button__inner{transition:none !important}'
+  document.head.appendChild(st)
+}
+
+// ?diag=1：把模式开关读数渲染成页面顶部浮层（黑底绿字），
+// 让 --screenshot 能把读数与按钮像素同一帧落盘，做对账。
+function diagModeSwitch(tag) {
+  if (!/diag=1/.test(location.search)) return
+  let d = document.getElementById('diag-layer')
+  if (!d) {
+    d = document.createElement('div')
+    d.id = 'diag-layer'
+    d.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;background:#000;color:#0f0;font:bold 12px/1.5 Consolas,monospace;padding:6px 10px;white-space:pre-wrap;pointer-events:none'
+    document.body.appendChild(d)
+  }
+  const lines = ['DIAG ' + tag]
+  ;[].slice.call(document.querySelectorAll('.metrics-mode-switch .el-radio-button')).forEach(function (lb) {
+    const sp = lb.querySelector('.el-radio-button__inner')
+    const inp = lb.querySelector('input')
+    const cs = getComputedStyle(sp)
+    const r = sp.getBoundingClientRect()
+    lines.push((/is-active/.test(lb.className) ? 'ACT' : 'off') + ' "' + sp.textContent.trim() + '" x=' + Math.round(r.left) + '-' + Math.round(r.right)
+      + ' bg=' + cs.backgroundColor + ' c=' + cs.color + ' bd=' + cs.borderTopColor
+      + ' chk=' + inp.checked + ' m=' + sp.matches('.el-radio-button.is-active .el-radio-button__original-radio:not(:disabled)+.el-radio-button__inner'))
+  })
+  d.textContent = lines.join('\n')
+}
+
+// ===================== mock 后端 =====================
+window.__posts = []
+window.__gets = []
+function delay(ms, v) { return new Promise(function (res) { setTimeout(function () { res(v) }, ms) }) }
+
+const CONN_PROM = { id: 1, name: 'prom-prod', kind: 'prometheus', url: 'http://10.20.30.41:9090', insecure: false, auth_type: 'basic', username: 'ops', has_secret: true, remark: '生产集群监控', updated_at: '2026-10-08 12:00:00' }
+const CONN_VM = { id: 2, name: 'vm-arch', kind: 'victoriametrics', url: 'http://10.20.30.42:8428/prometheus', insecure: true, auth_type: 'none', username: '', has_secret: false, remark: '归档集群', updated_at: '2026-10-08 12:01:00' }
+
+function autoStep(spanSec) { const s = Math.floor(spanSec / 720); return s < 15 ? 15 : s }
+function mkSeries(base, n, step, startMs, withGap) {
+  const points = []
+  for (let i = 0; i < n; i++) {
+    let v = Math.round(base + 1.6e8 * Math.sin(i / 11) + i * 2.2e5)
+    if (withGap && i % 5 === 0) v = null // 缺失点：验证 connectNulls:false 的断线分支
+    points.push({ ts: startMs + i * step * 1000, v: v })
+  }
+  return points
+}
+function rangeResult(b) {
+  const spanSec = Math.max(1, Math.round((b.end - b.start) / 1000))
+  const step = b.step > 0 ? b.step : autoStep(spanSec)
+  const n = Math.max(2, Math.min(720, Math.floor(spanSec / step) + 1))
+  return {
+    expr: b.expr, mode: 'range', start: b.start, end: b.end, step: step,
+    result_type: 'matrix',
+    series: [
+      { metric: { __name__: 'node_memory_MemAvailable_bytes', instance: '10.20.30.41:9100', job: 'node' }, points: mkSeries(3.2e9, n, step, b.start, false) },
+      { metric: { __name__: 'node_memory_MemAvailable_bytes', instance: '10.20.30.42:9100', job: 'node' }, points: mkSeries(5.6e9, n, step, b.start, false) },
+      { metric: { __name__: 'node_memory_MemTotal_bytes', instance: '10.20.30.41:9100', job: 'node' }, points: mkSeries(1.6e10, n, step, b.start, true) }
+    ],
+    warnings: [], elapsed_ms: 42
+  }
+}
+function instantResult(b) {
+  const at = b.end > 0 ? b.end : Date.now()
+  return {
+    expr: b.expr, mode: 'instant', start: at, end: at, step: 0, result_type: 'vector',
+    series: [
+      { metric: { __name__: 'up', instance: '10.20.30.41:9090', job: 'prometheus' }, points: [{ ts: at, v: 1 }] },
+      { metric: { __name__: 'up', instance: '10.20.30.42:9090', job: 'prometheus' }, points: [{ ts: at, v: 1 }] },
+      { metric: { __name__: 'up', instance: '10.20.30.43:9090', job: 'prometheus' }, points: [{ ts: at, v: 0 }] }
+    ],
+    warnings: [], elapsed_ms: 11
+  }
+}
+
+window.api = {
+  get: function (url) {
+    window.__gets.push(url)
+    if (/\/settings\/ai$/.test(url)) {
+      return Promise.resolve({ code: 0, data: { enabled: true, model: 'deepseek-chat', base_url: 'https://api.deepseek.com' } })
+    }
+    if (/\/metrics\/conns$/.test(url)) {
+      return delay(200, { code: 0, data: { list: [CONN_PROM, CONN_VM], total: 2, page: 1, page_size: 20 } })
+    }
+    return Promise.resolve({ code: 1, message: '未桩住的 GET ' + url })
+  },
+  post: function (url, body, cfg) {
+    window.__posts.push({ url: url, body: body || {}, cfg: cfg || {} })
+    if (/\/metrics\/conns\/\d+\/ping$/.test(url)) {
+      return delay(150, { code: 0, data: { latency_ms: 12, version: '2.53.0' } })
+    }
+    if (/\/metrics\/conns\/\d+\/query$/.test(url)) {
+      if ((body || {}).mode === 'instant') return delay(400, { code: 0, data: instantResult(body) })
+      return delay(800, { code: 0, data: rangeResult(body) })
+    }
+    if (/\/metrics\/conns\/\d+\/ai\/promql$/.test(url)) {
+      window.__promqlCalls = (window.__promqlCalls || 0) + 1
+      const data = {
+        promql: 'rate(node_memory_MemAvailable_bytes[5m])',
+        explain: '计算各节点可用内存的 5 分钟变化率：为负说明内存在被逐步吃掉，绝对值越大消耗越快。',
+        used_metrics: 37,
+        verify_error: VERIFY ? 'parse error at line 1: unexpected ")" (本地试跑返回 400)' : '',
+        usage: { calls: 1, prompt_tokens: 1180, completion_tokens: 96, total_tokens: 1276, source: 'api', elapsed_ms: 1840 }
+      }
+      // ?stage=airange：第 1 次生成带「最近 6 小时」（命中 6h chip），第 2 次带「今天」（日历边界走自定义）
+      if (STAGE === 'airange') {
+        const now = Date.now()
+        if (window.__promqlCalls === 1) {
+          data.range = { start: now - 6 * 3600e3, end: now, label: '最近 6 小时', preset: '6h' }
+        } else {
+          const d = new Date(); d.setHours(0, 0, 0, 0)
+          data.range = { start: d.getTime(), end: now, label: '今天', preset: '' }
+          window.__mockRange2 = data.range
+        }
+      }
+      return delay(800, { code: 0, data: data })
+    }
+    if (/\/metrics\/conns\/\d+\/ai\/explain$/.test(url)) {
+      return delay(900, { code: 0, data: {
+        summary: '整体看，可用内存呈缓慢下降趋势：10.20.30.41 明显低于同组节点，且末段仍在回落，值得优先排查。',
+        findings: [
+          '10.20.30.41 可用内存均值约 3.2e+09，比 10.20.30.42 低约 42%',
+          '末值较区间起点下降约 46%，不是随机波动而是趋势性回落',
+          'node_memory_MemTotal_bytes 序列存在 2 处缺失点（采样断报）'
+        ],
+        suggestions: [
+          '登录 10.20.30.41 查内存大户进程（docker stats / ps aux 排序）',
+          '核查 node_exporter 的采集中断，确认不是 exporter 自身抖动'
+        ],
+        digest: {
+          series_count: 3, truncated: false,
+          lines: [
+            'node_memory_MemAvailable_bytes{instance="10.20.30.41:9100", job="node"} 末值=3.27e+09 最小=3.05e+09 最大=3.13e+10 均值=3.67e+09 趋势=下降',
+            'node_memory_MemAvailable_bytes{instance="10.20.30.42:9100", job="node"} 末值=5.66e+09 最小=5.45e+09 最大=5.85e+09 均值=5.65e+09 趋势=平稳',
+            'node_memory_MemTotal_bytes{instance="10.20.30.41:9100", job="node"} 末值=1.60e+10 最小=1.09e+10 最大=1.61e+10 均值=1.14e+10 趋势=上升'
+          ]
+        },
+        usage: { calls: 1, prompt_tokens: 900, completion_tokens: 210, total_tokens: 1110, source: 'api', elapsed_ms: 2380 }
+      } })
+    }
+    return Promise.resolve({ code: 1, message: '未桩住的 POST ' + url })
+  }
+}
+
+// ===================== 挂载 =====================
+const app = VIEW === 'page'
+  ? Vue.createApp(window.MetricsPage, { page: 'metrics', versionData: null })
+  : Vue.createApp(window.MetricsWorkbench, { conn: CONN_PROM })
+app.use(ElementPlus, { locale: ElementPlusLocaleZhCn })
+app.use(ElementPlusIconsVue)
+app.component('empty-state', { props: ['text'], template: '<div class="empty-state"><p>{{text}}</p></div>' })
+app.config.globalProperties.$message = ElementPlus.ElMessage
+app.config.globalProperties.$confirm = function (m, t, o) { return ElementPlus.ElMessageBox.confirm(m, t, o) }
+const vm = app.mount('#app')
+
+// ===================== 断言工具 =====================
+function q(sel) { return document.querySelector(sel) }
+function rect(sel) {
+  const el = q(sel)
+  if (!el) return null
+  const r = el.getBoundingClientRect()
+  return { w: Math.round(r.width), h: Math.round(r.height), top: Math.round(r.top), bottom: Math.round(r.bottom), left: Math.round(r.left), right: Math.round(r.right) }
+}
+function num(v) { return (typeof v === 'number' && isFinite(v)) ? Math.round(v) : '—' }
+function textOf(sel) { const el = q(sel); return el ? el.textContent.replace(/\s+/g, ' ').trim() : '—' }
+function btnOf(text, scopeSel) {
+  const root = scopeSel ? q(scopeSel) : document
+  if (!root) return null
+  return [].slice.call(root.querySelectorAll('button')).filter(function (b) {
+    return b.textContent.replace(/\s+/g, '').indexOf(text.replace(/\s+/g, '')) >= 0
+  })[0]
+}
+function setTextarea(sel, val) {
+  const t = q(sel)
+  if (!t) return false
+  t.value = val
+  t.dispatchEvent(new Event('input', { bubbles: true }))
+  return true
+}
+function clickChip(label) {
+  let hit = null
+  ;[].slice.call(document.querySelectorAll('.metrics-chip')).forEach(function (c) {
+    if (c.textContent.trim() === label) { c.click(); hit = c }
+  })
+  return !!hit
+}
+function clickRadio(scopeSel, text) {
+  let hit = null
+  ;[].slice.call(document.querySelectorAll(scopeSel + ' .el-radio-button')).forEach(function (r) {
+    if (r.textContent.replace(/\s+/g, '').indexOf(text) >= 0) { r.click(); hit = r }
+  })
+  return !!hit
+}
+const L = []
+function push(s) { L.push(s) }
+
+function wireLog(tag) {
+  push('POST 记录 = ' + JSON.stringify(window.__posts.map(function (p) { return { u: p.url, b: p.body } })))
+}
+
+function snapshot(tag) {
+  push('-- [' + tag + '] --')
+  push('视口 = ' + window.innerWidth + '×' + window.innerHeight)
+  push('JS 错误 = ' + (window.__errors.length ? JSON.stringify(window.__errors) : '0 条'))
+
+  const bar = q('.metrics-bar')
+  if (bar) {
+    push('顶栏 = ' + JSON.stringify(rect('.metrics-bar')) + '  连接=' + textOf('.metrics-bar-name')
+      + '  状态=' + textOf('.metrics-bar .tool-status') + '  类型=' + textOf('.metrics-bar .action-badge'))
+  }
+
+  const row = q('.metrics-expr')
+  if (row) {
+    const rr = row.getBoundingClientRect()
+    const ta = q('.metrics-expr-input')
+    const btn = btnOf('执行查询')
+    push('.metrics-expr 行宽 = ' + num(rr.width) + '  文本域 = ' + JSON.stringify(rect('.metrics-expr-input')))
+    if (ta && btn) {
+      const tr = ta.getBoundingClientRect(), br = btn.getBoundingClientRect()
+      push('执行按钮在行内 = ' + (br.right <= rr.right + 1 && br.bottom <= rr.bottom + 1 ? 'YES' : 'NO')
+        + '  与文本域不重叠 = ' + (br.left >= tr.right - 1 ? 'YES' : 'NO'))
+    }
+    // 组件状态直读（prod 构建的 proxy 仍暴露 data）
+    push('vm: mode=' + vm.mode + ' preset=' + vm.preset + ' stepSel=' + vm.stepSel + ' expr=' + JSON.stringify(vm.expr || ''))
+  }
+
+  const timeRow = q('.metrics-time')
+  if (timeRow) {
+    const tr = timeRow.getBoundingClientRect()
+    let worst = 0
+    ;[].slice.call(timeRow.children).forEach(function (ch) {
+      const cr = ch.getBoundingClientRect()
+      if (cr.right > tr.right + 1) worst = Math.max(worst, cr.right - tr.right)
+    })
+    push('.metrics-time 子项右溢出 = ' + (worst ? num(worst) + 'px' : '无') + '  行高 = ' + num(tr.height))
+    const chips = document.querySelectorAll('.metrics-chip')
+    push('时间 chips = ' + chips.length + ' 个 [' + [].slice.call(chips).map(function (c) { return c.textContent.trim() }).join(' ') + ']'
+      + '  激活 = ' + textOf('.metrics-chip.active'))
+  }
+
+  // 模式开关：选中态应是蓝底白字，未选中白底深字；几何不应重叠/错位
+  const modeBtns = [].slice.call(document.querySelectorAll('.metrics-mode-switch .el-radio-button__inner'))
+  if (modeBtns.length) {
+    push('  模式开关 = ' + modeBtns.map(function (b) {
+      const cs = getComputedStyle(b)
+      const r = b.getBoundingClientRect()
+      const act = b.parentElement.className.indexOf('is-active') >= 0 ? ' [active]' : ''
+      const inp = b.parentElement.querySelector('input')
+      return JSON.stringify(b.textContent.trim()) + ' {' + Math.round(r.left) + '~' + Math.round(r.right) + ' y=' + Math.round(r.top) + '~' + Math.round(r.bottom) + '} color=' + cs.color + ' bg=' + cs.backgroundColor + act
+        + ' input.checked=' + (inp ? inp.checked : '?') + ' name=' + (inp ? inp.name : '?')
+    }).join('  |  '))
+    // 终态配色断言：台内默认已禁用按钮过渡，读数应始终是终态（无过渡中间态干扰）
+    const colorsOk = modeBtns.every(function (b) {
+      const cs = getComputedStyle(b)
+      const active = b.parentElement.className.indexOf('is-active') >= 0
+      return active
+        ? (cs.backgroundColor === 'rgb(47, 107, 255)' && cs.color === 'rgb(255, 255, 255)')
+        : (cs.backgroundColor === 'rgb(255, 255, 255)' && cs.color === 'rgb(96, 98, 102)')
+    })
+    push('  模式开关配色断言 = ' + (colorsOk ? 'PASS（选中=蓝底白字 / 未选中=白底深灰字）' : 'FAIL'))
+  }
+
+  const gen = q('.metrics-ai-gen')
+  if (gen) {
+    push('[AI 生成] 标题=' + textOf('.metrics-ai-gen .metrics-ai-title') + '  模型=' + textOf('.metrics-ai-gen .metrics-ai-model')
+      + '  空态=' + (q('.metrics-ai-gen .metrics-ai-blank') ? '有' : '无'))
+    if (q('.metrics-ai-gen .metrics-ai-expr')) push('  !! 生成结果块仍存在 = ' + JSON.stringify(textOf('.metrics-ai-gen .metrics-ai-expr')))
+    if (q('.metrics-ai-head .metrics-ai-usage')) push('  头部用量行 = ' + JSON.stringify(textOf('.metrics-ai-gen .metrics-ai-usage')))
+    if (q('.metrics-ai-gen .metrics-ai-warn')) push('  黄条(试跑未通过) = ' + JSON.stringify(textOf('.metrics-ai-gen .metrics-ai-warn')))
+    if (q('.metrics-ai-gen .metrics-ai-range')) push('  范围提示行 = ' + JSON.stringify(textOf('.metrics-ai-gen .metrics-ai-range')))
+  }
+
+  const panel = q('.metrics-result-panel')
+  if (panel) {
+    push('[结果卡] 副标题=' + textOf('.metrics-result-panel .tool-list-sub'))
+    const box = q('.metrics-chart-box')
+    if (box && box.offsetParent !== null && box.getBoundingClientRect().width > 10) {
+      const svg = box.querySelector('svg')
+      push('  图表容器 = ' + JSON.stringify(rect('.metrics-chart-box'))
+        + '  SVG=' + (svg ? 'YES' : 'NO') + '  path 数=' + (svg ? svg.querySelectorAll('path').length : 0))
+      if (svg) {
+        // 布局几何：0 尺寸 init 会让整张图坍缩（刻度挤左端、折线只剩一截），
+        // 只看 SVG 存在性和 path 计数抓不出这类回归，必须看几何
+        const xl = [].slice.call(svg.querySelectorAll('text')).filter(function (t) {
+          return /^\d{1,2}:\d{2}$/.test(t.textContent.trim())
+        })
+        const xps = xl.map(function (t) {
+          const m = (t.getAttribute('transform') || '').match(/translate\(([\d.]+)/)
+          return m ? Math.round(parseFloat(m[1])) : null
+        }).filter(function (v) { return v !== null })
+        const spans = []
+        ;[].slice.call(svg.querySelectorAll('path[stroke-width="1.6"]')).forEach(function (p) {
+          const nums = (p.getAttribute('d') || '').match(/-?\d+(?:\.\d+)?/g) || []
+          let mn = Infinity, mx = -Infinity
+          for (let i = 0; i < nums.length; i += 2) {
+            const x = parseFloat(nums[i])
+            if (isFinite(x)) { mn = Math.min(mn, x); mx = Math.max(mx, x) }
+          }
+          if (isFinite(mn)) spans.push(Math.round(mn) + '~' + Math.round(mx))
+        })
+        push('  x 轴标签 = ' + xl.length + ' 个  x 分布 = ' + JSON.stringify(xps) + '（应铺开 ~130 到 ~1350，不是全挤左端）')
+        push('  折线 x 跨度 = ' + JSON.stringify(spans) + '（每条约 92~1352）')
+      }
+    } else if (q('.metrics-result-panel .el-table__row')) {
+      push('  统计表行数 = ' + document.querySelectorAll('.metrics-result-panel .el-table__row').length)
+      push('  首行 = ' + textOf('.metrics-result-panel .el-table__row'))
+    } else {
+      push('  空态/错误 = ' + (q('.metrics-error') ? textOf('.metrics-error') : (q('.empty-state') ? textOf('.empty-state p') : '—')))
+    }
+  }
+
+  const exp = q('.metrics-ai-explain-panel')
+  if (exp) {
+    push('[AI 解读] 空态=' + (q('.metrics-ai-explain-panel .metrics-ai-blank') ? '有' : '无')
+      + '  加载中=' + (q('.metrics-ai-explain-panel .metrics-ai-loading') ? 'YES' : 'NO'))
+    if (q('.metrics-ai-summary')) push('  summary = ' + JSON.stringify(textOf('.metrics-ai-summary')))
+    if (q('.metrics-ai-section')) {
+      push('  小节数 = ' + document.querySelectorAll('.metrics-ai-explain-panel .metrics-ai-section').length
+        + '  列表项 = ' + document.querySelectorAll('.metrics-ai-explain-panel .metrics-ai-list li').length)
+    }
+    if (q('.metrics-ai-digest-line')) push('  依据行数 = ' + document.querySelectorAll('.metrics-ai-digest-line').length)
+    if (q('.metrics-ai-explain-panel .metrics-ai-usage')) push('  用量行 = ' + JSON.stringify(textOf('.metrics-ai-explain-panel .metrics-ai-usage')))
+  }
+  push('')
+}
+
+function finish() {
+  if (SHOT) return
+  document.getElementById('out').textContent = L.join('\n')
+}
+
+// ===================== 驱动 =====================
+if (VIEW === 'page') {
+  setTimeout(function () {
+    push('[连接列表] 表格行数 = ' + document.querySelectorAll('.hosts-table .el-table__row').length)
+    push('状态列 = ' + [].slice.call(document.querySelectorAll('.tool-status')).map(function (s) { return s.textContent.trim() }).join(' / '))
+    push('类型徽章 = ' + [].slice.call(document.querySelectorAll('.hosts-table .action-badge')).map(function (b) { return b.textContent.trim() }).join(' / '))
+    const urlCell = q('.hosts-table .el-table__row .mono')
+    push('地址单元格溢出 = ' + (urlCell ? (urlCell.scrollWidth > urlCell.clientWidth + 1 ? '截断' : '未溢出') : '—'))
+    push('')
+  }, 800)
+  setTimeout(function () { clickRadio('.hosts-view-switch', '卡片') }, 900)
+  setTimeout(function () {
+    push('[连接列表] 卡片数 = ' + document.querySelectorAll('.tool-card--metrics').length)
+    push('卡片图标 = ' + [].slice.call(document.querySelectorAll('.tool-card--metrics .tool-card-icon')).map(function (i) { return i.textContent.trim() }).join(' / '))
+    push('')
+    const enter = q('.tool-card--metrics .hca-btn-primary')
+    if (enter) enter.click(); else push('!! 卡片上没有「查询」按钮')
+  }, 1300)
+  setTimeout(function () {
+    push('[进入工作台] 顶栏存在 = ' + (q('.metrics-bar') ? 'YES' : 'NO') + '  返回按钮 = ' + (btnOf('返回列表') ? 'YES' : 'NO'))
+    push('AI 生成面板存在 = ' + (q('.metrics-ai-gen') ? 'YES' : 'NO') + '  解读面板存在 = ' + (q('.metrics-ai-explain-panel') ? 'YES' : 'NO'))
+    push('')
+    finish()
+  }, 2100)
+} else if (STAGE === 'initial') {
+  setTimeout(function () {
+    push('[布局] 卡数 = ' + document.querySelectorAll('.page-card').length)
+    push('查询卡 = ' + JSON.stringify(rect('.page-card')) + '  结果卡 = ' + textOf('.metrics-result-panel .tool-list-sub'))
+    push('解读卡空态 = ' + JSON.stringify(textOf('.metrics-ai-explain-panel .metrics-ai-blank')))
+    push('结果空态 = ' + JSON.stringify(textOf('.metrics-result-body .empty-state p')))
+    push('')
+    snapshot('工作台初始')
+    finish()
+  }, 900)
+} else if (STAGE === 'chain') {
+  const Q = '最近一小时各节点可用内存的变化'
+  setTimeout(function () { setTextarea('.metrics-ai-gen .metrics-ai-input', Q) }, 300)
+  setTimeout(function () { if (!btnOf('AI 生成')) push('!! 未找到「AI 生成」按钮'); else btnOf('AI 生成').click() }, 500)
+  setTimeout(function () {
+    snapshot('生成返回')
+    wireLog('生成')
+  }, 1500)
+  setTimeout(function () {
+    // 生成即自动填入表达式（结果块已移除，不再是手动按钮）
+    push('-- [自动填入表达式框] --')
+    push('表达式框值 = ' + JSON.stringify((q('.metrics-expr-input') || {}).value || ''))
+    push('与生成结果一致 = ' + (((q('.metrics-expr-input') || {}).value || '') === 'rate(node_memory_MemAvailable_bytes[5m])' ? 'YES' : 'NO'))
+    push('生成结果块已移除 = ' + (q('.metrics-ai-gen .metrics-ai-expr') ? 'NO' : 'YES'))
+    push('')
+    btnOf('执行查询').click()
+  }, 1700)
+  setTimeout(function () {
+    snapshot('查询返回：图表')
+    const wl = window.__posts.filter(function (p) { return /\/query$/.test(p.url) })[0]
+    if (wl) {
+      const span = Math.round((wl.body.end - wl.body.start) / 1000)
+      push('[查询契约] mode=' + wl.body.mode + ' span=' + span + 's step=' + wl.body.step
+        + '（期望 3600s/15）毫秒时间戳 = ' + (wl.body.start > 1e12 ? 'YES' : 'NO'))
+      push('')
+    }
+    clickRadio('.hosts-view-switch', '统计表')
+  }, 2900)
+  setTimeout(function () {
+    snapshot('统计表页签')
+    clickRadio('.hosts-view-switch', '图表')
+  }, 3200)
+  setTimeout(function () { btnOf('AI 解读').click() }, 3450)
+  setTimeout(function () {
+    snapshot('解读返回')
+    const el = window.__posts.filter(function (p) { return /\/ai\/explain$/.test(p.url) })[0]
+    if (el) push('[解读契约] body=' + JSON.stringify(el.body) + '（start/end/step 应与查询响应完全一致）')
+    push('')
+    const t = q('.metrics-ai-digest-toggle')
+    if (t) t.click(); else push('!! 未找到「解读依据」开关')
+  }, 4600)
+  setTimeout(function () {
+    push('-- [解读依据展开] --')
+    push('依据行数 = ' + document.querySelectorAll('.metrics-ai-digest-line').length + '  开关文案 = ' + JSON.stringify(textOf('.metrics-ai-digest-toggle')))
+    push('')
+    push('总请求数 = ' + window.__posts.length + '  JS 错误 = ' + (window.__errors.length ? JSON.stringify(window.__errors) : '0 条'))
+    finish()
+  }, 4800)
+} else if (STAGE === 'preset') {
+  setTimeout(function () {
+    push('-- [默认预设] --')
+    push('preset=' + vm.preset + ' stepSel=' + vm.stepSel + ' 激活 chip=' + textOf('.metrics-chip.active'))
+    push('')
+    if (!clickChip('24h')) push('!! 未找到 24h chip')
+  }, 500)
+  setTimeout(function () {
+    push('-- [切到 24h] --')
+    push('preset=' + vm.preset + ' stepSel=' + vm.stepSel + ' 激活 chip=' + textOf('.metrics-chip.active'))
+    push('')
+    setTextarea('.metrics-expr-input', 'up')
+    if (!clickChip('7d')) push('!! 未找到 7d chip')
+  }, 800)
+  setTimeout(function () {
+    push('-- [再切 7d] --  stepSel=' + vm.stepSel)
+    clickChip('24h')
+  }, 1100)
+  setTimeout(function () {
+    btnOf('执行查询').click()
+  }, 1400)
+  setTimeout(function () {
+    const wl = window.__posts.filter(function (p) { return /\/query$/.test(p.url) })[0]
+    push('-- [24h 执行契约] --')
+    if (wl) push('mode=' + wl.body.mode + ' span=' + Math.round((wl.body.end - wl.body.start) / 1000) + 's step=' + wl.body.step + '（期望 86400s/60）')
+    push('表格行数（统计页签未开，看副标题）= ' + textOf('.metrics-result-panel .tool-list-sub'))
+    push('JS 错误 = ' + (window.__errors.length ? JSON.stringify(window.__errors) : '0 条'))
+    push('')
+    finish()
+  }, 2600)
+} else if (STAGE === 'airange') {
+  // AI 时间范围识别：生成即自动填入；受控标记由 Go 侧换算，这里验证前端控件联动与执行参数契约
+  const Q1 = '最近 6 小时各节点可用内存的变化'
+  const Q2 = '今天各节点内存用量'
+  setTimeout(function () { setTextarea('.metrics-ai-gen .metrics-ai-input', Q1) }, 300)
+  setTimeout(function () { if (!btnOf('AI 生成')) push('!! 未找到「AI 生成」按钮'); else btnOf('AI 生成').click() }, 500)
+  setTimeout(function () {
+    push('-- [生成即自动填入：预设命中（6h）] --')
+    push('表达式框值 = ' + JSON.stringify((q('.metrics-expr-input') || {}).value || ''))
+    push('时间控件 = preset=' + vm.preset + ' stepSel=' + vm.stepSel + ' 激活 chip=' + textOf('.metrics-chip.active'))
+    push('识别提示行 = ' + JSON.stringify(textOf('.metrics-ai-range')))
+    push('')
+    btnOf('执行查询').click()
+  }, 1500)
+  setTimeout(function () {
+    const wl = window.__posts.filter(function (p) { return /\/query$/.test(p.url) })[0]
+    push('-- [6h 执行契约] --')
+    if (wl) push('mode=' + wl.body.mode + ' span=' + Math.round((wl.body.end - wl.body.start) / 1000) + 's step=' + wl.body.step + '（期望 21600s/30）')
+    push('')
+    setTextarea('.metrics-ai-gen .metrics-ai-input', Q2)
+    btnOf('AI 生成').click()
+  }, 2700)
+  setTimeout(function () {
+    push('-- [生成即自动填入：日历边界（今天→自定义）] --')
+    const cr = vm.customRange
+    push('时间控件 = preset=' + vm.preset + ' stepSel=' + vm.stepSel + ' 激活 chip=' + textOf('.metrics-chip.active'))
+    push('自定义区间与 mock 一致 = ' + (cr && window.__mockRange2 && cr[0].getTime() === window.__mockRange2.start && cr[1].getTime() === window.__mockRange2.end ? 'YES' : 'NO'))
+    push('日期选择器出现 = ' + (q('.metrics-range-picker') ? 'YES' : 'NO'))
+    push('识别提示行 = ' + JSON.stringify(textOf('.metrics-ai-range')))
+    push('')
+    btnOf('执行查询').click()
+  }, 3900)
+  setTimeout(function () {
+    const wl = window.__posts.filter(function (p) { return /\/query$/.test(p.url) })[1]
+    push('-- [今天执行契约] --')
+    if (wl) push('start/end 与识别区间一致 = ' + (window.__mockRange2 && wl.body.start === window.__mockRange2.start && wl.body.end === window.__mockRange2.end ? 'YES' : 'NO') + ' step=' + wl.body.step + '（期望 0=自动）')
+    snapshot('AI 时间范围')
+    push('总请求数 = ' + window.__posts.length + '  JS 错误 = ' + (window.__errors.length ? JSON.stringify(window.__errors) : '0 条'))
+    finish()
+  }, 5100)
+} else if (STAGE === 'instant') {
+  setTimeout(function () { setTextarea('.metrics-expr-input', 'up') }, 300)
+  setTimeout(function () { if (!clickRadio('.metrics-mode-switch', '即时')) push('!! 未切换即时模式') }, 500)
+  setTimeout(function () {
+    push('-- [切到即时查询] --')
+    push('vm.mode=' + vm.mode + '  日期选择器出现 = ' + (q('.metrics-range-picker') ? 'YES' : 'NO') + '  提示 = ' + textOf('.metrics-time-hint'))
+    push('')
+    btnOf('执行查询').click()
+  }, 800)
+  setTimeout(function () {
+    const wl = window.__posts.filter(function (p) { return /\/query$/.test(p.url) })[0]
+    push('-- [即时执行契约] --')
+    if (wl) push('mode=' + wl.body.mode + ' step=' + wl.body.step + ' end=' + wl.body.end + '（end=0 表示后端取当前时刻）')
+    snapshot('即时结果')
+    diagModeSwitch('T2000')
+    push('总请求数 = ' + window.__posts.length + '  JS 错误 = ' + (window.__errors.length ? JSON.stringify(window.__errors) : '0 条'))
+    finish()
+  }, 2000)
+  // 切换后延时复读一次：对照 T2000 看读数是否随时间变化（过渡有没有推进）
+  setTimeout(function () { diagModeSwitch('T2200') }, 2200)
+}
+  </script>
+</body>
+</html>

@@ -1,0 +1,1224 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>measure · MySQL 工作台</title>
+  <link rel="stylesheet" href="../template/static/vendor/element-plus.css">
+  <link rel="stylesheet" href="../template/static/style.css">
+  <style>
+    body { margin: 0; background: #F5F7FA; }
+    #app { height: 780px; display: flex; flex-direction: column; padding: 0 24px 24px; box-sizing: border-box; }
+    #app > div { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+    #out { margin: 12px 24px; padding: 12px; background: #111827; color: #A7F3D0; font: 12px/1.6 monospace; white-space: pre-wrap; }
+    /* ?ailogs：记录面板在真实弹窗里出现（宽 65%、高 70%、上下各留 15%），这里固定 1000px 宽量内容版式，不参与 flex 拉伸 */
+    body.logs-only { background: #F5F7FA; }
+    body.logs-only #app { height: auto; }
+    body.logs-only .logs-shell { flex: none; width: 1000px; }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <pre id="out"></pre>
+
+  <script src="../template/static/vendor/vue.global.prod.js"></script>
+  <script src="../template/static/vendor/element-plus.min.js"></script>
+  <script src="../template/static/vendor/element-plus-icons-vue.min.js"></script>
+  <script src="../template/static/vendor/element-plus-zh-cn.min.js"></script>
+  <script src="../template/static/vendor/axios.min.js"></script>
+
+  <!-- 被测组件（真实文件，顺序同 index.html） -->
+  <script src="../template/static/pages/mysql_tree.js"></script>
+  <script src="../template/static/pages/mysql_grid.js"></script>
+  <script src="../template/static/pages/mysql_table_detail.js"></script>
+  <script src="../template/static/pages/mysql_ai.js"></script>
+  <script src="../template/static/pages/mysql_logs.js"></script>
+  <script src="../template/static/pages/mysql_workbench.js"></script>
+
+  <script>
+// ===================== URL 开关 =====================
+// ?nodb  ：连接不配默认库（复现「点生成没反应」的场景）→ 面板必须自己挑一个非系统库
+// ?nodbs ：后端返回空库列表 → 生成按钮必须置灰并给出原因
+// ?aiwrite：会话处于可写模式 → 面板要说清生成范围、并给写语句标类型
+// ?ailogs：只挂「使用记录」面板（两张互不关联的记录表）＋?tab=ai 时默认落 AI 页签
+// ?nocat ：连接没有任何缓存目录 → 切到 AI 生成要提示「当前没有缓存语义目录」+ 立即生成弹框勾选库
+// ?genfail：批量生成有库失败（后台任务模式）→ 弹框自动切「失败重试」视图、只勾失败库，重试只带失败库
+// ?genstop：任务运行中点「停止生成」→ 任务停止、弹框留存给停止提示，可再次开始补齐
+// ?genbg  ：任务运行中点「后台运行」关弹框 → 面板进度行继续跑，重开可看进度，完成后自动收尾
+// ?gen / ?rebuild：生成 / 重建入口 → 单库确认弹框（只针对当前库，无勾选框）→ 二次确认 → 后台任务（重建 force=true）
+// ?cancel：慢 SQL 中断——执行挂起（6s 慢查询）时出现「取消」，点了当场中断；请求显式不限时
+// ?explain：EXPLAIN 执行计划结果给「AI 分析」入口——分析请求只带 SQL+库名（后端重跑取计划），结果数据不上传 AI；
+//           分析面板放在结果表格下方整块展开；含建索引语句 / 优化后语句代码块（一键复制）；
+//           普通 SELECT 结果必须无该入口（入口判据 can_analyze 由后端标记）
+// ?idx / ?ddl / ?showsys / ?query / ?ai / ?gen / ?switch / ?stay ：分项采集
+// AI 生成即自动追加进编辑器（追加语义 + 生成结果分号收尾）；面板不再重复展示生成结果（只看用量与涉及表）
+const P = new URLSearchParams(location.search)
+const NO_DBS = P.has('nodbs')
+const NO_DEF = P.has('nodb') || NO_DBS
+const NO_CAT = P.has('nocat')
+const GEN_FAIL = P.has('genfail')
+const GEN_STOP = P.has('genstop')
+const GEN_BG = P.has('genbg')
+const AI_WRITE = P.has('aiwrite')
+const LOGS_ONLY = P.has('ailogs')
+const LOGS_TAB = P.get('tab') === 'ai' ? 'ai' : 'sql'
+const RETENTION_DAYS = 30
+
+// ===================== mock 后端 =====================
+// 注意：必须挂到 window，IIFE 内的组件脚本才看得到（局部 var 会被组件 catch 吞掉）
+window.__queryCalls = 0
+window.__cancelCalls = 0 // 「取消」接口调用次数（?cancel 场景）
+// ?cancel 场景下第一条 /query 挂起不返回，等「取消」接口来中断：{ cancel }
+let pendingQuery = null
+window.__posts = [] // 记录每次 POST 的 url/body/timeout，用来核对「目录生成带库名 + 长超时」
+const delay = (ms, v) => new Promise(r => setTimeout(() => r(v), ms))
+const MOCK_TABLES = {
+  demo: [
+    { name: 'users', type: 'BASE TABLE', engine: 'InnoDB', rows: 10240, comment: '用户表' },
+    { name: 'orders', type: 'BASE TABLE', engine: 'InnoDB', rows: 98321, comment: '订单表' },
+    { name: 'v_user_orders', type: 'VIEW', engine: '', rows: 0, comment: '用户订单视图' }
+  ],
+  mysql: [{ name: 'user', type: 'BASE TABLE', engine: 'InnoDB', rows: 6, comment: '系统用户' }]
+}
+const MOCK_DETAIL = {
+  status: {
+    name: 'users', engine: 'InnoDB', collation: 'utf8mb4_0900_ai_ci', rows: 10240,
+    data_length: 358973440, index_length: 296878080, comment: '用户主表',
+    created_at: '2026-03-18 18:29:16', updated_at: '2026-10-08 09:12:44'
+  },
+  columns: [
+    { name: 'id', type: 'bigint unsigned', nullable: false, key: 'PRI', default: null, extra: 'auto_increment', comment: '主键' },
+    { name: 'username', type: 'varchar(64)', nullable: false, key: 'UNI', default: null, extra: '', comment: '用户名' },
+    { name: 'bio', type: 'text', nullable: true, key: '', default: null, extra: '', comment: '' },
+    { name: 'status', type: 'tinyint', nullable: false, key: 'MUL', default: '1', extra: '', comment: '状态：1 正常 0 停用' }
+  ],
+  indexes: [
+    { name: 'PRIMARY', unique: true, columns: ['id'] },
+    { name: 'uk_username', unique: true, columns: ['username'] },
+    { name: 'idx_status_created', unique: false, columns: ['status', 'created_at'] }
+  ],
+  ddl: 'CREATE TABLE `users` (\n  `id` bigint unsigned NOT NULL AUTO_INCREMENT,\n  `username` varchar(64) NOT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_username` (`username`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT=\'用户主表\'',
+  ddl_error: ''
+}
+const MOCK_CATALOG = [
+  { schema_name: 'demo', table_name: 'users', purpose: '用户主数据，登录与资料都在这里', columns: [{ name: 'id', note: '主键' }, { name: 'username', note: '用户名' }], fingerprint: 'aa', generated_at: '2026-10-08 15:00:00' },
+  { schema_name: 'demo', table_name: 'orders', purpose: '订单主表，记录每笔交易', columns: [{ name: 'id', note: '主键' }], fingerprint: 'bb', generated_at: '2026-10-08 15:00:00' },
+  { schema_name: 'demo', table_name: 'v_user_orders', purpose: '用户与订单的关联视图', columns: [], fingerprint: 'cc', generated_at: '2026-10-08 15:00:00' }
+]
+const MOCK_AI_SQL = 'SELECT `demo`.`orders`.`id`, COUNT(*) AS cnt\nFROM `demo`.`orders`\nGROUP BY `demo`.`orders`.`id`\nLIMIT 10;'
+// ?nocat 下生成前 GET 一律报 0 条，生成后恢复正常——模拟「从无到有」的真实状态变化
+let catalogBuilt = false
+// ?genfail 下第一次任务有库失败，重试时全成功
+let catRetried = false
+// —— 语义目录后台任务的模拟状态机（与真实后端同构：快照 + 每库状态）——
+// 除 ?genstop 的第一个任务外（冻结在 running 等「停止」），GET 轮询每调一次完成一个库；
+// ?genfail 的第一次任务最后一个库带 2 条失败（重试时正常）
+let mockTask = null
+let mockTaskSeq = 0
+let mockTaskFailLast = false
+function mockTaskSnap() { return mockTask ? JSON.parse(JSON.stringify(mockTask)) : null }
+function mockTaskBuild(schemas) {
+  mockTask = {
+    // task_id 必须每次不同：前端按 task_id 对「已收尾」去重，复用会吞掉第二次任务的收尾
+    task_id: 't' + (++mockTaskSeq), state: 'running', total: schemas.length, finished: 0,
+    current: schemas[0] || '', batch_done: 1, batch_total: 2,
+    schemas: schemas.map((s, i) => ({ schema: s, state: i === 0 ? 'running' : 'pending', total: 0, generated: 0, cached: 0, failed: 0 })),
+    records: [], // 批级生成记录：每完成一个库追加两条（模拟真实的逐批调用）
+    message: '', usage: {}, elapsed_ms: 900
+  }
+}
+function mockTaskAdvance() {
+  if (!mockTask || mockTask.state !== 'running' || mockTask.frozen) return
+  const doneCnt = mockTask.schemas.filter(s => s.state === 'done').length
+  const item = mockTask.schemas[doneCnt]
+  if (!item) return
+  item.total = MOCK_CATALOG.length
+  item.generated = MOCK_CATALOG.length
+  item.failed = (mockTaskFailLast && doneCnt === mockTask.total - 1) ? 2 : 0
+  item.state = 'done'
+  mockTask.finished = doneCnt + 1
+  // 每完成一个库追加两条批级生成记录（模拟真实逐批调用：3 张表分 2 批）；
+  // 失败库的末批带失败原因，用来验「失败记录」的染红与 title
+  mockTask.records.push(
+    { time: '10:00:0' + mockTask.finished, schema: item.schema, batch_no: 1, batch_total: 2, tables: 2, status: 'ok', message: '', prompt_tokens: 620, completion_tokens: 80, total_tokens: 700, elapsed_ms: 1500 },
+    { time: '10:00:1' + mockTask.finished, schema: item.schema, batch_no: 2, batch_total: 2, tables: 1, status: item.failed ? 'error' : 'ok', message: item.failed ? '模型返回无法解析（mock）' : '', prompt_tokens: 260, completion_tokens: 40, total_tokens: 300, estimated: true, elapsed_ms: 900 }
+  )
+  const nxt = mockTask.schemas[doneCnt + 1]
+  if (nxt) { nxt.state = 'running'; mockTask.current = nxt.schema }
+  if (mockTask.finished >= mockTask.total) {
+    mockTask.state = 'done'
+    mockTask.current = ''
+    const failed = mockTask.schemas.reduce((a, s) => a + s.failed, 0)
+    mockTask.usage = { calls: 1, prompt_tokens: 1820, completion_tokens: 210, total_tokens: 2030, source: 'api', elapsed_ms: 4200 }
+    mockTask.message = '共 ' + mockTask.total + ' 个库：新生成 ' + (mockTask.total * MOCK_CATALOG.length) + ' 张表，命中缓存 0，失败 ' + failed + (failed ? '；存在失败，详情见各库状态' : '')
+  }
+}
+function mockTaskStop() {
+  if (!mockTask || mockTask.state !== 'running') return
+  const cur = mockTask.schemas.find(s => s.state === 'running')
+  if (cur) cur.state = 'stopped'
+  const doneCnt = mockTask.schemas.filter(s => s.state === 'done').length
+  mockTask.state = 'stopped'
+  mockTask.finished = doneCnt
+  mockTask.current = ''
+  mockTask.message = '已停止：完成 ' + doneCnt + '/' + mockTask.total + ' 个库；已完成的部分已保留，未完成的库可再次生成补齐'
+}
+const MOCK_AI_DDL = 'ALTER TABLE `demo`.`users`\n  ADD COLUMN `nickname` varchar(64) NULL COMMENT \'昵称\';'
+// usage 与「调用记录」页的口径一致：token / 耗时展示在面板头部
+const AI_SQL_DATA = () => AI_WRITE
+  ? { sql: MOCK_AI_DDL, tables: ['users'], explain: '给 users 加一个昵称字段', used_catalog: 3, sql_type: 'DDL', statement_count: 1, confirm_level: 'ddl', mode: 'write',
+      usage: { prompt_tokens: 1640, completion_tokens: 96, total_tokens: 1736, source: 'estimated', elapsed_ms: 5120 } }
+  : { sql: MOCK_AI_SQL, tables: ['orders'], explain: '按订单分组统计条数', used_catalog: 3, sql_type: 'DQL', statement_count: 1, confirm_level: 'readonly', mode: 'read',
+      usage: { prompt_tokens: 1820, completion_tokens: 210, total_tokens: 2030, source: 'api', elapsed_ms: 2480 } }
+const MOCK_RESULT = {
+  columns: [
+    { name: 'id', type: 'BIGINT' }, { name: 'username', type: 'VARCHAR' },
+    { name: 'email', type: 'VARCHAR' }, { name: 'balance', type: 'DECIMAL' },
+    { name: 'bio', type: 'TEXT' }, { name: 'created_at', type: 'DATETIME' }
+  ],
+  rows: [
+    [1, 'alice', 'alice@example.com', '1280.50', '喜欢长文本的人。'.repeat(6), '2026-09-01 10:20:30'],
+    [2, 'bob', 'bob@example.com', '0.00', '', '2026-09-02 11:00:00'],
+    [3, 'carol', null, '99.99', 'null 值测试行', '2026-10-08 14:30:00']
+  ],
+  row_count: 3, truncated: false, elapsed_ms: 12,
+  affected_rows: 0, last_insert_id: 0, is_write: false, statement_kind: 'SELECT',
+  sql_type: 'DQL', mode: 'read', statement_count: 1,
+  statements: [{ kind: 'SELECT', type: 'DQL', affected_rows: 0, elapsed_ms: 12 }]
+}
+// EXPLAIN 执行计划结果：can_analyze=true 才给「AI 分析」入口；计划里只有结构元信息（表/索引/行数估算）
+const MOCK_EXPLAIN_SQL = 'EXPLAIN SELECT u.id, u.username FROM demo.users u JOIN demo.orders o ON o.user_id = u.id WHERE u.status = 1 AND DATE(u.created_at) = CURDATE() ORDER BY u.balance DESC LIMIT 10'
+const MOCK_EXPLAIN_RESULT = {
+  columns: [
+    { name: 'id', type: 'BIGINT' }, { name: 'select_type', type: 'VARCHAR' },
+    { name: 'table', type: 'VARCHAR' }, { name: 'type', type: 'VARCHAR' },
+    { name: 'possible_keys', type: 'VARCHAR' }, { name: 'key', type: 'VARCHAR' },
+    { name: 'key_len', type: 'VARCHAR' }, { name: 'ref', type: 'VARCHAR' },
+    { name: 'rows', type: 'BIGINT' }, { name: 'filtered', type: 'DOUBLE' }, { name: 'Extra', type: 'VARCHAR' }
+  ],
+  rows: [
+    [1, 'SIMPLE', 'u', 'ALL', 'idx_status_created', null, null, null, 10240, 10, 'Using where; Using filesort'],
+    [1, 'SIMPLE', 'o', 'ref', 'idx_user_id', 'idx_user_id', '8', 'demo.u.id', 120, 100, 'Using index condition']
+  ],
+  row_count: 2, truncated: false, elapsed_ms: 3,
+  affected_rows: 0, last_insert_id: 0, is_write: false, statement_kind: 'EXPLAIN',
+  sql_type: 'DQL', mode: 'read', statement_count: 1, can_analyze: true,
+  statements: [{ kind: 'EXPLAIN', type: 'DQL', affected_rows: 0, elapsed_ms: 3 }]
+}
+// 分析返回（与后端 MySQLAIExplainResult 同构）：结论 / 观察发现 / 优化建议 / 解读依据 / 用量
+const MOCK_EXPLAIN_ANALYSIS = {
+  summary: '查询对 users 做全表扫描并按 balance 排序，数据量增大后排序开销会非常明显；优化点集中在扫描与 filesort 两处。',
+  findings: [
+    'users（别名 u）type=ALL：全表扫描；possible_keys 已有 idx_status_created 却未命中，条件没吃上索引',
+    'DATE(u.created_at) = CURDATE() 把索引列包进函数：即使 created_at 参与索引也无法走，需要改写为区间比较',
+    'Extra 出现 Using filesort：ORDER BY u.balance 无法借索引完成，需要额外排序',
+    'orders（别名 o）ref 命中 idx_user_id 连接，无全表扫描风险'
+  ],
+  suggestions: [
+    '为 users(status, balance) 建联合索引：过滤走 status、排序走 balance，可同时消掉全表扫描与 filesort',
+    '把 DATE(u.created_at) = CURDATE() 改写为 u.created_at >= CURDATE() AND u.created_at < CURDATE() + INTERVAL 1 DAY，让时间条件吃上索引'
+  ],
+  // 建索引语句（DDL）与优化后语句：代码块展示 + 一键复制，服务端不自动执行
+  index_statements: [
+    'ALTER TABLE `demo`.`users` ADD INDEX `idx_status_balance` (`status`, `balance`);'
+  ],
+  optimized_sql: 'EXPLAIN SELECT u.id, u.username FROM demo.users u JOIN demo.orders o ON o.user_id = u.id WHERE u.status = 1 AND u.created_at >= CURDATE() AND u.created_at < CURDATE() + INTERVAL 1 DAY ORDER BY u.balance DESC LIMIT 10',
+  digest: {
+    row_count: 2, truncated: false,
+    lines: [
+      'id=1 select_type=SIMPLE table=u type=ALL possible_keys=idx_status_created key=NULL rows=10240 Extra=Using where; Using filesort',
+      'id=1 select_type=SIMPLE table=o type=ref key=idx_user_id rows=120 Extra=Using index condition'
+    ],
+    // 相关表结构与统计（后端从 information_schema 取）：字段 / 索引 / 行数大小，随分析上下文送模型
+    tables: [
+      {
+        schema: 'demo', name: 'users', engine: 'InnoDB', rows: 10240, data_length: 358973440, index_length: 296878080,
+        columns: [
+          'id bigint unsigned NOT NULL PRI 主键',
+          'username varchar(64) NOT NULL UNI 用户名',
+          'status tinyint NOT NULL MUL 状态：1 正常 0 停用',
+          'balance decimal(10,2) NOT NULL 余额'
+        ],
+        indexes: [
+          'PRIMARY UNIQUE (id) 基数≈10240',
+          'uk_username UNIQUE (username) 基数≈10240',
+          'idx_status_created (status, created_at) 基数≈9800'
+        ],
+        note: ''
+      },
+      {
+        schema: 'demo', name: 'orders', engine: 'InnoDB', rows: 98321, data_length: 20971520, index_length: 5242880,
+        columns: [
+          'id bigint unsigned NOT NULL PRI 主键',
+          'user_id bigint unsigned NOT NULL MUL 下单用户',
+          'amount decimal(10,2) NOT NULL 金额'
+        ],
+        indexes: [
+          'PRIMARY UNIQUE (id) 基数≈98321',
+          'idx_user_id (user_id) 基数≈70123'
+        ],
+        note: ''
+      }
+    ]
+  },
+  usage: { calls: 1, prompt_tokens: 1830, completion_tokens: 240, total_tokens: 2070, source: 'api', elapsed_ms: 3120 }
+}
+// —— 使用记录：两张表各记各的，互不关联（没有 ai_log_id、没有「是否采用」）——
+window.__deletes = []
+const MOCK_SQL_ROWS = [
+  { id: 12, conn_id: 1, conn_name: '本地演示库', schema: 'demo', sql: 'SELECT `id`, `username` FROM `demo`.`users` LIMIT 200', statement_count: 1, sql_type: 'DQL', statement_kind: 'SELECT', mode: 'read', confirmed: 0, row_count: 3, affected_rows: 0, elapsed_ms: 12, status: 'ok', error: '', created_at: '2026-10-08 16:22:41' },
+  { id: 11, conn_id: 1, conn_name: '本地演示库', schema: 'demo', sql: 'UPDATE `demo`.`users` SET `balance` = 0 WHERE `status` = 0', statement_count: 1, sql_type: 'DML', statement_kind: 'UPDATE', mode: 'write', confirmed: 1, row_count: 0, affected_rows: 2, elapsed_ms: 45, status: 'ok', error: '', created_at: '2026-10-08 16:18:03' },
+  { id: 10, conn_id: 1, conn_name: '本地演示库', schema: 'demo', sql: 'ALTER TABLE `demo`.`users` MODIFY COLUMN `bio` varchar(255)', statement_count: 1, sql_type: 'DDL', statement_kind: 'ALTER', mode: 'write', confirmed: 1, row_count: 0, affected_rows: 0, elapsed_ms: 8, status: 'error', error: 'Error 1064 (42000): You have an error in your SQL syntax', created_at: '2026-10-08 15:57:20' },
+  { id: 9, conn_id: 1, conn_name: '本地演示库', schema: '', sql: 'SET NAMES utf8mb4', statement_count: 1, sql_type: 'SESSION', statement_kind: 'SET', mode: 'read', confirmed: 0, row_count: 0, affected_rows: 0, elapsed_ms: 2, status: 'ok', error: '', created_at: '2026-10-08 15:40:11' },
+  { id: 8, conn_id: 1, conn_name: '本地演示库', schema: '', sql: 'SHOW PROCESSLIST', statement_count: 1, sql_type: 'OTHER', statement_kind: 'SHOW', mode: 'read', confirmed: 0, row_count: 4, affected_rows: 0, elapsed_ms: 1, status: 'ok', error: '', created_at: '2026-10-08 15:39:02' },
+  { id: 7, conn_id: 1, conn_name: '本地演示库', schema: 'demo', sql: 'SELECT COUNT(*) FROM `demo`.`orders`', statement_count: 1, sql_type: 'DQL', statement_kind: 'SELECT', mode: 'read', confirmed: 0, row_count: 0, affected_rows: 0, elapsed_ms: 2001, status: 'error', error: 'dial tcp 127.0.0.1:3307: connect: connection refused', created_at: '2026-10-08 15:12:35' }
+]
+const MOCK_AI_ROWS = [
+  { id: 21, conn_id: 1, conn_name: '本地演示库', schema: 'demo', kind: 'sql', mode: 'read', model: 'deepseek-chat', base_url: 'https://api.deepseek.com/v1', batch_no: 0, batch_total: 0, table_count: 0, question: '按渠道统计订单金额', sql: MOCK_AI_SQL, content: '{"sql":"SELECT COUNT(*) AS today_api_channel_record_count FROM `ysh_app`.`app_channel_api_record` WHERE `create_time` >= CURDATE() AND `create_time` < CURDATE() + INTERVAL 1 DAY AND `is_delete` = 0","tables":["`ysh_app`.`app_channel_api_record`"],"explain":"统计今天（按创建时间）未删除的API渠道采量记录总条数"}', prompt_tokens: 1820, completion_tokens: 210, total_tokens: 2030, token_source: 'api', elapsed_ms: 2480, status: 'ok', error: '', created_at: '2026-10-08 16:30:12' },
+  { id: 20, conn_id: 1, conn_name: '本地演示库', schema: 'demo', kind: 'sql', mode: 'write', model: 'qwen2.5-coder-32b', base_url: 'http://10.0.0.21:8000/v1', batch_no: 0, batch_total: 0, table_count: 0, question: '给 users 加一个昵称字段', sql: MOCK_AI_DDL, content: 'ALTER TABLE 加列', prompt_tokens: 1640, completion_tokens: 96, total_tokens: 1736, token_source: 'estimated', elapsed_ms: 5120, status: 'ok', error: '', created_at: '2026-10-08 16:05:44' },
+  { id: 19, conn_id: 1, conn_name: '本地演示库', schema: 'demo', kind: 'catalog', mode: 'read', model: 'deepseek-chat', base_url: 'https://api.deepseek.com/v1', batch_no: 2, batch_total: 3, table_count: 8, question: '', sql: '', content: 'users：用户主数据\norders：订单主表\nv_user_orders：用户订单视图', prompt_tokens: 5240, completion_tokens: 1180, total_tokens: 6420, token_source: 'estimated', elapsed_ms: 7420, status: 'ok', error: '', created_at: '2026-10-08 15:48:30' },
+  { id: 18, conn_id: 1, conn_name: '本地演示库', schema: 'demo', kind: 'sql', mode: 'read', model: 'deepseek-chat', base_url: 'https://api.deepseek.com/v1', batch_no: 0, batch_total: 0, table_count: 0, question: '统计最近 7 天的活跃用户', sql: '', content: '', prompt_tokens: 0, completion_tokens: 0, total_tokens: 0, token_source: 'estimated', elapsed_ms: 90012, status: 'error', error: 'context deadline exceeded（90s）', created_at: '2026-10-08 14:31:07' },
+  { id: 17, conn_id: 1, conn_name: '本地演示库', schema: 'demo', kind: 'sql', mode: 'read', model: 'deepseek-chat', base_url: 'https://api.deepseek.com/v1', batch_no: 0, batch_total: 0, table_count: 0, question: '查出余额最高的 10 个用户', sql: 'SELECT `id`, `username` FROM `demo`.`users` ORDER BY `balance` DESC LIMIT 10', content: '按余额倒序取前十', prompt_tokens: 1780, completion_tokens: 144, total_tokens: 1924, token_source: 'api', elapsed_ms: 2106, status: 'ok', error: '', created_at: '2026-10-08 14:02:55' }
+]
+// 汇总由明细算出来，保证「筛选前后行数」与「汇总口径」自洽（后端也是 SQL 聚合）
+function mockSQLSummary(rows) {
+  const ok = rows.filter(r => r.status === 'ok').length
+  const sum = k => rows.reduce((a, r) => a + (r[k] || 0), 0)
+  return {
+    runs: rows.length, ok: ok, failed: rows.length - ok,
+    query_runs: rows.filter(r => r.sql_type === 'DQL' || r.sql_type === 'SESSION').length,
+    write_runs: rows.filter(r => ['DML', 'DDL', 'OTHER'].indexOf(r.sql_type) >= 0).length,
+    rows_returned: sum('row_count'), rows_affected: sum('affected_rows'),
+    avg_elapsed_ms: rows.length ? Math.round(sum('elapsed_ms') / rows.length) : 0
+  }
+}
+function mockAISummary(rows) {
+  const ok = rows.filter(r => r.status === 'ok').length
+  const sum = k => rows.reduce((a, r) => a + (r[k] || 0), 0)
+  return {
+    calls: rows.length, ok: ok, failed: rows.length - ok,
+    prompt_tokens: sum('prompt_tokens'), completion_tokens: sum('completion_tokens'), total_tokens: sum('total_tokens'),
+    estimated_calls: rows.filter(r => r.token_source === 'estimated').length,
+    avg_elapsed_ms: rows.length ? Math.round(sum('elapsed_ms') / rows.length) : 0
+  }
+}
+function mockLogPage(rows, params, summary) {
+  let list = rows.slice()
+  if (params.status) list = list.filter(r => r.status === params.status)
+  if (params.sql_type) list = list.filter(r => r.sql_type === params.sql_type)
+  if (params.kind) list = list.filter(r => r.kind === params.kind)
+  return { code: 0, data: { list: list, total: list.length, summary: summary(list), retention_days: RETENTION_DAYS } }
+}
+window.__gets = [] // 记录 GET 的 url/params，用来核对筛选条件是否真的发到后端
+window.api = {
+  get(url, opt) {
+    const params = (opt && opt.params) || {}
+    window.__gets.push({ url: url, params: params })
+    if (url === '/mysql/sql-logs') return Promise.resolve(mockLogPage(MOCK_SQL_ROWS, params, mockSQLSummary))
+    if (url === '/mysql/ai/logs') return Promise.resolve(mockLogPage(MOCK_AI_ROWS, params, mockAISummary))
+    if (url === '/settings/ai') return Promise.resolve({ code: 0, data: { enabled: true, base_url: 'https://api.deepseek.com/v1', model: 'deepseek-chat', has_key: true, timeout: 90 } })
+    if (url.endsWith('/ai/catalog/task')) {
+      // 后台任务查询：每次轮询推进一步（?genstop 的冻结任务除外），模拟服务端在跑
+      mockTaskAdvance()
+      return Promise.resolve({ code: 0, data: { task: mockTaskSnap() } })
+    }
+    if (url.endsWith('/ai/catalog')) {
+      const total = (NO_CAT && !catalogBuilt) ? 0 : MOCK_CATALOG.length
+      if (params.schema) return Promise.resolve({ code: 0, data: { list: total ? MOCK_CATALOG : [], total: total } })
+      return Promise.resolve({ code: 0, data: { list: total ? MOCK_CATALOG : [], total: total, schemas: total ? [{ name: 'demo', total: total }] : [] } })
+    }
+    if (url.endsWith('/mode')) return Promise.resolve({ code: 0, data: { mode: AI_WRITE ? 'write' : 'read', default_mode: 'read' } })
+    if (url.endsWith('/databases')) {
+      // ?genfail / ?genstop / ?genbg / ?gen / ?rebuild 多给一个非系统库：
+      // 两库才能验「部分完成 + 待跑」的重试 / 停止 / 进度，以及「生成·重建默认只勾当前库」
+      const list = NO_DBS ? [] : ((GEN_FAIL || GEN_STOP || GEN_BG || P.has('gen') || P.has('rebuild'))
+        ? ['demo', 'shop', 'information_schema', 'mysql', 'performance_schema']
+        : ['demo', 'information_schema', 'mysql', 'performance_schema'])
+      return Promise.resolve({ code: 0, data: { list: list } })
+    }
+    if (url.includes('/tables')) {
+      const schema = (opt && opt.params && opt.params.schema) || ''
+      return Promise.resolve({ code: 0, data: { list: MOCK_TABLES[schema] || [] } })
+    }
+    if (url.includes('/columns')) {
+      return Promise.resolve({ code: 0, data: { columns: MOCK_DETAIL.columns, indexes: MOCK_DETAIL.indexes } })
+    }
+    if (url.includes('/table')) return Promise.resolve({ code: 0, data: MOCK_DETAIL })
+    return Promise.resolve({ code: 0, data: {} })
+  },
+  post(url, body, cfg) {
+    window.__posts.push({ url: url, body: body || null, timeout: (cfg && cfg.timeout) || 0, explicitTimeout: cfg && ('timeout' in cfg) ? cfg.timeout : null })
+    // 「取消」接口：让挂起的那条 /query 立刻以「已取消执行」返回（对齐后端 resp.Fail 500）
+    if (url.endsWith('/query/cancel')) {
+      window.__cancelCalls++
+      const p = pendingQuery
+      pendingQuery = null
+      if (p) p.cancel()
+      return delay(30, { code: 0, data: { canceled: !!p } })
+    }
+    // 执行计划分析：请求体只有 sql + schema（服务端重跑 EXPLAIN 取计划），绝不含结果数据；
+    // 必须放在 /query 分支之前——否则会被 url.includes('/query') 先截走
+    if (url.endsWith('/query/analyze')) return delay(400, { code: 0, data: MOCK_EXPLAIN_ANALYSIS })
+    // /query 挂 300ms 延时：给「点执行→先清旧记录→再出结果」的中间态留出观测窗口；
+    // ?cancel 场景第一条挂起 6s（模拟慢 SQL），等「取消」开口立刻中断，之后恢复正常
+    if (url.includes('/query')) {
+      window.__queryCalls++
+      if (P.has('cancel') && window.__queryCalls === 1) {
+        return new Promise(resolve => {
+          const timer = setTimeout(() => { pendingQuery = null; resolve({ code: 0, data: MOCK_RESULT }) }, 6000)
+          pendingQuery = { cancel: () => { clearTimeout(timer); resolve({ code: 500, message: '已取消执行' }) } }
+        })
+      }
+      if (P.has('explain')) return delay(300, { code: 0, data: MOCK_EXPLAIN_RESULT })
+      return delay(300, { code: 0, data: MOCK_RESULT })
+    }
+    if (url.endsWith('/ai/catalog/task/stop')) {
+      mockTaskStop()
+      return Promise.resolve({ code: 0, data: { task: mockTaskSnap() } })
+    }
+    if (url.endsWith('/ai/catalog/task')) {
+      const picked = (body && body.schemas) || []
+      // 已有运行中任务：服务端不再另起（真实后端也这样，避免双倍花 token）
+      if (mockTask && mockTask.state === 'running') return Promise.resolve({ code: 0, data: { task: mockTaskSnap(), started: false } })
+      if (!picked.length) return Promise.resolve({ code: 0, data: { task: null, started: false } })
+      catalogBuilt = true
+      mockTaskFailLast = GEN_FAIL && !catRetried
+      if (GEN_FAIL) catRetried = true
+      const hadTask = !!mockTask
+      mockTaskBuild(picked)
+      // ?genstop 的首个任务冻结在 running：等前端点「停止」，不自动完成；补齐任务正常推进
+      mockTask.frozen = GEN_STOP && !hadTask
+      return Promise.resolve({ code: 0, data: { task: mockTaskSnap(), started: true } })
+    }
+    if (url.endsWith('/ai/catalog')) {
+      // 单库同步生成（面板上的「生成 / 重建」仍走同步接口）
+      return Promise.resolve({ code: 0, data: { schema: 'demo', total: 3, generated: 0, cached: 3, stale: 0, failed: 0, batches: 0, message: '共 3 张表：新生成 0，命中缓存 3，结构变化 0，失败 0' } })
+    }
+    if (url.endsWith('/ai/sql')) return Promise.resolve({ code: 0, data: AI_SQL_DATA() })
+    return Promise.resolve({ code: 0, data: {} })
+  },
+  put(url) {
+    if (url.endsWith('/mode')) return Promise.resolve({ code: 0, data: { mode: 'write', default_mode: 'read' } })
+    if (url === '/settings/ai') return Promise.resolve({ code: 0, data: {} })
+    return Promise.resolve({ code: 0, data: {} })
+  },
+  delete(url) {
+    window.__deletes.push(url)
+    if (url === '/mysql/sql-logs') { MOCK_SQL_ROWS.length = 0; return Promise.resolve({ code: 0, data: { deleted: 6 } }) }
+    if (url === '/mysql/ai/logs') { MOCK_AI_ROWS.length = 0; return Promise.resolve({ code: 0, data: { deleted: 5 } }) }
+    return Promise.resolve({ code: 0, data: { deleted: 0 } })
+  }
+}
+
+const { createApp } = Vue
+const { ElMessage, ElMessageBox } = ElementPlus
+const errors = []
+window.addEventListener('error', e => errors.push('JS错误: ' + (e.message || e)))
+
+// ?ailogs 时只挂记录面板，并把宿主宽度固定成弹窗宽度（真实入口是 1000px 的 el-dialog）
+if (LOGS_ONLY) document.body.classList.add('logs-only')
+const app = createApp({
+  template: LOGS_ONLY
+    ? '<div class="logs-shell"><mysql-logs :default-tab="defaultTab" /></div>'
+    : '<mysql-workbench :conn="conn" :ai-version="aiVersion" @exit="() => {}" @open-ai-config="() => {}" />',
+  components: { 'mysql-workbench': window.MySQLWorkbench, 'mysql-logs': window.MySQLLogs },
+  data() {
+    return {
+      defaultTab: LOGS_TAB,
+      aiVersion: 0,
+      conn: {
+        id: 1, name: '本地演示库', host: '127.0.0.1', port: 3306, username: 'root',
+        // ?nodb / ?nodbs 时留空，复现「连接没配默认库」这一真实场景
+        default_schema: NO_DEF ? '' : 'demo',
+        charset: 'utf8mb4', read_only: !AI_WRITE, ssh_host_id: 0, ssh_host_name: ''
+      }
+    }
+  }
+})
+app.use(ElementPlus, { locale: ElementPlusLocaleZhCn })
+for (const [name, comp] of Object.entries(ElementPlusIconsVue)) app.component(name, comp)
+app.config.globalProperties.$message = ElMessage
+app.config.globalProperties.$confirm = (m, t, o) => ElMessageBox.confirm(m, t, o)
+app.component('empty-state', { props: { text: { type: String, default: '暂无数据' } }, template: '<div class="empty-state"><p>{{text}}</p></div>' })
+app.mount('#app')
+
+// ===================== 断言（渲染稳定后采集） =====================
+const q = s => document.querySelector(s)
+const qa = s => Array.from(document.querySelectorAll(s))
+const sleep = ms => new Promise(r => setTimeout(r, ms))
+// 弹框是否处于打开态：headless 虚拟时间下 rAF 停摆，关闭动画会停在 leave 态不推进（真实环境会到 display:none），
+// 所以「已关闭」= overlay 隐藏或已进入 leave 过渡，两者取一即可
+function dlgVisible() {
+  const d = q('.el-dialog'); if (!d) return false
+  const o = d.closest('.el-overlay'); if (!o) return false
+  if (getComputedStyle(o).display === 'none') return false
+  return o.className.indexOf('dialog-fade-leave') < 0
+}
+const out = []
+const push = s => out.push(s)
+const txt = el => (el ? el.textContent.replace(/\s+/g, ' ').trim() : '')
+function tabList() {
+  return qa('.mysql-main > .mysql-tabs .mysql-tab')
+    .map(e => (e.classList.contains('active') ? '[' + e.textContent.trim() + ']' : e.textContent.trim())).join(' ')
+}
+function switchColor() {
+  const sw = q('.mysql-mode-switch')
+  if (!sw) return '(无开关)'
+  const cs = getComputedStyle(sw)
+  return '打开=' + sw.classList.contains('is-checked')
+    + ' 读(关)色=' + cs.getPropertyValue('--el-switch-off-color').trim()
+    + ' 写(开)色=' + cs.getPropertyValue('--el-switch-on-color').trim()
+}
+function lastPost(urlPart) {
+  const hit = window.__posts.filter(p => p.url.includes(urlPart))
+  return hit.length ? hit[hit.length - 1] : null
+}
+// 编辑器追加的期望值（与 mysql_workbench.onUseSQL 同口径）：右端去空白后空行拼接
+function appendSQL(base, add) { base = (base || '').replace(/\s+$/, ''); return base ? base + '\n\n' + add : add }
+async function openAITab() {
+  const t = qa('.mysql-main > .mysql-tabs .mysql-tab').find(b => b.textContent.includes('AI 生成'))
+  if (t) t.click()
+  await sleep(400)
+}
+// 生成范围条：面板的生成范围随读写模式走的唯一可观测出口
+function aiScope() { return txt(q('.mysql-ai-scope')) || '(无)' }
+function cut(s, n) { s = s || ''; return s.length > n ? s.slice(0, n) + '…' : s }
+function ph() { return cut(q('.mysql-ai-input') ? q('.mysql-ai-input').placeholder : '', 34) }
+// 语义生成的二次确认框（所有生成 / 重建 / 重试 / 补齐都走它）：点主按钮放行，返回框内文案。
+// 必须取最后一个「未在关闭」的框：headless 虚拟时间下已确认的框会卡在 leave 态不销毁，
+// 取到旧框就会点了个寂寞——新框的 promise 不落定，请求压根发不出去（?genstop 连续两次确认踩过）
+async function passConfirm() {
+  const live = qa('.el-message-box').filter(b => {
+    const o = b.closest('.el-overlay')
+    return o && getComputedStyle(o).display !== 'none' && !/leave/.test(o.className)
+  })
+  const box = live[live.length - 1] || qa('.el-message-box').pop()
+  if (!box) return '(无确认框)'
+  const info = cut(txt(box), 110)
+  const yes = box.querySelector('.el-message-box__btns .el-button--primary')
+  if (yes) yes.click()
+  await sleep(250)
+  return info
+}
+
+async function collectBase() {
+  push('工作台根节点渲染: ' + !!q('.mysql-workspace'))
+  push('顶栏连接名: ' + (q('.reg-whd-name .title')?.textContent || '(空)'))
+  push('顶栏徽标: ' + (qa('.reg-whd-name .action-badge').map(e => e.textContent).join(' / ') || '(空)'))
+  push('模式开关: ' + switchColor())
+  push('模式提示: ' + (q('.mysql-mode-hint')?.textContent || '(空)'))
+  push('页签: ' + tabList())
+  push('库行数(隐藏系统库后): ' + qa('.mysql-db-row').length
+    + ' | 提示: ' + (q('.mysql-tree-tools-tip')?.textContent.trim() || '(无)'))
+  push('系统库开关勾选: ' + !!q('.mysql-tree-tools input')?.checked)
+  push('表行数: ' + qa('.mysql-tb-row').length + ' | 类型徽标: ' + qa('.mysql-tb-icon').map(e => e.textContent).join(','))
+  // 关键：点表后不得自动填 SQL、不得自动执行
+  push('点表后编辑器内容: ' + JSON.stringify(q('.mysql-editor')?.value ?? '(无编辑器)'))
+  push('/query 调用次数(点表后): ' + window.__queryCalls)
+  // 表详情
+  push('表详情: 名=' + (q('.mysql-detail-name')?.textContent || '(无)')
+    + ' 徽标=' + (qa('.mysql-detail-title .action-badge').map(e => e.textContent).join('/') || '(无)'))
+  push('概览统计条: ' + (qa('.mysql-detail-stats .mysql-stat').map(e => e.textContent.trim().replace(/\s+/g, ' ')).join(' | ') || '(无)'))
+  const tables = qa('.mysql-detail-body .el-table')
+  push('字段行数: ' + (tables[0] ? tables[0].querySelectorAll('.el-table__row').length : -1)
+    + ' | 主键标记: ' + qa('.mysql-key-tag').length
+    + ' | 允许空值标记: ' + qa('.mysql-flag').map(e => e.textContent).join(','))
+  const wb = q('.mysql-workspace')
+  if (wb) push('工作台高度: client=' + wb.clientHeight + ' scroll=' + wb.scrollHeight + ' 未溢出: ' + (wb.scrollHeight <= wb.clientHeight + 1))
+  const body = q('.mysql-body')
+  if (body) push('主体高度: client=' + body.clientHeight + ' scroll=' + body.scrollHeight)
+}
+
+async function collectIndexes() {
+  const t = qa('.mysql-detail .mysql-tab').find(b => b.textContent.includes('索引'))
+  if (!t) { push('未找到「索引」子页签'); return }
+  t.click()
+  await sleep(250)
+  push('索引子页签激活: ' + t.classList.contains('active'))
+  const tables = qa('.mysql-detail-body .el-table')
+  push('索引行数: ' + (tables[0] ? tables[0].querySelectorAll('.el-table__row').length : -1)
+    + ' | 唯一标记: ' + qa('.mysql-detail-body .action-badge').map(e => e.textContent).join(','))
+}
+
+async function collectDDL() {
+  const t = qa('.mysql-detail .mysql-tab').find(b => b.textContent.includes('DDL'))
+  if (t) t.click()
+  await sleep(250)
+  const pre = q('.mysql-ddl pre')
+  push('DDL 取到: ' + !!pre + ' | 首行: ' + (pre ? pre.textContent.split('\n')[0] : '(无)'))
+}
+
+async function collectShowSys() {
+  const cb = q('.mysql-tree-tools input')
+  if (cb) cb.click()
+  await sleep(300)
+  push('取消隐藏后库行数: ' + qa('.mysql-db-row').length
+    + ' | 列表: ' + qa('.mysql-db-name').map(e => e.textContent).join(','))
+}
+
+async function collectQueryData() {
+  const btn = qa('.mysql-detail-head .el-button').find(b => b.textContent.includes('查询数据'))
+  if (!btn) { push('未找到「查询数据」按钮'); return }
+  btn.click()
+  await sleep(600)
+  push('点「查询数据」后编辑器: ' + JSON.stringify(q('.mysql-editor')?.value || ''))
+  push('点「查询数据」后页签: ' + tabList())
+  push('/query 调用次数: ' + window.__queryCalls)
+  push('结果数据行数: ' + qa('.mysql-table tbody tr').length)
+  // 反向断言：非 EXPLAIN 结果没有「AI 分析」入口（can_analyze 未标记，边界在结果条上就不放行）
+  push('普通结果无「AI 分析」入口: ' + (qa('.mysql-grid-bar .el-button').some(b => b.textContent.includes('AI 分析')) ? 'FAIL' : 'PASS'))
+
+  // 执行即切结果页签 + 先清旧记录：切去 AI 页签、改编辑器内容，点「执行」后在 300ms 延时窗口内看中间态
+  const aiTab = qa('.mysql-main > .mysql-tabs .mysql-tab').find(t => t.textContent.includes('AI 生成'))
+  if (aiTab) aiTab.click()
+  await sleep(250)
+  push('切走页签后: ' + tabList())
+  const ed = q('.mysql-editor')
+  if (ed) { ed.value = 'SELECT 1'; ed.dispatchEvent(new Event('input')) }
+  await sleep(50)
+  const runBtn = qa('.mysql-editor-bar .el-button').find(b => b.textContent.includes('执行'))
+  push('「执行」按钮存在: ' + !!runBtn)
+  if (runBtn) runBtn.click()
+  await sleep(80) // 请求还在挂起（mock 300ms）：此时旧记录必须已清、页签必须已切回结果
+  push('执行中页签跳转: ' + tabList())
+  push('执行中旧记录已清: 结果条=' + JSON.stringify(txt(q('.mysql-grid-bar'))) + ' 旧表行数=' + qa('.mysql-table tbody tr').length)
+  push('执行中空态 = ' + JSON.stringify(txt(q('.mysql-grid-empty'))))
+  await sleep(600)
+  push('执行完成: 行数=' + qa('.mysql-table tbody tr').length + ' 结果条=' + JSON.stringify(txt(q('.mysql-grid-bar'))))
+}
+
+// ?cancel：慢 SQL 中断 —— 点执行后请求挂起（6s 慢查询），执行中才出现「取消」按钮；
+// 点了以后后端立即中断、/query 以「已取消执行」返回：轻提示 + 不落红色错误框，随后可继续执行
+async function collectCancel() {
+  push('—— 慢 SQL 取消（?cancel）——')
+  const barBtn = t => qa('.mysql-editor-bar .el-button').find(b => b.textContent.includes(t))
+  const ed = q('.mysql-editor')
+  if (ed) { ed.value = 'SELECT SLEEP(30)'; ed.dispatchEvent(new Event('input')) }
+  await sleep(80)
+  push('取消按钮(执行前): ' + !!barBtn('取消'))
+  const run = barBtn('执行')
+  push('「执行」按钮存在: ' + !!run)
+  window.__posts.length = 0
+  if (run) run.click()
+  await sleep(250)
+  // 请求挂起中：执行按钮转圈、执行请求已出且显式不限时（timeout=0），结果区保持空态
+  push('执行中取消按钮出现: ' + !!barBtn('取消'))
+  push('执行中执行按钮 loading: ' + (run ? run.classList.contains('is-loading') : 'n/a'))
+  const p = lastPost('/query')
+  push('/query 请求: ' + (p ? p.url + ' 显式超时=' + JSON.stringify(p.explicitTimeout) : '(没发出请求)'))
+  push('执行中结果区: 结果条=' + JSON.stringify(txt(q('.mysql-grid-bar'))) + ' 错误框=' + !!q('.mysql-error-box'))
+  const cancel = barBtn('取消')
+  if (cancel) cancel.click()
+  await sleep(400)
+  push('取消请求: /query/cancel ×' + window.__cancelCalls)
+  push('取消后: 取消按钮=' + !!barBtn('取消') + ' 执行 loading=' + (run ? run.classList.contains('is-loading') : 'n/a'))
+  push('取消后结果区: 结果条=' + JSON.stringify(txt(q('.mysql-grid-bar'))) + ' 错误框=' + !!q('.mysql-error-box') + ' 空态=' + JSON.stringify(txt(q('.mysql-grid-empty'))))
+  push('取消 toast: ' + JSON.stringify(qa('.el-message').map(txt).join(' | ')))
+  // 取消后状态彻底复位：再点执行走正常路径（第二条 mock 300ms），结果正常出
+  if (run) run.click()
+  await sleep(600)
+  push('取消后再次执行: 行数=' + qa('.mysql-table tbody tr').length + ' 结果条=' + JSON.stringify(txt(q('.mysql-grid-bar'))))
+  push('/query 调用次数(全程): ' + window.__queryCalls)
+}
+
+// ?explain：只有 EXPLAIN 执行计划的结果给「AI 分析」入口 —— 点分析后请求只带 sql+schema
+// （后端重跑 EXPLAIN 取计划，结果数据绝不上传 AI）；断言 入口/loading/请求体/结论与用量/关闭保留/过期响应丢弃
+async function collectExplain() {
+  push('—— EXPLAIN 结果 AI 分析（?explain）——')
+  const barBtn = t => qa('.mysql-editor-bar .el-button').find(b => b.textContent.includes(t))
+  const anaBtn = () => qa('.mysql-grid-bar .el-button').find(b => b.textContent.includes('AI 分析'))
+  const ed = q('.mysql-editor')
+  if (ed) { ed.value = MOCK_EXPLAIN_SQL; ed.dispatchEvent(new Event('input')) }
+  await sleep(80)
+  const run0 = barBtn('执行')
+  push('「执行」按钮存在: ' + !!run0)
+  window.__posts.length = 0
+  if (run0) run0.click()
+  await sleep(600)
+  push('计划结果: 行数=' + qa('.mysql-table tbody tr').length + ' 结果条=' + JSON.stringify(txt(q('.mysql-grid-bar'))))
+  push('「AI 分析」按钮出现: ' + !!anaBtn() + ' | 面板(点前)=' + !!q('.mysql-explain'))
+  if (!anaBtn()) return
+
+  // 点分析：请求挂起（mock 400ms）时面板要立刻出 loading，按钮转圈
+  anaBtn().click()
+  await sleep(150)
+  push('分析中面板 loading: ' + !!q('.mysql-explain-loading') + ' 按钮 loading=' + anaBtn().classList.contains('is-loading'))
+  await sleep(700)
+  const p = lastPost('/query/analyze')
+  push('分析请求: ' + (p ? p.url + ' 显式超时=' + JSON.stringify(p.explicitTimeout) : '(没发出请求)'))
+  // 协议边界：请求体只有 sql + schema，没有任何结果数据字段（业务数据不上传 AI）
+  push('分析请求体=仅sql+schema: ' + (p ? Object.keys(p.body).sort().join(',') : '(没发出请求)')
+    + ' | sql 前缀=' + (p && p.body.sql ? p.body.sql.slice(0, 7) : '(无)'))
+  push('面板标题: ' + JSON.stringify(txt(q('.mysql-explain-title'))))
+  push('结论: ' + JSON.stringify(cut(txt(q('.mysql-explain-summary')), 60)))
+  const fnd = qa('.mysql-explain-list:not(.is-suggest) li')
+  push('观察发现: ' + fnd.length + ' 条 | 首条=' + JSON.stringify(cut(txt(fnd[0]), 42)))
+  push('优化建议: ' + qa('.mysql-explain-list.is-suggest li').length + ' 条')
+  // 建索引语句 / 优化后语句：代码块 + 一键复制（打桩剪贴板记录写入内容）
+  const copied = []
+  try { Object.defineProperty(navigator, 'clipboard', { value: { writeText: s => { copied.push(String(s)); return Promise.resolve() } }, configurable: true }) } catch (e) {}
+  push('代码块: 块数=' + qa('.mysql-explain-code').length + ' 复制按钮=' + qa('.mysql-explain-code .mysql-explain-copy').length)
+  push('建索引语句: ' + JSON.stringify(cut(txt(qa('.mysql-explain-code pre')[0]), 76)))
+  push('优化后语句: ' + JSON.stringify(cut(txt(qa('.mysql-explain-code pre')[1]), 76)))
+  const gEl = q('.mysql-grid'); const pEl = q('.mysql-explain')
+  push('面板在结果表格下方: ' + (gEl && pEl ? gEl.getBoundingClientRect().bottom <= pEl.getBoundingClientRect().top + 1 : 'n/a')
+    + ' | 面板无内部滚动(自适应全展示): ' + (pEl ? pEl.scrollHeight - pEl.clientHeight <= 1 : 'n/a'))
+  const cpBtns = qa('.mysql-explain-code .mysql-explain-copy')
+  cpBtns.forEach(b => b.click())
+  await sleep(150)
+  push('一键复制: 写入=' + copied.length + ' 条 | 首条前缀=' + JSON.stringify((copied[0] || '').slice(0, 18)))
+  const digest = q('.mysql-explain-digest-body')
+  push('依据默认收起: ' + (digest ? getComputedStyle(digest).display === 'none' : 'n/a') + ' | 开关=' + JSON.stringify(txt(q('.mysql-explain-toggle'))))
+  const tg = q('.mysql-explain-toggle')
+  if (tg) tg.click()
+  await sleep(150)
+  push('展开后依据: 计划=' + qa('.mysql-explain-line:not(.is-ts):not(.is-col):not(.is-idx):not(.is-note)').length
+    + ' 行 | 表块=' + qa('.mysql-explain-line.is-ts').length
+    + ' 列=' + qa('.mysql-explain-line.is-col').length + ' 索引=' + qa('.mysql-explain-line.is-idx').length)
+  push('表结构首行: ' + JSON.stringify(cut(txt(qa('.mysql-explain-line.is-ts')[0]), 84)))
+  push('用量行: ' + JSON.stringify(txt(q('.mysql-explain-usage'))))
+
+  // 关闭：结果与入口原样保留
+  const close = qa('.mysql-explain-head .el-button').find(b => b.textContent.includes('关闭'))
+  if (close) close.click()
+  await sleep(150)
+  push('关闭后: 面板=' + !!q('.mysql-explain') + ' 入口仍在=' + !!anaBtn() + ' 结果行数=' + qa('.mysql-table tbody tr').length)
+
+  // 分析中途重跑同一句 SQL：旧面板当场清掉，挂起中的过期分析响应回来也不得复活（批号校验）
+  anaBtn().click()
+  await sleep(150)
+  const run1 = barBtn('执行')
+  if (run1) run1.click()
+  await sleep(150)
+  push('重跑时旧面板已清: 面板=' + !!q('.mysql-explain') + ' 结果已清=' + (qa('.mysql-table tbody tr').length === 0))
+  await sleep(700)
+  push('过期响应未复活面板: ' + (!q('.mysql-explain')) + ' | 新结果=' + qa('.mysql-table tbody tr').length + ' 行 入口=' + !!anaBtn())
+  push('/query 调用次数(全程): ' + window.__queryCalls)
+}
+
+// ?nodb：连接没配默认库 —— 面板必须自己挑一个非系统库，点「生成」开单库确认弹框（目标=自动挑的库）
+// → 二次确认 → 转后台任务真实发出请求
+async function collectAutoPick() {
+  push('—— 连接未配默认库（?nodb）——')
+  push('目标库下拉存在: ' + !!q('.mysql-ai-dbsel'))
+  push('目标库自动选中: ' + JSON.stringify(txt(q('.mysql-ai-dbsel'))))
+  push('工作台当前库已同步: ' + JSON.stringify(txt(q('.mysql-cur-db'))))
+  push('AI 面板提示: ' + JSON.stringify(txt(q('.mysql-ai-catalog-msg'))))
+  const gen = qa('.mysql-ai-catalog .el-button').find(b => b.textContent.trim() === '生成')
+  push('「生成」按钮存在: ' + !!gen + ' 置灰: ' + (gen ? gen.classList.contains('is-disabled') : 'n/a'))
+  if (!gen) return
+  gen.click()
+  await sleep(400)
+  push('生成弹框: ' + dlgVisible() + ' | 标题: ' + JSON.stringify(txt(q('.el-dialog__title'))))
+  push('单库确认视图: ' + !!q('.mysql-ai-gen-cur') + ' 目标库=' + JSON.stringify(txt(q('.mysql-ai-gen-cur-name')))
+    + ' | 勾选框数=' + qa('.mysql-ai-gen-db .el-checkbox').length)
+  window.__posts.length = 0
+  const ok = qa('.el-dialog__footer .el-button').find(b => b.textContent.includes('开始生成'))
+  if (ok) ok.click()
+  await sleep(300)
+  push('二次确认: ' + JSON.stringify(await passConfirm()))
+  const p = lastPost('/ai/catalog/task')
+  push('生成请求: ' + (p ? p.url + ' body=' + JSON.stringify(p.body) : '(没发出请求)'))
+  await sleep(1800)
+  push('生成后目录状态: ' + JSON.stringify(txt(q('.mysql-ai-catalog b'))))
+  push('生成后提示: ' + JSON.stringify(txt(q('.mysql-ai-catalog-msg'))))
+}
+
+// ?nodbs：一个库都没有 —— 按钮置灰 + 文案说明原因（而不是点了没反应）
+async function collectNoDbs() {
+  push('—— 后端没有任何库（?nodbs）——')
+  push('目标库下拉存在: ' + !!q('.mysql-ai-dbsel'))
+  push('目标库选中值: ' + JSON.stringify(txt(q('.mysql-ai-dbsel'))))
+  const gen = qa('.mysql-ai-catalog .el-button').find(b => b.textContent.trim() === '生成')
+  push('「生成」按钮存在: ' + !!gen + ' 置灰: ' + (gen ? gen.classList.contains('is-disabled') : 'n/a'))
+  push('面板提示: ' + JSON.stringify(txt(q('.mysql-ai-catalog-msg'))))
+}
+
+async function collectAI() {
+  await openAITab()
+  push('AI 页签: ' + tabList())
+  push('生成范围条: ' + aiScope())
+  push('输入框占位: ' + ph())
+  push('AI 目标库: ' + JSON.stringify(txt(q('.mysql-ai-dbsel'))))
+  push('AI 目录状态: ' + JSON.stringify(txt(q('.mysql-ai-catalog'))))
+  push('AI 未启用引导: ' + !!q('.mysql-ai-blank'))
+  const gen = qa('.mysql-ai-actions .el-button').find(b => b.textContent.includes('生成 SQL'))
+  push('生成 SQL 按钮存在: ' + !!gen + ' 初始禁用: ' + (gen ? gen.classList.contains('is-disabled') : 'n/a'))
+  const ta = q('.mysql-ai-input')
+  if (ta) { ta.value = '按渠道统计订单金额'; ta.dispatchEvent(new Event('input')) }
+  await sleep(200)
+  const beforeEd = q('.mysql-editor')?.value || ''
+  const expectSQL = AI_SQL_DATA().sql
+  const gen2 = qa('.mysql-ai-actions .el-button').find(b => b.textContent.includes('生成 SQL'))
+  if (gen2) gen2.click()
+  await sleep(500)
+  const p = lastPost('/ai/sql')
+  push('生成 SQL 请求: ' + (p ? p.url + ' body=' + JSON.stringify(p.body) + ' timeout=' + p.timeout : '(没发出请求)'))
+  // 生成结果不再重复展示（SQL 已自动追加进编辑器）：只留头部用量行（token / 参考表 / 耗时）与涉及表徽标
+  push('生成结果块已移除: ' + (q('.mysql-ai-result, .mysql-ai-sql, .mysql-ai-explain') ? 'NO' : 'YES'))
+  push('头部用量行: ' + JSON.stringify(txt(q('.mysql-ai-head .mysql-ai-usage'))))
+  push('涉及表徽标: ' + (qa('.mysql-ai-tables .action-badge').map(e => e.textContent).join(',') || '(无)'))
+  push('写语句告警: ' + JSON.stringify(txt(q('.mysql-ai-warn'))))
+  push('/query 调用次数(生成后): ' + window.__queryCalls)
+  // 生成即自动追加：编辑器 = 生成前内容 + 空行 + 生成结果（分号收尾）；自动追加不切页签，留在 AI 看结果
+  const autoEd = q('.mysql-editor')?.value || ''
+  push('自动追加后编辑器=期望: ' + (autoEd === appendSQL(beforeEd, expectSQL) ? 'PASS' : 'FAIL') + ' | 分号收尾=' + (autoEd.endsWith(';') ? 'PASS' : 'FAIL'))
+  push('自动追加后页签仍在 AI: ' + tabList())
+  if (P.has('stay')) return // ?stay：停在 AI 面板上，便于截图
+}
+
+// ?aiwrite：可写模式 —— 面板要说清「现在能给写语句」，结果要标出结构变更，生成同样自动追加
+async function collectAIWrite() {
+  push('—— 可写模式（?aiwrite）——')
+  await openAITab()
+  push('模式开关: ' + switchColor())
+  push('模式提示: ' + (q('.mysql-mode-hint')?.textContent || '(空)'))
+  push('生成范围条: ' + aiScope())
+  push('输入框占位: ' + ph())
+  const ta = q('.mysql-ai-input')
+  if (ta) { ta.value = '给 users 加一个昵称字段'; ta.dispatchEvent(new Event('input')) }
+  await sleep(200)
+  const beforeEd = q('.mysql-editor')?.value || ''
+  const expectSQL = AI_SQL_DATA().sql
+  const gen = qa('.mysql-ai-actions .el-button').find(b => b.textContent.includes('生成 SQL'))
+  if (gen) gen.click()
+  await sleep(500)
+  const p = lastPost('/ai/sql')
+  push('生成 SQL 请求: ' + (p ? p.url + ' body=' + JSON.stringify(p.body) : '(没发出请求)'))
+  // 写语句同样不再展示生成结果：头部行给用量，黄条给风险提示，涉及表徽标保留
+  push('生成结果块已移除: ' + (q('.mysql-ai-result, .mysql-ai-sql, .mysql-ai-explain') ? 'NO' : 'YES'))
+  push('头部用量行: ' + JSON.stringify(txt(q('.mysql-ai-head .mysql-ai-usage'))))
+  push('涉及表徽标: ' + (qa('.mysql-ai-tables .action-badge').map(e => e.textContent).join(',') || '(无)'))
+  push('写语句告警: ' + JSON.stringify(txt(q('.mysql-ai-warn'))))
+  const autoEd = q('.mysql-editor')?.value || ''
+  push('自动追加后编辑器=期望: ' + (autoEd === appendSQL(beforeEd, expectSQL) ? 'PASS' : 'FAIL') + ' | 分号收尾=' + (autoEd.endsWith(';') ? 'PASS' : 'FAIL'))
+  push('自动追加后页签仍在 AI: ' + tabList())
+  push('/query 调用次数(生成后): ' + window.__queryCalls)
+  if (P.has('stay')) return
+}
+
+// ?aiswitch：AI 面板的生成范围必须跟着模式开关实时变（mode prop 透传是否真的通）
+async function collectAIModeSwitch() {
+  await openAITab()
+  push('切换前生成范围条: ' + aiScope())
+  push('切换前输入框占位: ' + ph())
+  const sw = q('.mysql-mode-switch')
+  if (!sw) { push('未找到模式开关'); return }
+  sw.click()
+  await sleep(500)
+  push('切换后模式提示: ' + (q('.mysql-mode-hint')?.textContent || '(空)'))
+  push('切换后生成范围条: ' + aiScope())
+  push('切换后输入框占位: ' + ph())
+}
+
+async function collectSwitch() {
+  const sw = q('.mysql-mode-switch')
+  if (!sw) { push('未找到模式开关'); return }
+  sw.click()
+  await sleep(350)
+  push('切换后模式开关: ' + switchColor())
+  push('切换后模式提示: ' + (q('.mysql-mode-hint')?.textContent || '(空)'))
+}
+
+// ===================== 使用记录面板（?ailogs） =====================
+const logTabs = () => qa('.mysql-logs-tab').map(e => (e.classList.contains('active') ? '[' + e.textContent.trim() + ']' : e.textContent.trim())).join(' ')
+const logSum = () => qa('.mysql-logs-sum .mysql-logs-stat').map(txt).join(' | ') || '(无汇总条)'
+const logRows = () => qa('.mysql-logs-table .el-table__row').length
+const logHeads = () => qa('.mysql-logs-table thead th').map(txt).filter(Boolean).join(',')
+
+// el-select 的下拉是 teleport 到 body 的，必须点开后再按文本挑选项
+async function pickSelect(index, optionText) {
+  const sels = qa('.mysql-logs-tabs .el-select')
+  if (!sels[index]) { push('未找到第 ' + index + ' 个筛选器'); return false }
+  sels[index].click()
+  await sleep(350)
+  const hit = qa('.el-select-dropdown__item').find(e => txt(e) === optionText)
+  if (!hit) { push('筛选项「' + optionText + '」未出现'); return false }
+  hit.click()
+  await sleep(500)
+  return true
+}
+
+async function collectLogs() {
+  push('—— 使用记录面板（?ailogs）——')
+  // 先记「打开时落在哪个页签」，再确保停在 SQL 页签上采集（?tab=ai 只影响初始落点）
+  const initial = q('.mysql-logs-tab.active')?.textContent.trim() || '(无)'
+  push('页签: ' + logTabs() + ' | 打开时落在: ' + initial)
+  if (initial.indexOf('AI') >= 0) {
+    const s = qa('.mysql-logs-tab').find(e => e.textContent.includes('SQL'))
+    if (s) { s.click(); await sleep(500) }
+  }
+  push('SQL 汇总条: ' + logSum())
+  push('保留期提示: ' + JSON.stringify(txt(q('.mysql-logs-tip'))))
+  push('SQL 记录行数: ' + logRows())
+  const sqlHeads = logHeads()
+  push('SQL 表头: ' + sqlHeads)
+  // 交付口径：两张表互不关联 —— SQL 表不得出现「来源/AI/采用」列
+  push('SQL 表头出现关联列（来源/AI/采用）: ' + /来源|AI|采用/.test(sqlHeads))
+  push('SQL 首行: ' + JSON.stringify(cut(txt(q('.mysql-logs-table .el-table__row')), 110)))
+  const exp = q('.mysql-logs-table .el-table__expand-icon')
+  if (exp) { exp.click(); await sleep(350) }
+  push('展开详情: ' + JSON.stringify(cut(txt(q('.mysql-logs-detail')), 150)))
+  push('展开详情 meta: ' + JSON.stringify(cut(txt(q('.mysql-logs-detail-meta')), 130)))
+  push('展开的错误原文: ' + (q('.mysql-ai-error') ? '有' : '无'))
+  const ddlPre = q('.mysql-logs-detail .mysql-ddl')
+  push('语句块自动换行: ' + (ddlPre ? getComputedStyle(ddlPre).whiteSpace : '(无)'))
+
+  // 筛选：状态=失败 —— 必须真的把 status 参数发给后端，且行数跟着变
+  window.__gets.length = 0
+  const picked = await pickSelect(1, '失败')
+  if (picked) {
+    const g = window.__gets.filter(x => x.url === '/mysql/sql-logs').pop()
+    push('筛选后 SQL 行数: ' + logRows() + ' | 请求参数: ' + JSON.stringify(g ? g.params : '(没发出请求)'))
+    push('筛选后汇总条: ' + logSum())
+  }
+}
+async function collectLogsAI() {
+  const t = qa('.mysql-logs-tab').find(e => e.textContent.includes('AI'))
+  if (!t) { push('未找到 AI 页签'); return }
+  t.click()
+  await sleep(500)
+  push('切到 AI 后页签: ' + logTabs())
+  push('AI 汇总条: ' + logSum())
+  push('AI 估算提醒条: ' + JSON.stringify(txt(q('.mysql-logs-warn'))))
+  push('AI 记录行数: ' + logRows())
+  const aiHeads = logHeads()
+  push('AI 表头: ' + aiHeads)
+  // 交付口径：AI 记录不含「是否被采用 / 已执行」这一维度
+  push('AI 表头出现关联列（采用/已执行/来源）: ' + /采用|已执行|关联/.test(aiHeads))
+  push('token 单元格: ' + (txt(q('.mysql-logs-token')) || '(无)'))
+  push('估算徽标数: ' + qa('.mysql-logs-est').length)
+  const exp = q('.mysql-logs-table .el-table__expand-icon')
+  if (exp) { exp.click(); await sleep(350) }
+  push('AI 展开详情: ' + JSON.stringify(cut(txt(q('.mysql-logs-detail')), 150)))
+  const rawPre = q('.mysql-logs-ddl')
+  push('返回原文自动换行: ' + (rawPre ? getComputedStyle(rawPre).whiteSpace : '(无)')
+    + ' | 无横向溢出: ' + (rawPre ? (rawPre.scrollWidth <= rawPre.clientWidth + 1) : '(无)'))
+  // 筛选：调用类型=语义目录
+  window.__gets.length = 0
+  const picked = await pickSelect(1, '语义目录')
+  if (picked) {
+    const g = window.__gets.filter(x => x.url === '/mysql/ai/logs').pop()
+    push('筛选后 AI 行数: ' + logRows() + ' | 请求参数: ' + JSON.stringify(g ? g.params : '(没发出请求)'))
+    push('筛选后汇总条: ' + logSum())
+  }
+}
+// 清空：确认框放行后必须真的发 DELETE，且列表随之清空
+async function collectLogsClear() {
+  const before = logRows()
+  const btn = qa('.mysql-logs-tabs .el-button').find(b => b.textContent.includes('清空'))
+  push('清空按钮存在: ' + !!btn + ' 置灰: ' + (btn ? btn.classList.contains('is-disabled') : 'n/a'))
+  if (!btn) return
+  btn.click()
+  await sleep(400)
+  const box = q('.el-message-box')
+  push('确认框出现: ' + !!box + ' | ' + JSON.stringify(cut(txt(box), 60)))
+  const ok = box ? q('.el-message-box__btns .el-button--primary') : null
+  if (ok) ok.click()
+  await sleep(700)
+  push('DELETE 请求: ' + JSON.stringify(window.__deletes))
+  push('清空后行数: ' + logRows() + '（前 ' + before + '）| 空态文案: ' + JSON.stringify(txt(q('.mysql-logs-table .el-table__empty-text'))))
+}
+
+// ?gen：验证「生成」入口 —— 单库确认弹框（仅当前库、无勾选框，弹框 50% 宽 / 60% 高）→
+// 二次确认 → 后台任务（force=false，请求只带当前库）
+async function collectGenRequest() {
+  push('—— 生成入口（?gen）——')
+  await openAITab()
+  const gen = qa('.mysql-ai-catalog .el-button').find(b => b.textContent.trim() === '生成')
+  push('「生成」按钮存在: ' + !!gen)
+  if (!gen) return
+  gen.click()
+  await sleep(400)
+  const dlg = q('.el-dialog')
+  push('弹框打开: ' + !!dlg + ' | 标题: ' + JSON.stringify(txt(dlg && dlg.querySelector('.el-dialog__title'))))
+  const rect = dlg.getBoundingClientRect()
+  // 纵向留白读计算的 top 而不是 rect.top：headless 虚拟时间下进场动画（-20px）会卡住，rect 会偏小
+  const cssTop = parseFloat(getComputedStyle(dlg).top) || 0
+  push('弹框尺寸: ' + Math.round(rect.width) + '×' + Math.round(rect.height) + ' = 视口 ' + Math.round(rect.width / window.innerWidth * 100)
+    + '% 宽 / ' + Math.round(rect.height / window.innerHeight * 100) + '% 高，上留 ' + Math.round(cssTop / window.innerHeight * 100) + '%')
+  push('单库确认视图: ' + !!q('.mysql-ai-gen-cur') + ' 目标库=' + JSON.stringify(txt(q('.mysql-ai-gen-cur-name')))
+    + ' | 勾选框数=' + qa('.mysql-ai-gen-db .el-checkbox').length)
+  window.__posts.length = 0
+  const ok = qa('.el-dialog__footer .el-button').find(b => b.textContent.includes('开始生成'))
+  if (ok) ok.click()
+  await sleep(300)
+  push('二次确认: ' + JSON.stringify(await passConfirm()))
+  const p = lastPost('/ai/catalog/task')
+  push('生成请求: ' + (p ? p.url + ' body=' + JSON.stringify(p.body) : '(没发出请求)'))
+  push('生成请求只带当前库: ' + (p && p.body ? JSON.stringify(p.body.schemas) + ' force=' + p.body.force : '(无)'))
+  await sleep(1800)
+  push('完成后弹框关闭: ' + !dlgVisible())
+  push('生成后提示: ' + JSON.stringify(txt(q('.mysql-ai-catalog-msg'))))
+}
+
+// ?rebuild：验证「重建」入口 —— 单库确认弹框（仅当前库）→ 标题/提示强调强制重算 → 二次确认 →
+// 请求任务带 force=true 且只带当前库
+async function collectGenRebuild() {
+  push('—— 重建入口（?rebuild）——')
+  const rebuild = qa('.mysql-ai-catalog .el-button').find(b => b.textContent.trim() === '重建')
+  push('「重建」按钮存在: ' + !!rebuild)
+  if (!rebuild) return
+  rebuild.click()
+  await sleep(400)
+  const dlg = q('.el-dialog')
+  push('弹框打开: ' + !!dlg + ' | 标题: ' + JSON.stringify(txt(dlg && dlg.querySelector('.el-dialog__title'))))
+  push('重建提示: ' + JSON.stringify(cut(txt(q('.mysql-ai-gen-tip')), 110)))
+  push('单库确认视图: ' + !!q('.mysql-ai-gen-cur') + ' 目标库=' + JSON.stringify(txt(q('.mysql-ai-gen-cur-name')))
+    + ' | 勾选框数=' + qa('.mysql-ai-gen-db .el-checkbox').length)
+  window.__posts.length = 0
+  const ok = qa('.el-dialog__footer .el-button').find(b => b.textContent.includes('开始重建'))
+  push('开始按钮: ' + (ok ? JSON.stringify(txt(ok)) : '(无)'))
+  if (ok) ok.click()
+  await sleep(300)
+  push('二次确认: ' + JSON.stringify(await passConfirm()))
+  const p = lastPost('/ai/catalog/task')
+  push('重建请求: ' + (p ? p.url + ' body=' + JSON.stringify(p.body) : '(没发出请求)'))
+  push('重建请求只带当前库: ' + (p && p.body ? JSON.stringify(p.body.schemas) + ' force=' + p.body.force : '(无)'))
+  await sleep(1800)
+  push('完成后弹框关闭: ' + !dlgVisible())
+  push('完成后提示: ' + JSON.stringify(txt(q('.mysql-ai-catalog-msg'))))
+}
+
+// ?nocat：连接没有缓存目录 —— 切到 AI 生成要提示「当前没有缓存语义目录」+ 立即生成，
+// 点开弹框自定义勾选库（系统库被过滤），确认后转为后台任务、跑完弹框自动关闭
+async function collectNoCatalog() {
+  push('—— 无缓存目录（?nocat）——')
+  push('无目录提示: ' + JSON.stringify(txt(q('.mysql-ai-nocatalog'))))
+  push('目录状态文案: ' + JSON.stringify(txt(q('.mysql-ai-catalog b'))))
+  const btn = qa('.mysql-ai-nocatalog .el-button').find(b => b.textContent.includes('立即生成'))
+  push('立即生成按钮存在: ' + !!btn)
+  if (!btn) return
+  btn.click()
+  await sleep(400)
+  const dlg = q('.el-dialog')
+  push('弹框出现: ' + !!dlg + ' | 标题: ' + JSON.stringify(txt(dlg && dlg.querySelector('.el-dialog__title'))))
+  const dbs = qa('.mysql-ai-gen-db')
+  push('勾选库: ' + (dbs.map(e => txt(e)).join(' | ') || '(无)'))
+  push('系统库被过滤: ' + !dbs.some(e => /information_schema|performance_schema/.test(txt(e))))
+  push('已选计数: ' + JSON.stringify(txt(q('.mysql-ai-gen-count'))))
+  // 取消勾选全部 → 确认按钮置灰；再全选回来 → 点开始生成（转为服务端后台任务）
+  const cb = dbs[0] && dbs[0].querySelector('.el-checkbox')
+  if (cb) { cb.click(); await sleep(300) }
+  const off = qa('.el-dialog__footer .el-button').find(b => b.textContent.includes('开始生成'))
+  push('清空后确认置灰: ' + (off ? off.classList.contains('is-disabled') : 'n/a'))
+  if (cb) { cb.click(); await sleep(300) }
+  window.__posts.length = 0
+  const ok = qa('.el-dialog__footer .el-button').find(b => b.textContent.includes('开始生成'))
+  if (ok) ok.click()
+  await sleep(300)
+  push('批量生成二次确认: ' + JSON.stringify(await passConfirm()))
+  const p = lastPost('/ai/catalog/task')
+  push('批量生成请求: ' + (p ? p.url + ' body=' + JSON.stringify(p.body) + ' timeout=' + p.timeout : '(没发出请求)'))
+  push('启动后弹框保留(进度视图): ' + dlgVisible() + ' 进度=' + !!q('.mysql-ai-gen-progress'))
+  await sleep(1600)
+  push('生成后弹框关闭: ' + !dlgVisible())
+  push('生成后提示: ' + JSON.stringify(txt(q('.mysql-ai-catalog-msg'))))
+  push('生成后目录状态: ' + JSON.stringify(txt(q('.mysql-ai-catalog b'))))
+}
+
+// ?genfail：后台任务有库失败 —— 任务跑完弹框自动切「失败重试」视图（只勾失败库），
+// 再点一次只把失败库提交成新任务（失败批次的表没落库，重试只补失败部分）
+async function collectGenRetry() {
+  push('—— 批量生成失败重试（?genfail）——')
+  const footer = () => qa('.el-dialog__footer .el-button')
+  const open = qa('.mysql-ai-catalog .el-button').find(b => b.textContent.trim() === '批量生成')
+  push('批量生成按钮存在: ' + !!open)
+  if (!open) return
+  open.click()
+  await sleep(400)
+  push('弹框打开: ' + dlgVisible())
+  push('默认勾选库: ' + (qa('.mysql-ai-gen-db').map(e => txt(e)).join(' | ') || '(无)'))
+  window.__posts.length = 0
+  const ok1 = footer().find(b => b.textContent.includes('开始生成'))
+  push('首次按钮: ' + (ok1 ? JSON.stringify(txt(ok1)) : '(无)'))
+  if (ok1) ok1.click()
+  await sleep(300)
+  push('首次二次确认: ' + JSON.stringify(await passConfirm()))
+  const p1 = lastPost('/ai/catalog/task')
+  push('启动请求: ' + (p1 ? p1.url + ' body=' + JSON.stringify(p1.body) : '(没发出请求)'))
+  push('运行中布局: footer=[' + footer().map(txt).join(' / ') + '] 进度视图=' + !!q('.mysql-ai-gen-progress')
+    + ' | 面板进度行=' + !!q('.mysql-ai-task'))
+  await sleep(1600)
+  push('一拍后进度: ' + JSON.stringify(txt(q('.mysql-ai-gen-progress-top')))
+    + ' | 每库: ' + qa('.mysql-ai-gen-state').map(txt).join(' / '))
+  push('一拍后生成记录: ' + qa('.mysql-ai-gen-record').length + ' 条 | 失败条=' + qa('.mysql-ai-gen-record.is-bad').length)
+  await sleep(1600)
+  // 第二拍：shop 完成但带 2 条失败 → 任务 done，轮询收尾切「失败重试」视图
+  push('失败后弹框保留: ' + dlgVisible())
+  push('失败提示条: ' + JSON.stringify(cut(txt(q('.mysql-ai-gen-failed')), 80)))
+  push('失败后自动勾选: ' + (qa('.mysql-ai-gen-db .el-checkbox.is-checked').map(txt).join(',') || '(无)'))
+  push('失败后生成记录: ' + qa('.mysql-ai-gen-record').length + ' 条 | 记录头: ' + JSON.stringify(txt(q('.mysql-ai-gen-records-head')))
+    + ' | 失败记录: ' + qa('.mysql-ai-gen-record.is-bad').length + ' 条 | 首行: ' + JSON.stringify(txt(qa('.mysql-ai-gen-record')[0])))
+  push('失败记录行: ' + JSON.stringify(qa('.mysql-ai-gen-record.is-bad').map(txt).join(' / ')))
+  push('已选计数: ' + JSON.stringify(txt(q('.mysql-ai-gen-count'))))
+  const retry = footer().find(b => b.textContent.includes('重试'))
+  push('重试按钮: ' + (retry ? JSON.stringify(txt(retry)) : '(无)'))
+  push('失败后面板提示行: ' + JSON.stringify(cut(txt(q('.mysql-ai-task')), 80)))
+  window.__posts.length = 0
+  if (retry) retry.click()
+  await sleep(300)
+  push('重试二次确认: ' + JSON.stringify(await passConfirm()))
+  const p2 = lastPost('/ai/catalog/task')
+  push('重试请求体: ' + (p2 ? p2.url + ' ' + JSON.stringify(p2.body) : '(没发出请求)'))
+  await sleep(1600)
+  push('重试后弹框关闭: ' + !dlgVisible())
+  push('重试后提示: ' + JSON.stringify(txt(q('.mysql-ai-catalog-msg'))))
+}
+
+// ?genstop：任务运行中点「停止生成」—— 服务端取消当前库，快照转 stopped，
+// 弹框留存给停止提示与补齐勾选，再点「开始生成」即提交新任务补齐
+async function collectGenStop() {
+  push('—— 生成中途停止（?genstop）——')
+  const footer = () => qa('.el-dialog__footer .el-button')
+  const open = qa('.mysql-ai-catalog .el-button').find(b => b.textContent.trim() === '批量生成')
+  push('批量生成按钮存在: ' + !!open)
+  if (!open) return
+  open.click()
+  await sleep(400)
+  push('弹框打开: ' + dlgVisible())
+  const before = footer().find(b => b.textContent.trim() === '取消')
+  push('运行前左按钮: ' + (before ? JSON.stringify(txt(before)) : '(无)'))
+  window.__posts.length = 0
+  const start = footer().find(b => b.textContent.includes('开始生成'))
+  if (start) start.click()
+  await sleep(300)
+  push('启动二次确认: ' + JSON.stringify(await passConfirm()))
+  const p1 = lastPost('/ai/catalog/task')
+  push('启动请求: ' + (p1 ? p1.url + ' body=' + JSON.stringify(p1.body) : '(没发出请求)'))
+  push('运行中布局: footer=[' + footer().map(txt).join(' / ') + '] 进度视图=' + !!q('.mysql-ai-gen-progress')
+    + ' 当前库行: ' + qa('.mysql-ai-gen-state').map(txt).join(' / ') + ' 生成记录块=' + !!q('.mysql-ai-gen-records'))
+  push('面板进度行: ' + JSON.stringify(cut(txt(q('.mysql-ai-task')), 60)))
+  push('停止前弹框保留: ' + dlgVisible())
+  const stop = footer().find(b => b.textContent.includes('停止'))
+  if (stop) stop.click()
+  await sleep(500)
+  push('停止请求: ' + JSON.stringify(window.__posts.filter(p => p.url.includes('/task/stop')).map(p => p.url)))
+  push('停止后 footer: ' + JSON.stringify(footer().map(txt).join(' / ')))
+  push('停止后弹框保留: ' + dlgVisible())
+  push('停止提示条: ' + JSON.stringify(cut(txt(q('.mysql-ai-gen-stopped')), 80)))
+  push('停止后自动勾选: ' + (qa('.mysql-ai-gen-db .el-checkbox.is-checked').map(txt).join(',') || '(无)'))
+  push('停止后生成记录: ' + qa('.mysql-ai-gen-record').length + ' 条（冻结任务没推进，应为 0）')
+  push('停止 toast: ' + JSON.stringify(qa('.el-message').map(txt).join(' | ')))
+  push('停止后面板提示行: ' + JSON.stringify(cut(txt(q('.mysql-ai-task')), 70)))
+  // 再点一次「开始生成」补齐：这次任务正常推进到全完成，弹框自动关闭
+  window.__posts.length = 0
+  const again = footer().find(b => b.textContent.includes('开始生成'))
+  push('可再次开始: ' + (again ? JSON.stringify(txt(again)) : '(无)'))
+  if (again) again.click()
+  await sleep(300)
+  push('补齐二次确认: ' + JSON.stringify(await passConfirm()))
+  const p2 = lastPost('/ai/catalog/task')
+  push('补齐请求体: ' + (p2 ? p2.url + ' ' + JSON.stringify(p2.body) : '(没发出请求)'))
+  await sleep(1400)
+  push('补齐一拍进度: ' + JSON.stringify(txt(q('.mysql-ai-gen-progress-top'))))
+  push('补齐一拍生成记录: ' + qa('.mysql-ai-gen-record').length + ' 条')
+  await sleep(1900)
+  push('补齐后弹框关闭: ' + !dlgVisible())
+  push('补齐后提示: ' + JSON.stringify(txt(q('.mysql-ai-catalog-msg'))))
+}
+
+// ?genbg：后台运行 —— 任务在服务端跑，关弹框不受影响：面板进度行实时更新，
+// 随时重开弹框看每库进度；全部完成后进度行消失、提示汇总
+async function collectGenBackground() {
+  push('—— 后台运行（?genbg）——')
+  const footer = () => qa('.el-dialog__footer .el-button')
+  const open = qa('.mysql-ai-catalog .el-button').find(b => b.textContent.trim() === '批量生成')
+  push('批量生成按钮存在: ' + !!open)
+  if (!open) return
+  open.click()
+  await sleep(400)
+  push('默认勾选库: ' + (qa('.mysql-ai-gen-db').map(e => txt(e)).join(' | ') || '(无)'))
+  const start = footer().find(b => b.textContent.includes('开始生成'))
+  if (start) start.click()
+  await sleep(300)
+  push('启动二次确认: ' + JSON.stringify(await passConfirm()))
+  push('启动后进度视图: ' + !!q('.mysql-ai-gen-progress') + ' footer=[' + footer().map(txt).join(' / ') + ']')
+  const bg = footer().find(b => b.textContent.includes('后台运行'))
+  if (bg) bg.click()
+  await sleep(500)
+  push('关弹框后: 弹框关闭=' + !dlgVisible() + ' 面板进度行=' + !!q('.mysql-ai-task'))
+  await sleep(1200)
+  // 第一拍（t0+1500）后：面板行推进到「1/2 · 当前 shop」，任务不因弹框关闭而中断
+  push('后台一拍后面板行: ' + JSON.stringify(cut(txt(q('.mysql-ai-task')), 70)))
+  const view = qa('.mysql-ai-task .el-button').find(b => b.textContent.includes('查看进度'))
+  push('查看进度按钮: ' + (view ? JSON.stringify(txt(view)) : '(无)'))
+  if (view) view.click()
+  await sleep(400)
+  push('重开弹框: ' + dlgVisible() + ' 进度=' + JSON.stringify(txt(q('.mysql-ai-gen-progress-top')))
+    + ' | 每库: ' + qa('.mysql-ai-gen-state').map(txt).join(' / ')
+    + ' | 生成记录: ' + qa('.mysql-ai-gen-record').length + ' 条')
+  const bg2 = footer().find(b => b.textContent.includes('后台运行'))
+  if (bg2) bg2.click()
+  await sleep(1600)
+  // 第二拍（t0+3000）任务完成、轮询收尾：不在打开态就不重开弹框，面板进度行消失
+  push('完成后弹框仍关: ' + !dlgVisible())
+  push('完成后面板进度行: ' + (q('.mysql-ai-task') ? JSON.stringify(cut(txt(q('.mysql-ai-task')), 60)) : '(已消失)'))
+  push('完成后提示: ' + JSON.stringify(txt(q('.mysql-ai-catalog-msg'))))
+  push('完成后目录状态: ' + JSON.stringify(txt(q('.mysql-ai-catalog b'))))
+}
+
+;(async () => {
+  await sleep(600)
+  if (LOGS_ONLY) {
+    await collectLogs()
+    if (LOGS_TAB === 'ai' || P.has('aitab')) await collectLogsAI()
+    if (P.has('clear')) await collectLogsClear()
+    push('JS 错误: ' + (errors.length ? errors.join(' | ') : '无'))
+    q('#out').textContent = out.join('\n')
+    return
+  }
+  if (NO_CAT) {
+    // 复现「打开工作台直接切到 AI 生成、连接还没任何缓存目录」的路径
+    await openAITab()
+    await sleep(500)
+    await collectNoCatalog()
+  } else if (GEN_FAIL) {
+    // 批量生成部分失败 → 弹框留存、自动勾失败库、重试只发失败库（默认有缓存场景，走「批量生成」按钮）
+    await openAITab()
+    await sleep(500)
+    await collectGenRetry()
+  } else if (GEN_STOP) {
+    // 运行中停止 → 任务停住、弹框留存给停止提示与勾选，可再次开始补齐
+    await openAITab()
+    await sleep(500)
+    await collectGenStop()
+  } else if (GEN_BG) {
+    // 后台运行 → 关弹框任务继续跑，面板进度行实时更新，重开弹框恢复进度视图
+    await openAITab()
+    await sleep(500)
+    await collectGenBackground()
+  } else if (NO_DEF) {
+    // 不点任何库/表：完全复现用户「打开工作台直接切到 AI 生成」的路径
+    await openAITab()
+    await sleep(500)
+    if (NO_DBS) await collectNoDbs()
+    else await collectAutoPick()
+  } else {
+    const demo = qa('.mysql-db-row').find(r => r.textContent.includes('demo'))
+    if (demo) demo.click()
+    await sleep(500)
+    const users = qa('.mysql-tb-row').find(r => r.textContent.includes('users'))
+    if (users) users.click()
+    await sleep(700)
+
+    await collectBase()
+    if (P.has('idx')) await collectIndexes()
+    if (P.has('ddl')) await collectDDL()
+    if (P.has('showsys')) await collectShowSys()
+    if (P.has('query')) await collectQueryData()
+    if (P.has('cancel')) await collectCancel()
+    if (P.has('explain')) await collectExplain()
+    if (P.has('ai')) await collectAI()
+    if (AI_WRITE) await collectAIWrite()
+    if (P.has('aiswitch')) await collectAIModeSwitch()
+    if (P.has('gen')) await collectGenRequest()
+    if (P.has('rebuild')) await collectGenRebuild()
+    if (P.has('switch')) await collectSwitch()
+  }
+
+  push('JS 错误: ' + (errors.length ? errors.join(' | ') : '无'))
+  q('#out').textContent = out.join('\n')
+})()
+  </script>
+</body>
+</html>

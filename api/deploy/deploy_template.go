@@ -22,12 +22,11 @@ var (
 )
 
 type deployTemplateHandler struct {
-	tplRepo   *repo.DeployRepo
-	schedRepo *repo.DeployScheduleRepo
+	tplRepo *repo.DeployRepo
 }
 
-func NewDeployTemplateHandler(tplRepo *repo.DeployRepo, schedRepo *repo.DeployScheduleRepo) *deployTemplateHandler {
-	return &deployTemplateHandler{tplRepo: tplRepo, schedRepo: schedRepo}
+func NewDeployTemplateHandler(tplRepo *repo.DeployRepo) *deployTemplateHandler {
+	return &deployTemplateHandler{tplRepo: tplRepo}
 }
 
 type templateReq struct {
@@ -122,11 +121,6 @@ func (h *deployTemplateHandler) Delete(c *gin.Context) {
 	}
 	if existing.IsBuiltin {
 		resp.Fail(c, resp.CodeForbidden, "内置模板不可删除")
-		return
-	}
-	// 引用保护：有定时任务关联时禁止删除
-	if cnt, err := h.schedRepo.CountByTemplate(id); err == nil && cnt > 0 {
-		resp.Fail(c, resp.CodeConflict, fmt.Sprintf("该模板被 %d 个定时任务引用，请先解除关联", cnt))
 		return
 	}
 	if err := h.tplRepo.DeleteTemplate(id); err != nil {

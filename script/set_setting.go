@@ -1,7 +1,7 @@
 //go:build ignore
 
 // 用法: go run script/set_setting.go <db路径> <key> <value>
-// 直接修改 settings 表中的单项配置（如 server.port），改后重启生效。
+// 直接修改 settings 表中的单项配置（如 ssh.timeout），改后重启生效。
 package main
 
 import (

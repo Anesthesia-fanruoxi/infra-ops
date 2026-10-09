@@ -23,13 +23,22 @@ SSH 安装能力部署（自举），不引入新的分发通道。
 ```
 管理机（阿里云 ECS 或内网任意 Linux/Windows）
 ├── infra-ops            # 单二进制，systemd/计划任务托管
-├── config.yaml          # 配置（env 优先、yaml 兜底，同 ops-platform 约定）
-└── data/infra-ops.db    # SQLite，全部状态（主机/凭据/审计）
+└── data/infra-ops.db    # SQLite，全部状态（主机/凭据/审计 + 运行配置）
 ```
 
-- 单实例运行，监听一个 HTTP 端口（默认 8090）。
-- 前端静态资源 go:embed 打包，浏览器访问即完整系统。
-- 备份 = 拷贝 db 文件 + config.yaml。
+- 单实例运行；Go 引擎与前端（go:embed 打包）在桌面窗口内进程直连，**不监听任何端口**。
+  ⚠️ 2026-10 桌面化更正：本文原先「监听一个 HTTP 端口（默认 8090）」与「浏览器访问即完整系统」两句已作废。
+- **实际迁移面与备份面只有 2 件：二进制 + `data/` 目录。**
+- ⚠️ **`data/` 要按密钥管**：里面既有解密主机凭据的 `secret_key`，也有加密后的凭据本身；
+  备份包 = 密钥包，**不能明文放共享盘 / 网盘 / 仓库**。安全口径：停服（或 `sqlite3 .backup`，
+  避免拷到不完整的 WAL）→ 打包 → 加密存放 → 恢复步骤演练过一次。
+- ⚠️ **`config.yaml` 是死配置，服务端根本不读**（2026-09-17 更正）。
+  运行配置全部来自 `settings` 表，`main.go:33` 硬编码 `dbPath = "data/infra-ops.db"`。
+  实测证据：`settings.security.secret_key` 为 `kgZPKq5k…` 而 `config.yaml` 写的是 `ac/uTfPwsP…`，
+  **两者不同**即证明它未被加载；全仓唯一读它的是 `script/ssh_full.go`（`//go:build ignore` 开发脚本）。
+  故本文原先的「env 优先、yaml 兜底」与「备份 = 拷贝 db 文件 + config.yaml」两句**已作废**。
+- ⚠️ 本文原「加固与 web 部署要求见 `docs/web部署与加固清单.md`」**已作废**（2026-10）：
+  该清单随 web 形态一并删除——桌面化后不再监听端口、登录鉴权体系整体移除。
 
 ## 3. 运行时组件
 

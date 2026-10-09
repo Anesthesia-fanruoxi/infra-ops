@@ -14,6 +14,8 @@
   <script src="/static/vendor/element-plus-icons-vue.min.js"></script>
   <script src="/static/vendor/element-plus-zh-cn.min.js"></script>
   <script src="/static/vendor/axios.min.js"></script>
+  <!-- 监控查询的图表渲染（ECharts 本地 vendor，SVG 渲染器） -->
+  <script src="/static/vendor/echarts.min.js"></script>
   <!-- 桌面模式（Wails v3）适配层：环境探测 + EventSource 桥接；浏览器访问时自动跳过 -->
   <script src="/static/wails-shim.js"></script>
   <!-- 统一错误出口：app.js 的拦截器与全局 error/unhandledrejection 都经它弹出（必须早于 app.js 装载） -->
@@ -22,6 +24,8 @@
   <script src="/static/pages/hosts.js"></script>
   <script src="/static/pages/credentials.js"></script>
   <script src="/static/pages/audit.js"></script>
+  <!-- 统一 AI 调用记录组件：审计页 AI 标签页与各工具的调用记录入口共用（需早于 app.js） -->
+  <script src="/static/pages/ai_records.js"></script>
   <script src="/static/pages/templates.js?v=20260916"></script>
   <script src="/static/pages/deploy.js"></script>
   <script src="/static/pages/orchestration_drawer.js"></script>
@@ -119,6 +123,7 @@
   <script src="/static/pages/mysql_tree.js"></script>
   <script src="/static/pages/mysql_grid.js"></script>
   <script src="/static/pages/mysql_table_detail.js"></script>
+  <script src="/static/pages/mysql_ai_catalog.js"></script>
   <script src="/static/pages/mysql_ai.js"></script>
   <script src="/static/pages/mysql_logs.js"></script>
   <script src="/static/pages/mysql_transfer_util.js"></script>
@@ -131,10 +136,15 @@
   <script src="/static/pages/redis_value.js"></script>
   <script src="/static/pages/redis_explorer.js"></script>
   <script src="/static/pages/redis.js"></script>
-  <!-- 设置：三张卡片先于页面，由 SettingsPage 以 components 引用 -->
+  <!-- 监控查询工具：图表 → AI 面板 → 页面（顺序即依赖顺序） -->
+  <script src="/static/pages/metrics_chart.js"></script>
+  <script src="/static/pages/metrics_ai.js"></script>
+  <script src="/static/pages/metrics.js"></script>
+  <!-- 设置：AI / 系统信息 / 数据表 三个页签组件先于页面装配（由 SettingsPage 以 components 引用） -->
   <script src="/static/pages/settings_ai.js"></script>
-  <script src="/static/pages/settings_platform.js"></script>
   <script src="/static/pages/settings_system.js"></script>
+  <script src="/static/pages/settings_tables.js"></script>
+  <script src="/static/pages/settings_backup.js"></script>
   <script src="/static/pages/settings.js"></script>
   <script src="/static/app.js"></script>
 </body>

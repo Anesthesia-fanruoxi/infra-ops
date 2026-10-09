@@ -27,15 +27,14 @@ type orchHandler struct {
 	cryptoS   *icrypto.Service
 	sshC      *sshx.Client
 	bus       *eventbus.Bus
-	auditRepo *repo.AuditRepo
 	logRepo   *repo.OrchestrationLogRepo
 }
 
 func NewOrchHandler(repo *repo.OrchestrationRepo, tplRepo *repo.DeployRepo, hostRepo *repo.HostRepo,
 	credRepo *repo.CredentialRepo, cryptoS *icrypto.Service, sshC *sshx.Client,
-	bus *eventbus.Bus, auditRepo *repo.AuditRepo, logRepo *repo.OrchestrationLogRepo) *orchHandler {
+	bus *eventbus.Bus, logRepo *repo.OrchestrationLogRepo) *orchHandler {
 	return &orchHandler{repo: repo, tplRepo: tplRepo, hostRepo: hostRepo, credRepo: credRepo,
-		cryptoS: cryptoS, sshC: sshC, bus: bus, auditRepo: auditRepo, logRepo: logRepo}
+		cryptoS: cryptoS, sshC: sshC, bus: bus, logRepo: logRepo}
 }
 
 // ---------- 定义 CRUD ----------
@@ -169,12 +168,6 @@ func (h *orchHandler) Save(c *gin.Context) {
 		resp.ErrHTTP(c, 500, resp.CodeInternal, "保存编排失败")
 		return
 	}
-	action := "orchestration.create"
-	if o.ID > 0 {
-		action = "orchestration.update"
-	}
-	h.auditRepo.Create(&model.AuditLog{Action: action, TargetType: "orchestration",
-		TargetID: savedID, Detail: fmt.Sprintf("name=%s steps=%d", o.Name, len(req.Steps)), RemoteIP: c.ClientIP()})
 	resp.OK(c, gin.H{"id": savedID})
 }
 
@@ -207,7 +200,6 @@ func (h *orchHandler) Delete(c *gin.Context) {
 		resp.ErrHTTP(c, 500, resp.CodeInternal, "删除编排失败")
 		return
 	}
-	h.auditRepo.Create(&model.AuditLog{Action: "orchestration.delete", TargetType: "orchestration", TargetID: id, RemoteIP: c.ClientIP()})
 	resp.OK(c, nil)
 }
 
@@ -222,8 +214,6 @@ func (h *orchHandler) Run(c *gin.Context) {
 		return
 	}
 	go h.executeRun(id, runID)
-	h.auditRepo.Create(&model.AuditLog{Action: "orchestration.run", TargetType: "orchestration_run",
-		Detail: fmt.Sprintf("orchestration_id=%d run_id=%d", id, runID), RemoteIP: c.ClientIP()})
 	resp.OK(c, gin.H{"started": true, "run_id": runID})
 }
 

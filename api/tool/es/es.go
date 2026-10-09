@@ -16,10 +16,9 @@ import (
 )
 
 type Handler struct {
-	repo      *repo.ESRepo
-	cryptoS   *crypto.Service
-	viewRepo  *repo.ESViewRepo
-	auditRepo *repo.AuditRepo // W1–W8 写操作落审计（任务 08-B11；仅字段注入，不改既有逻辑）
+	repo     *repo.ESRepo
+	cryptoS  *crypto.Service
+	viewRepo *repo.ESViewRepo
 }
 
 func NewHandler(repo *repo.ESRepo, cs *crypto.Service) *Handler {

@@ -48,6 +48,12 @@ func main() {
 		log.Printf("打开日志文件失败（继续用默认输出）: %v", err)
 	}
 
+	// 恢复暂存换入必须在 store.Open 之前：进程内的 SQLite 一旦持有库文件句柄，
+	// 再替换就是未定义行为（见 restore.go）。换入失败已回滚旧数据，照常启动。
+	if err := applyRestorePending(); err != nil {
+		log.Printf("换入恢复暂存失败（已回滚，旧数据完好）: %v", err)
+	}
+
 	// 打开数据库（路径相对用户数据目录，全部运行配置持久化于 settings 表）
 	if err := store.Open(dbPath); err != nil {
 		log.Fatalf("打开数据库失败: %v", err)
@@ -159,6 +165,12 @@ func main() {
 		MinWidth:  1024,
 		MinHeight: 680,
 		URL:       "/",
+		// 无边框：移除原生标题栏（顶部那条与内容同色的白色标题带），窗口控制改由
+		// 页面顶栏自绘（.win-ctls 按钮经 window.wails.Window.* 调用，见
+		// template/static/wails-shim.js 与 app.js）；拖动窗口走页面的
+		// --wails-draggable 拖拽区。保留默认的 DWM 装饰（阴影/圆角/边缘缩放/
+		// 最小化与贴靠动画不受影响）。
+		Frameless: true,
 	})
 	window.Center()
 	app.RegisterService(application.NewService(desktop.NewSSEBridge(app, engine)))
@@ -252,14 +264,23 @@ func runRetentionLoop(settingsRepo *setting.SettingsRepo) {
 		if m > 0 {
 			log.Printf("[retention] 已清理 %d 天前的任务记录 %d 条", days, m)
 		}
-		// MySQL 工具的使用记录（SQL 执行记录 + AI 调用记录）与上面同一保留期
-		aiN, sqlN, err := repo.NewMySQLLogRepo().PurgeBefore(days)
+		// 统一 AI 调用记录（各工具共用一张表）与上面同一保留期
+		aiN, err := repo.NewAILogRepo().PurgeBefore(days)
 		if err != nil {
-			log.Printf("[retention] 清理 MySQL 使用记录失败: %v", err)
+			log.Printf("[retention] 清理 AI 调用记录失败: %v", err)
 			return
 		}
-		if aiN > 0 || sqlN > 0 {
-			log.Printf("[retention] 已清理 %d 天前的 MySQL 记录：AI 调用 %d 条、SQL 执行 %d 条", days, aiN, sqlN)
+		if aiN > 0 {
+			log.Printf("[retention] 已清理 %d 天前的 AI 调用记录 %d 条", days, aiN)
+		}
+		// MySQL 工具的 SQL 执行记录与上面同一保留期
+		sqlN, err := repo.NewMySQLLogRepo().PurgeBefore(days)
+		if err != nil {
+			log.Printf("[retention] 清理 SQL 执行记录失败: %v", err)
+			return
+		}
+		if sqlN > 0 {
+			log.Printf("[retention] 已清理 %d 天前的 SQL 执行记录 %d 条", days, sqlN)
 		}
 	}
 

@@ -14,7 +14,7 @@
   if (window.StacksRegistryReady) window.StacksRegistryReady()
 
   window.StacksPage = {
-    props: ['page', 'user', 'versionData'],
+    props: ['page', 'versionData'],
     components: P.componentsOf(),
     template: P.template(),
     mixins: P.mixins
