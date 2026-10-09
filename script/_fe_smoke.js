@@ -34,13 +34,17 @@ sandbox.URL = { createObjectURL: () => 'blob:x', revokeObjectURL: noop }
 sandbox.Blob = function () {}
 sandbox.document = {
   createElement: () => ({ click: noop, style: {}, setAttribute: noop }),
-  addEventListener: noop, querySelector: () => null, body: {}
+  addEventListener: noop, querySelector: () => null, body: {},
+  head: { appendChild: noop }
 }
-sandbox.location = { hash: '' }
+// location 必须模拟浏览器形态：wails-shim.js 用 protocol/hostname 判定是否桌面环境，
+// 缺字段会让 isDesktop 误判为 true（undefined !== 'http:'），从而在无 DOM 沙箱里走桌面分支崩掉。
+sandbox.location = { hash: '', protocol: 'http:', hostname: '127.0.0.1' }
 sandbox.addEventListener = noop
 sandbox.Vue = { createApp: () => ({ use: noop, component: noop, mount: () => ({}) }), ref: v => ({ value: v }), computed: f => f, watch: noop }
 sandbox.ElementPlus = {}
 sandbox.ElementPlusIconsVue = {}
+sandbox.localStorage = { getItem: () => null, setItem: noop, removeItem: noop }
 sandbox.ElMessage = Object.assign(noop, { error: noop, success: noop, warning: noop })
 sandbox.ElMessageBox = Object.assign(() => Promise.resolve(), { confirm: () => Promise.resolve() })
 sandbox.axios = { create: () => ({ get: () => Promise.resolve({}), post: () => Promise.resolve({}), interceptors: { response: { use: noop } } }) }
@@ -103,7 +107,7 @@ const page = sandbox.StacksPage
 check(!!page, 'window.StacksPage 缺失')
 if (page) {
   check(Array.isArray(page.mixins) && page.mixins.length >= 7, 'mixins 数量异常: ' + (page.mixins || []).length)
-  check(Array.isArray(page.props) && page.props.join(',') === 'page,user,versionData', 'props 不一致')
+  check(Array.isArray(page.props) && page.props.join(',') === 'page,versionData', 'props 不一致')
   const comps = Object.keys(page.components || {})
   for (const c of ['stack-form-bigdata-select', 'stack-form-bigdata-op', 'stack-form-bigdata-roles',
                    'stack-form-redis-topo', 'stack-form-elasticsearch-roles', 'stack-form-kafka-select',
@@ -565,6 +569,345 @@ for (const [rel, code] of sources) {
     rel + ' 有带 v-loading 的 .es-source 面板，但同文件的 el-drawer 未挂 class="es-raw-drawer"（面板会封顶 220px）')
 }
 
+
+// 15. MySQL 导入 / 导出对话框（第八轮新增，首次上锁）。
+//     两个组件的模板都很大，标识符拼错只有在真渲染时才炸；9b 的口径只作用于套件骨架页，
+//     故这里对组件对象复用同一套口径（data/computed/methods/props + 模板局部变量）。
+//     另锁三件最容易悄悄漂移的事：脚本加载顺序（export 的 mounted 会直接调用 window.MySQLTransferUtil）、
+//     「本地直连不设超时」（两个组件的请求都必须带 timeout: 0）、导入的两段式确认与安全默认值。
+const T_UTIL = '/static/pages/mysql_transfer_util.js'
+const T_EXP = '/static/pages/mysql_export.js'
+const T_IMP = '/static/pages/mysql_import.js'
+const tOrder = srcs.map(s => s.split('?')[0])
+check([T_UTIL, T_EXP, T_IMP].every(p => tOrder.indexOf(p) >= 0), 'MySQL 导入导出三脚本未全部引入 index.html')
+check(tOrder.indexOf(T_UTIL) >= 0 && tOrder.indexOf(T_UTIL) < tOrder.indexOf(T_EXP)
+  && tOrder.indexOf(T_UTIL) < tOrder.indexOf(T_IMP),
+  'mysql_transfer_util.js 必须排在 mysql_export.js / mysql_import.js 之前'
+  + '（export 的 mounted 会直接调用 window.MySQLTransferUtil.guessTable）')
+
+const tSrc = {}
+for (const rel of [T_UTIL, T_EXP, T_IMP]) tSrc[rel] = ((sources.find(s => s[0] === rel)) || [])[1] || ''
+
+for (const g of ['MySQLTransferUtil', 'MySQLExport', 'MySQLImport']) {
+  check(!!sandbox[g], 'window.' + g + ' 缺失')
+}
+
+// 15a. 组件模板引用的标识符必须有定义（判定口径与 9b 一致：剥字符串字面量与对象键，
+//      带参调用不算裸引用；v-for / 插槽解构 / 箭头参数算模板局部变量）。
+const T_KNOWN = new Set(['true', 'false', 'null', 'undefined', 'typeof', 'in', 'new', 'this',
+  'ElMessage', 'ElMessageBox', 'api', 'window', 'Math', 'Number', 'String', 'Boolean',
+  'Object', 'Array', 'JSON', 'Date', 'RegExp', 'Set', 'Map',
+  'encodeURIComponent', 'decodeURIComponent', 'parseInt', 'parseFloat', 'isNaN'])
+function checkTransferTemplate(compName, comp) {
+  const tpl = String((comp && comp.template) || '')
+  check(tpl.length > 0, compName + ' 无 template')
+  if (!tpl) return
+  const bare = new Set()
+  const collect = (expr) => {
+    expr = String(expr)
+      .replace(/'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"/g, "''")
+      .replace(/([{,]\s*)[A-Za-z_$][\w$-]*(\s*:)/g, '$1$2')
+    const re = /(?:^|[^A-Za-z0-9_$.])([A-Za-z_$][A-Za-z0-9_$]*)(\s*\()?/g
+    let mm
+    while ((mm = re.exec(expr))) { if (!mm[2]) bare.add(mm[1]) }
+  }
+  for (const mm of tpl.matchAll(/\{\{\s*([^}]+?)\s*\}\}/g)) collect(mm[1])
+  for (const mm of tpl.matchAll(/\sv-(?:if|else-if)="([^"]*)"/g)) collect(mm[1])
+  for (const mm of tpl.matchAll(/\sv-for="[^"]*?\sin\s+([^"]*)"/g)) collect(mm[1])
+  for (const mm of tpl.matchAll(/\sv-model="([^"]*)"/g)) collect(mm[1])
+  for (const mm of tpl.matchAll(/\s:(?:data|label|title|class|content|disabled|loading|key|value|placeholder)="([^"]*)"/g)) collect(mm[1])
+
+  const locals = new Set()
+  for (const mm of tpl.matchAll(/\sv-for="([^"]*)"/g)) {
+    const left = mm[1].split(/\s+in\s+/)[0] || ''
+    for (const name of left.matchAll(/[A-Za-z_$][A-Za-z0-9_$]*/g)) locals.add(name[0])
+  }
+  for (const mm of tpl.matchAll(/#default="\{([^}]*)\}"/g)) {
+    for (const name of mm[1].split(',')) { const n = name.trim(); if (n) locals.add(n) }
+  }
+  for (const mm of tpl.matchAll(/([A-Za-z_$][\w$]*)\s*=>/g)) locals.add(mm[1])
+
+  const dataKeys = new Set()
+  try {
+    if (typeof comp.data === 'function') {
+      // data() 可能读根上下文（key 浏览器的默认库来自 this.conn.default_db）。
+      // 用一个「取不到就给空串」的占位上下文调用，目的只是拿到键名清单。
+      const stub = new Proxy({ conn: { id: 1, default_db: 0 }, connId: 1, db: 0, keyName: 'probe' }, {
+        get: (t, k) => (typeof k === 'symbol' ? undefined : (k in t ? t[k] : ''))
+      })
+      Object.keys(comp.data.call(stub) || {}).forEach(k => dataKeys.add(k))
+    }
+  } catch (e) { /* data 依赖运行环境则跳过 */ }
+  const members = new Set([].concat(
+    Object.keys(comp.computed || {}), Object.keys(comp.methods || {}),
+    Array.isArray(comp.props) ? comp.props : Object.keys(comp.props || {})))
+  const undef = [...bare].filter(n => !n.startsWith('$') && !locals.has(n) && !dataKeys.has(n)
+    && !members.has(n) && !T_KNOWN.has(n))
+  check(undef.length === 0, compName + ' 模板引用了未定义成员: ' + undef.join(','))
+}
+checkTransferTemplate('MySQLExport', sandbox.MySQLExport)
+checkTransferTemplate('MySQLImport', sandbox.MySQLImport)
+
+// 15b. 默认值：导出按 INSERT 分批，导入默认「整批回滚并停止」且结构变更默认关闭。
+//      这几个默认值是安全边界，不该被顺手改掉（skip 会静默跳过失败语句；几万条 dump 里
+//      混进一条 DROP，肉眼是看不出来的）。
+const expData = (sandbox.MySQLExport && sandbox.MySQLExport.data) ? sandbox.MySQLExport.data() : {}
+const impData = (sandbox.MySQLImport && sandbox.MySQLImport.data) ? sandbox.MySQLImport.data() : {}
+check(expData.format === 'sql', '导出默认格式应为 INSERT .sql，当前: ' + expData.format)
+check(expData.batchRows === 200, '导出默认每批行数应为 200，当前: ' + expData.batchRows)
+check(impData.batchSize === 500, '导入默认每批条数应为 500，当前: ' + impData.batchSize)
+check(impData.onError === 'stop', '导入默认错误策略应为「遇错整批回滚并停止」，当前: ' + impData.onError)
+check(impData.allowSchema === false, '导入的「允许结构变更」默认必须为关，当前: ' + impData.allowSchema)
+
+// 15c. 请求契约：不设 HTTP 超时（本地直连）；导入两段式确认（先探后提交）。
+for (const rel of [T_EXP, T_IMP]) {
+  // 只认「请求配置对象里的那一处」：注释里写「timeout: 0 —— 本地直连…」也算的话，改真值时会假绿（已踩）
+  check(/,\s*\{\s*timeout:\s*0\s*\}\s*\)/.test(tSrc[rel]),
+    rel + ' 的请求必须带 { timeout: 0 } —— 本地直连不设 HTTP 超时，卡在 axios 默认的 15 秒没有意义')
+  check(/window\.MySQLTransferUtil/.test(tSrc[rel]),
+    rel + ' 未复用 window.MySQLTransferUtil（导出/导入各写一份格式化与推断逻辑必然漂移）')
+}
+check(/payload\(false,\s*''\)/.test(tSrc[T_IMP]), '导入必须先发一次未确认请求（payload(false, ...)）拿待确认信息与文件大小')
+check(/payload\(true,\s*key\)/.test(tSrc[T_IMP]), '导入的正式请求必须带 confirmed=true（payload(true, key)）')
+check(/need_confirm/.test(tSrc[T_IMP]), '导入必须处理服务端返回的 need_confirm，否则两段式确认形同虚设')
+
+// 16. Redis 工具（key 浏览器）：首次上锁。
+//     三条是安全边界，不是外观偏好：
+//       ① 匹配串不得为空——空串拼出来的 `*` 就是 KEYS *，会阻塞整个实例（后端也会拦，这里拦的是「按钮看起来可点」）；
+//       ② 「展示全部」必须先有匹配，否则它只是一个换了名字的 KEYS *；
+//       ③ 请求不设 HTTP 超时——「展示全部」要连续推进很多轮 SCAN，卡在 axios 默认的 15 秒没有意义。
+//     后端侧的对应门禁是 api/tool/redis 的 TestOnlyReadCommands（只读命令白名单）。
+const R_UTIL = '/static/pages/redis_util.js'
+const R_VAL = '/static/pages/redis_value.js'
+const R_EXP = '/static/pages/redis_explorer.js'
+const R_PAGE = '/static/pages/redis.js'
+for (const p of [R_UTIL, R_VAL, R_EXP, R_PAGE]) {
+  check(tOrder.indexOf(p) >= 0, 'index.html 未引入 ' + p)
+}
+check(tOrder.indexOf(R_UTIL) < tOrder.indexOf(R_VAL) && tOrder.indexOf(R_VAL) < tOrder.indexOf(R_EXP)
+  && tOrder.indexOf(R_EXP) < tOrder.indexOf(R_PAGE),
+  'Redis 脚本顺序错误：必须 redis_util → redis_value → redis_explorer → redis.js'
+  + '（explorer 的 components 在对象字面量求值时就要取到 window.RedisValue）')
+
+for (const g of ['RedisUtil', 'RedisValue', 'RedisExplorer', 'RedisPage']) {
+  check(!!sandbox[g], 'window.' + g + ' 缺失')
+}
+checkTransferTemplate('RedisExplorer', sandbox.RedisExplorer)
+checkTransferTemplate('RedisValue', sandbox.RedisValue)
+checkTransferTemplate('RedisPage', sandbox.RedisPage)
+
+const rSrc = {}
+for (const rel of [R_UTIL, R_VAL, R_EXP, R_PAGE]) rSrc[rel] = ((sources.find(s => s[0] === rel)) || [])[1] || ''
+
+// 16a. 空匹配串必须被拦（前端挡在按钮与入口，后端再挡一次）
+check(/ElMessage\.warning\([^)]*要匹配的结尾内容/.test(rSrc[R_EXP]),
+  'redis_explorer.js 的 search 必须显式拒绝空匹配串（留空等价于 KEYS *）')
+check(/:disabled="!suffix\.trim\(\)"/.test(rSrc[R_EXP]),
+  '「查询」按钮须以 suffix.trim() 为可用条件，空串时不得可点')
+check(/\bsuffix\.trim\(\)/.test(rSrc[R_EXP]),
+  'redis_explorer.js 必须对匹配串做 trim 判定（只有空白字符也算空）')
+
+// 16b. 「展示全部」必须先有匹配结果。
+//      行为断言，不是文本断言：只读 canAll 的源码文本会假绿——
+//      同一文件里 `if (this.found > 0) return '本页没有内容'` 就能满足 `/found > 0/`
+//      （已踩），删掉 canAll 里的条件门禁依然全绿。真正要锁的是「无命中时按钮不可用」。
+const canAllFn = sandbox.RedisExplorer && sandbox.RedisExplorer.computed
+  ? sandbox.RedisExplorer.computed.canAll : null
+check(typeof canAllFn === 'function', 'RedisExplorer.computed.canAll 缺失')
+if (typeof canAllFn === 'function') {
+  const ctx = (o) => Object.assign({
+    scanId: 'sc_1', hasMore: true, found: 1, loading: false,
+  }, o || {})
+  check(canAllFn.call(ctx({ found: 1 })) === true, '有匹配且仍有下一页时「展示全部」应可用')
+  check(canAllFn.call(ctx({ found: 0 })) === false,
+    'found = 0 时「展示全部」必须不可用 —— 没有命中时它只是一个换了名字的 KEYS *')
+  check(canAllFn.call(ctx({ scanId: '' })) === false, '没有会话时「展示全部」必须不可用')
+  check(canAllFn.call(ctx({ loading: true })) === false, '扫描进行中「展示全部」必须不可用')
+  check(canAllFn.call(ctx({ hasMore: false, done: true })) === false,
+    '扫完之后「展示全部」必须不可用（后端此时给 limit_hit，前端应提示把匹配串写得更具体）')
+}
+
+// 16c. 请求契约
+check(/,\s*\{\s*timeout:\s*0\s*\}\s*\)/.test(rSrc[R_EXP]),
+  'redis_explorer.js 的请求必须带 { timeout: 0 } —— 「展示全部」要连续推进多轮 SCAN，'
+  + '卡在 axios 默认的 15 秒没有意义')
+check(/window\.RedisUtil/.test(rSrc[R_EXP]) && /window\.RedisUtil/.test(rSrc[R_VAL]),
+  'key 浏览器与值预览都必须复用 window.RedisUtil（TTL 文案与类型徽标各写一套必然漂移）')
+
+// 16d. 只读：前端页面不得出现任何写命令字样（后端命令白名单见 TestOnlyReadCommands）
+for (const rel of [R_VAL, R_EXP, R_PAGE]) {
+  check(!/'(?:DEL|SET|LPUSH|RPUSH|SADD|HSET|ZADD|FLUSHDB|FLUSHALL|EXPIRE|RENAME|CONFIG)'/.test(rSrc[rel]),
+    rel + ' 出现写命令字样：本工具承诺只读')
+}
+
+// 17. 前端 API 路径 vs 后端路由注册（首次上锁）。
+//     起因是真实 404：AI 接入配置上提为平台设置后，router.go 里 /api/mysql/ai/config 已摘，
+//     但 pages/mysql_ai.js 还在打它 —— 面板永远停在「未启用」，看起来像开关打不开。
+//     静态交叉核对是能挡住这类漂移的最便宜手段（跑一次 404 不必等真机点一遍）。
+//
+//     口径说明（都是刻意选的宽松边界，宁可漏报不可误报）：
+//     · 只取字面量路径的**前两段**（如 /mysql/5/ping → /mysql）作为匹配键，
+//       因为 :id 是运行期值，无法静态展开；
+//     · 路由分组名 → 前缀的映射只列工具类几组（router.go 里 `protected.Group("/xxx")` 形式固定）；
+//     · 路径含模板插值（`/mysql/' + id + '/mode`）时只取首段静态部分。
+const ROUTER = path.join(ROOT, 'router', 'router.go')
+check(fs.existsSync(ROUTER), 'router/router.go 不存在，无法做 API 路径交叉核对')
+if (fs.existsSync(ROUTER)) {
+  const rsrc = fs.readFileSync(ROUTER, 'utf8')
+  // 分组变量 → 路径前缀：**从 router.go 里解析 Group 定义本身**，不手工维护映射表
+  // （手工表会漂：加一组路由时忘了同步映射，这条门禁就静默漏报，比没有更坏）。
+  const GROUP_PREFIX = {}
+  for (const m of rsrc.matchAll(/(\w+)\s*:?=\s*(?:protected|r)\.Group\("([^"]*)"\)/g)) {
+    GROUP_PREFIX[m[1]] = m[2]
+  }
+  // protected = r.Group("/api")：它的「前缀」是 baseURL 本身，前端字面量里不会出现 /api，
+  // 故映射成空串，让 protected.X("/a/b") 产出 "/a/b"（与第二段直挂那条同基准）。
+  if (GROUP_PREFIX.protected === '/api') GROUP_PREFIX.protected = ''
+  check(Object.keys(GROUP_PREFIX).length >= 8,
+    '未能从 router.go 解析出路由分组（regex 可能已失效）——交叉核对形同虚设')
+
+  const registered = {}   // verb -> Set(path)
+  const addRoute = (verb, p) => {
+    if (!registered[verb]) registered[verb] = new Set()
+    registered[verb].add(p)
+  }
+  for (const m of rsrc.matchAll(/(\w+)\.(GET|POST|PUT|DELETE)\("([^"]*)"/g)) {
+    const prefix = GROUP_PREFIX[m[1]]
+    if (!prefix) continue
+    addRoute(m[2], prefix + m[3])
+  }
+  // 直接挂在 protected 上的（无分组）：前缀就是 /api。
+  // 存进集合时**去掉 /api** —— 前端字面量是相对 axios baseURL('/api') 的，
+  // '/deploy/run' 对应的就是 protected.GET("/api/deploy/run")，两边要在同一基准上比。
+  for (const m of rsrc.matchAll(/protected\.(GET|POST|PUT|DELETE)\("([^"]*)"/g)) {
+    addRoute(m[1], m[2])
+  }
+  check(Object.keys(registered).length >= 4,
+    '未能从 router.go 解析出任何路由（分组解析可能已失效）——交叉核对形同虚设')
+
+  // 扫全部前端脚本里的 api.<verb>('<path>')
+  // 注意：api 的 baseURL 是 '/api'，所以这里的字面量路径本身就是相对 /api 的，
+  //       后端直挂 protected 的 /api/deploy/run 同样对应前端字面量 '/deploy/run'。
+  const apiCall = /\bapi\.(get|post|put|delete)\(\s*'([^']+)'/g
+  let scanned = 0
+  const miss = []
+  for (const [rel, code] of sources) {
+    for (const m of code.matchAll(apiCall)) {
+      const verb = m[1].toUpperCase()
+      const raw = m[2]
+      if (!raw.startsWith('/')) continue
+      // 尾斜杠归一：前端 '/deploy/tasks/' 与后端 '/api/deploy/tasks' 是同一条
+      const path = raw.replace(/\/+$/, '') || '/'
+      const segs = path.split('/').filter(Boolean)
+      if (!segs.length) continue
+      const cands = registered[verb] || new Set()
+      // ⛔ 匹配口径：只认两种情形 ——
+      //   ① 完整字面量逐段相等（末段可为 :param，对应前端拼了运行期 id 的写法）；
+      //   ② 字面量整体是某条注册路径的**末段截断**，且注册路径尾部全是 :param。
+      // 绝不做「逐段回退 + 前缀相等」的宽松匹配：那样 /mysql/ai/config 会被同前缀的
+      // /mysql/ai/logs 兜住，明明后端没这条却报全绿（已踩，假绿两轮才发现）。
+      const eqPath = (p) => {
+        const ps = p.split('/').filter(Boolean)
+        if (ps.length !== segs.length) return false
+        for (let i = 0; i < ps.length; i++) {
+          if (i === ps.length - 1 && ps[i].startsWith(':')) continue
+          if (ps[i] !== segs[i]) return false
+        }
+        return true
+      }
+      let hit = [...cands].some(eqPath)
+      if (!hit) {
+        hit = [...cands].some(p => {
+          const ps = p.split('/').filter(Boolean)
+          if (ps.length <= segs.length) return false
+          for (let i = 0; i < segs.length; i++) if (ps[i] !== segs[i]) return false
+          return ps.slice(segs.length).every(s => s.startsWith(':'))
+        })
+      }
+      // 已知的静态核对盲区：路径在下一段才拼运行期值（'/stacks/instances/' + id + '/scale-out'），
+      // 正则只能抓到静态那一段，深度必然不够。这类一律放行，否则误报会淹没真问题。
+      const DYNAMIC_TAIL = ['/stacks/instances/', '/stacks/instances']
+      if (!hit && DYNAMIC_TAIL.includes(path)) hit = true
+      scanned++
+      if (!hit) miss.push(rel + ' → api.' + m[1] + "('" + raw + "')")
+    }
+  }
+  check(miss.length === 0,
+    '前端调用了后端未注册的路径（真机表现为 404）：\n      ' + miss.join('\n      '))
+  if (miss.length === 0) console.log(`  API 路径交叉核对：${scanned} 处调用全部命中后端注册`)
+}
+
+// 18. 统一错误出口（error_notice.js）：桌面模式打不开 F12（Windows 上 Wails 关掉浏览器加速键，
+//     见 desktop/devtools.go），console 与 DevTools 都不是可靠通道 ⇒ 错误必须自己跳到界面上。
+//     真实踩过的两个洞：
+//       ① 404 时前端只能显示 axios 造的 `Request failed with status code 404`，
+//          看不出是哪条路径对不上——后端 NoRoute 也没给 body，同理什么信息都没有；
+//       ② 3 秒 toast 会错过，且未捕获的 JS 异常 / Promise 拒绝原先完全无出口，
+//          界面表现是「点了没反应」。
+//     故锁三件事：error_notice.js 存在且早于 app.js 装载、app.js 拦截器真的走它、
+//     describeApiError 对四类错误都给出可定位的描述。
+const E_NOTICE = '/static/error_notice.js'
+check(tOrder.indexOf(E_NOTICE) >= 0, 'index.html 未引入 ' + E_NOTICE)
+check(tOrder.indexOf('/static/app.js') > tOrder.indexOf(E_NOTICE),
+  E_NOTICE + ' 必须早于 app.js 装载（拦截器要用 window.ErrorNotice）')
+const EN = sandbox.ErrorNotice
+check(!!EN, 'window.ErrorNotice 缺失（错误通知出口未装载，桌面模式将无任何报错可见）')
+check(/notifyApiError\(err\)/.test(fs.readFileSync(path.join(ROOT, 'template/static/app.js'), 'utf8')),
+  'app.js 的 axios 拦截器必须调用 window.ErrorNotice.notifyApiError(err)'
+  + '——退回 3 秒 ElMessage 等于桌面模式下什么都没发生')
+if (EN) {
+  const D = EN.describeApiError
+  check(typeof D === 'function', 'ErrorNotice.describeApiError 缺失（纯函数，门禁要直接调它）')
+  check(typeof EN.notifyApiError === 'function' && typeof EN.attachGlobalHooks === 'function',
+    'ErrorNotice 需提供 notifyApiError 与 attachGlobalHooks')
+
+  // 行为断言：构造四类典型错误，直接调 describeApiError 看输出
+  if (typeof D === 'function') {
+    const withResp = (status, data, url, method) => D({
+      config: { url: url || '/redis', method: method || 'get' },
+      response: { status: status, data: data }
+    })
+    // ① 后端有 message：原样带上，并附方法与路径
+    const r1 = withResp(409, { code: 409, message: '同名连接已存在' }, '/redis', 'post')
+    check(r1.kind === 'http' && r1.status === 409, 'describeApiError: HTTP 错误的 kind/status 不对: ' + JSON.stringify(r1))
+    check(/同名连接已存在/.test(r1.text), 'describeApiError: 必须保留后端 message')
+    check(/POST \/redis/.test(r1.text), 'describeApiError: 必须给出「方法 + 路径」，否则 404 看不出是哪条接口')
+    // ② 404 且后端无 body：给出的是「后端自己的话」而不是 axios 那句 status code
+    const r2 = withResp(404, '', '/mysql/ai/config', 'get')
+    check(/接口不存在/.test(r2.lines.join('\n')),
+      'describeApiError: 404 无 body 时必须给出可读原因（当前: ' + r2.lines.join('|') + '）')
+    check(!/^Request failed/.test(r2.title),
+      'describeApiError: 404 标题不应只显示 axios 的 status code（当前: ' + r2.title + '）')
+    // ③ 超时与网络不通要能被区分开，二者提示语不同（前者建议查 timeout: 0）
+    const r3 = D({ config: { url: '/redis/1/keys', method: 'post' }, code: 'ECONNABORTED', message: 'timeout of 15000ms exceeded' })
+    check(r3.kind === 'timeout' && /timeout:\s*0/.test(r3.lines.join('\n')),
+      'describeApiError: 超时须判为 timeout 并提示「请求需带 timeout: 0」（导出/导入类接口的真实坑）')
+    const r4 = D({ config: { url: '/redis', method: 'get' }, message: 'Network Error' })
+    check(r4.kind === 'network', 'describeApiError: 无 response 且非超时应判为 network，当前: ' + r4.kind)
+    // ④ 空输入不崩（全局钩子会把任意 reason 丢进来）
+    check(!!D(null) && !!D({}).text, 'describeApiError: 传 null/空对象不得抛异常')
+  }
+
+  // 通知行为：必须 duration:0（不自动消失）且超过上限时关掉最早的一条。
+  // 沙箱里 ElementPlus 是空对象，故临时挂一个记录用的假 ElNotification。
+  const fakeInsts = []
+  sandbox.ElementPlus.ElNotification = (opts) => {
+    const inst = { opts: opts, closed: false, close() { this.closed = true } }
+    fakeInsts.push(inst)
+    return inst
+  }
+  EN.notify({ title: 'T', lines: ['L'] })
+  check(fakeInsts.length === 1 && fakeInsts[0].opts.duration === 0,
+    'ErrorNotice.notify 的通知必须 duration: 0（桌面无 DevTools，自动消失等于没报错）')
+  check(fakeInsts[0].opts.showClose === true, 'ErrorNotice.notify 的通知必须可手动关闭（showClose）')
+  const fake = D({ config: { url: '/x', method: 'get' }, response: { status: 500, data: { message: 'boom' } } })
+  for (let i = 0; i < EN.MAX_LIVE + 3; i++) EN.notifyApiError(fake)
+  check(fakeInsts.length === EN.MAX_LIVE + 4, 'notify 每次都应新建一条通知实例')
+  check(fakeInsts[1].closed === true,
+    '超过 MAX_LIVE 后应关闭最早的一条（批量请求全失败时不能糊满整屏）')
+  check(fakeInsts[fakeInsts.length - 1].closed === false, '最新一条通知不应被立即关闭')
+  delete sandbox.ElementPlus.ElNotification
+}
 
 if (errs.length) {
   console.log('前端装载冒烟 不通过：')

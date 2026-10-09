@@ -14,17 +14,18 @@
   <script src="/static/vendor/element-plus-icons-vue.min.js"></script>
   <script src="/static/vendor/element-plus-zh-cn.min.js"></script>
   <script src="/static/vendor/axios.min.js"></script>
-  <script src="/static/pages/login.js"></script>
+  <!-- 桌面模式（Wails v3）适配层：环境探测 + EventSource 桥接；浏览器访问时自动跳过 -->
+  <script src="/static/wails-shim.js"></script>
+  <!-- 统一错误出口：app.js 的拦截器与全局 error/unhandledrejection 都经它弹出（必须早于 app.js 装载） -->
+  <script src="/static/error_notice.js"></script>
   <script src="/static/pages/overview.js"></script>
   <script src="/static/pages/hosts.js"></script>
   <script src="/static/pages/credentials.js"></script>
   <script src="/static/pages/audit.js"></script>
-  <script src="/static/pages/password.js"></script>
   <script src="/static/pages/templates.js?v=20260916"></script>
   <script src="/static/pages/deploy.js"></script>
   <script src="/static/pages/orchestration_drawer.js"></script>
   <script src="/static/pages/orchestrations.js"></script>
-  <script src="/static/pages/schedules.js"></script>
 
   <!-- ===== 套件部署：通用骨架（设计文档 §4.2 / §5.4）=====
        加载顺序：registry -> common/parts -> common 各分片 -> 模板片段。
@@ -114,6 +115,27 @@
   <script src="/static/pages/es_templates.js"></script>
   <script src="/static/pages/es.js"></script>
   <script src="/static/pages/sftp.js"></script>
+  <!-- MySQL 工具：树 / 结果网格 / 表详情 / AI 面板先于工作台，工作台先于页面 -->
+  <script src="/static/pages/mysql_tree.js"></script>
+  <script src="/static/pages/mysql_grid.js"></script>
+  <script src="/static/pages/mysql_table_detail.js"></script>
+  <script src="/static/pages/mysql_ai.js"></script>
+  <script src="/static/pages/mysql_logs.js"></script>
+  <script src="/static/pages/mysql_transfer_util.js"></script>
+  <script src="/static/pages/mysql_export.js"></script>
+  <script src="/static/pages/mysql_import.js"></script>
+  <script src="/static/pages/mysql_workbench.js"></script>
+  <script src="/static/pages/mysql.js"></script>
+  <!-- Redis 工具：共用函数 → 值预览 → key 浏览器 → 页面（顺序即依赖顺序） -->
+  <script src="/static/pages/redis_util.js"></script>
+  <script src="/static/pages/redis_value.js"></script>
+  <script src="/static/pages/redis_explorer.js"></script>
+  <script src="/static/pages/redis.js"></script>
+  <!-- 设置：三张卡片先于页面，由 SettingsPage 以 components 引用 -->
+  <script src="/static/pages/settings_ai.js"></script>
+  <script src="/static/pages/settings_platform.js"></script>
+  <script src="/static/pages/settings_system.js"></script>
+  <script src="/static/pages/settings.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>

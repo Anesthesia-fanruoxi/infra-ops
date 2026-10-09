@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<!-- error_notice.js 的渲染台：验证错误通知在真 Element Plus 下真的排得住。
+     参数：?kind=http404|http400|timeout|network|js|batch|empty&longpath=true
+     断言写在页面上，随 --dump-dom 一起被抓出来。 -->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>measure_error_notice</title>
+<link rel="stylesheet" href="../template/static/vendor/element-plus.css">
+<link rel="stylesheet" href="../template/static/style.css">
+<style>
+  body { margin: 0; font-family: system-ui, sans-serif; background: #f5f7fa; }
+  .probe { position: fixed; left: 8px; top: 8px; z-index: 9999; background: #fff;
+           border: 1px solid #dcdfe6; padding: 6px 8px; font: 12px monospace; white-space: pre; }
+  /* 量的是**终态**几何：Element Plus 的通知入场动画带 translateX(100%)，
+     无头环境下过渡不推进，量到的会是动画中途的位置（left≈视口宽），那是量台假象不是版式问题。
+     这里把 transition/animation 关掉还不够——Vue 的 appear 钩子仍可能晚一帧才摘掉
+     enter-from 类（实测同一场景三轮里飘 1 次）。故测量前显式把行内 transform 归零，
+     让几何与动画彻底解耦。 */
+  .el-notification { transition: none !important; animation: none !important; }
+</style>
+</head>
+<body>
+<div class="probe" id="probe">running…</div>
+<div id="probe-root" style="height: 1400px"></div>
+
+<script src="../template/static/vendor/vue.global.prod.js"></script>
+<script src="../template/static/vendor/element-plus.min.js"></script>
+<script src="../template/static/wails-shim.js"></script>
+<script src="../template/static/error_notice.js"></script>
+<script>
+const q = new URLSearchParams(location.search)
+const kind = q.get('kind') || 'http404'
+const longPath = q.get('longpath') === 'true'
+const out = []
+function ok(cond, name, detail) { out.push((cond ? 'PASS ' : 'FAIL ') + name + (detail ? ' | ' + detail : '')) }
+
+// 存活口径：ElNotification 关闭后要等 Vue leave 过渡结束才摘 DOM 节点，
+// 无头环境过渡不推进 ⇒ **DOM 节点数** 量不准（会偏大）。
+// 故真实判据是「live 数组里还剩几条」，即 error_notice 自己的账本；
+// 它才是通知条数的真实来源（超过上限时关闭的就是它）。
+const liveCount = () => ErrorNotice.liveCount()
+
+// 假路径：长路径用来逼出折行/截断，真实接口路径比这短
+const LONG = '/api/stacks/instances/128/run-detail?trace=' + 'x'.repeat(120)
+const apiErr = (over) => Object.assign({
+  config: { url: '/api/mysql/ai/config', method: 'get' },
+  response: { status: 404, data: { code: 404, message: '接口不存在：GET /api/mysql/ai/config' } }
+}, over || {})
+
+const cases = {
+  http404: () => ErrorNotice.notifyApiError(apiErr()),
+  http400: () => ErrorNotice.notifyApiError(apiErr({
+    config: { url: longPath ? LONG : '/api/redis/1/keys', method: 'post' },
+    response: { status: 409, data: { code: 409, message: '同名 Redis 连接已存在' } } })),
+  timeout: () => ErrorNotice.notifyApiError({
+    config: { url: '/api/mysql/1/export', method: 'post' },
+    code: 'ECONNABORTED', message: 'timeout of 15000ms exceeded' }),
+  network: () => ErrorNotice.notifyApiError({
+    config: { url: '/api/redis/1/ping', method: 'get' }, message: 'Network Error' }),
+  js: () => ErrorNotice.notifyPlain('前端脚本异常 · redis_explorer.js:214', ["Cannot read properties of undefined (reading 'scanId')"]),
+  batch: () => { for (let i = 0; i < 9; i++) ErrorNotice.notifyApiError(apiErr()) },
+  empty: () => {}
+}
+
+Vue.createApp({
+  mounted() {
+    ;(cases[kind] || cases.http404)()
+    // 等通知渲染完再量
+    setTimeout(() => {
+      // 几何测量与入场动画解耦：强制清掉行内 transform 与动画类，
+      // 否则同一份代码三轮测量会飘一次（实测 js 场景），量台自身就成了不稳定源。
+      document.querySelectorAll('.el-notification').forEach((n) => {
+        n.style.transform = 'none'
+        n.classList.remove('el-notification-fade-enter-from')
+      })
+      const notes = document.querySelectorAll('.infra-error-notice')
+      ok(notes.length > 0 || kind === 'empty', kind + ': 通知已渲染', 'count=' + notes.length)
+      const alive = liveCount()
+      ok(alive <= ErrorNotice.MAX_LIVE, '存活通知数不超过 MAX_LIVE',
+        alive + ' <= ' + ErrorNotice.MAX_LIVE + ' (DOM节点 ' + notes.length + ')')
+      notes.forEach((n, i) => {
+        const r = n.getBoundingClientRect()
+        const cs = getComputedStyle(n)
+        ok(r.width > 300, '通知宽度足够容纳接口路径', i + ' w=' + Math.round(r.width))
+        ok(r.right <= innerWidth + 1 && r.top >= -1, '通知在视口内',
+          i + ' right=' + Math.round(r.right) + ' vw=' + innerWidth)
+        ok(cs.position === 'fixed', '通知为 fixed 定位（右上角堆叠）', cs.position)
+        const title = n.querySelector('.el-notification__title')
+        ok(title && /HTTP|无法连接|超时|前端脚本/.test(title.textContent),
+          '标题包含可定位信息', title ? title.textContent : '(无)')
+        const body = n.querySelector('.el-notification__content')
+        ok(body && body.textContent.trim().length > 0, '正文有说明文字',
+          body ? body.textContent.slice(0, 40) : '(无)')
+        // 不自动消失 ⇒ 通知元素不带 fade 移除，且关闭按钮在
+        ok(!!n.querySelector('.el-notification__closeBtn'), '有手动关闭按钮')
+      })
+      if (longPath && notes[0]) {
+        const body = notes[0].querySelector('.el-notification__content')
+        const nl = body.getBoundingClientRect()
+        ok(nl.right <= innerWidth, '长路径不撑破视口', Math.round(nl.right) + '<=' + innerWidth)
+      }
+      // 几何取证：通知挂在 body 下的容器是什么、定位怎么算的
+      const first = notes[0]
+      if (first) {
+        const r = first.getBoundingClientRect()
+        const host = first.parentElement
+        const hr = host ? host.getBoundingClientRect() : { left: 0, top: 0, width: 0, height: 0 }
+        const hcs = host ? getComputedStyle(host) : null
+        window.__geo = 'GEO vw=' + innerWidth + ' note.left=' + Math.round(r.left)
+          + ' note.right=' + Math.round(r.right) + ' note.w=' + Math.round(r.width)
+          + ' noteClass=' + first.className
+          + ' noteStyle=' + (first.getAttribute('style') || '-')
+          + ' host=' + (host ? host.tagName + '.' + host.className : 'none')
+          + ' hostPos=' + (hcs ? hcs.position : '-')
+          + ' hostLeft=' + Math.round(hr.left) + ' hostW=' + Math.round(hr.width)
+          + ' inlineLeft=' + (host ? host.style.left : '-')
+          + ' inlineRight=' + (host ? host.style.right : '-')
+          + ' bodyScrollW=' + document.body.scrollWidth
+          + ' htmlScrollW=' + document.documentElement.scrollWidth
+      }
+      document.getElementById('probe').textContent =
+        out.join('\n') + '\n' + (window.__geo || '') + '\nDONE ' + kind
+    }, 1500)
+  },
+  template: '<div style="height:100%"></div>'
+}).mount('#probe-root')
+</script>
+</body>
+</html>

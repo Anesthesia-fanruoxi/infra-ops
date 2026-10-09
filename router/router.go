@@ -7,20 +7,23 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
+	"runtime"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 
-	"infra-ops/api/auth"
 	"infra-ops/api/credential"
 	"infra-ops/api/deploy"
 	"infra-ops/api/host"
 	"infra-ops/api/orchestration"
 	"infra-ops/api/overview"
+	settingsapi "infra-ops/api/settings"
 	"infra-ops/api/sse"
 	"infra-ops/api/stack"
 	esapi "infra-ops/api/tool/es"
+	mysqlapi "infra-ops/api/tool/mysql"
+	redisapi "infra-ops/api/tool/redis"
 	regapi "infra-ops/api/tool/registry"
 	sftpapi "infra-ops/api/tool/sftp"
 	"infra-ops/common/crypto"
@@ -28,6 +31,7 @@ import (
 	"infra-ops/common/middleware"
 	"infra-ops/common/resp"
 	"infra-ops/common/sshx"
+	"infra-ops/common/version"
 	"infra-ops/store/repo"
 	"infra-ops/store/setting"
 )
@@ -37,7 +41,6 @@ type Deps struct {
 	Settings          *setting.SettingsRepo
 	CryptoService     *crypto.Service
 	SSHClient         *sshx.Client
-	Sessions          *middleware.SessionStore
 	Bus               *eventbus.Bus
 	DeployConcurrency int // <=0 表示按主机数自适应
 }
@@ -47,8 +50,25 @@ func Setup(staticFS fs.FS, deps Deps) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
 	r.Use(gin.Recovery())
+	// 方法不匹配时要落到 NoMethod 而不是被当成「路由不存在」，
+	// 否则「GET 写成了 POST」这类调用方笔误会收到 404，看不出是方法写错还是路径写错。
+	r.HandleMethodNotAllowed = true
+	// 未匹配路由 / 方法不允许：gin 默认返回空 body 的 404/405，
+	// 前端拦截器拿不到任何说明，只能显示 axios 造出来的
+	// `Request failed with status code 404`，看不出是哪条路径对不上。
+	// 这里补上「方法 + 路径 + 排查方向」，让错误自己说清楚自己。
+	// （真实踩过：/api/mysql/ai/config 上提为 /api/settings/ai 后前端漏改，
+	//   表现就是打开连接页直接报错，但看不出是哪条路径。）
+	r.NoRoute(func(c *gin.Context) {
+		resp.ErrHTTP(c, http.StatusNotFound, resp.CodeNotFound,
+			"接口不存在："+c.Request.Method+" "+c.Request.URL.Path)
+	})
+	r.NoMethod(func(c *gin.Context) {
+		resp.ErrHTTP(c, http.StatusMethodNotAllowed, resp.CodeBadRequest,
+			"方法不允许："+c.Request.Method+" "+c.Request.URL.Path)
+	})
 
-	// 审计中间件（全局，只对写操作生效）
+	// 审计中间件（全局，记录全部写操作及其结果）
 	auditRepo := repo.NewAuditRepo(deps.Bus)
 	r.Use(middleware.Audit(auditRepo))
 
@@ -58,27 +78,14 @@ func Setup(staticFS fs.FS, deps Deps) *gin.Engine {
 	})
 	r.GET("/api/version", func(c *gin.Context) {
 		resp.OK(c, gin.H{
-			"version":    "0.1.0-dev",
+			"version":    version.Version,
 			"build_time": "",
-			"go_version": "",
+			"go_version": runtime.Version(),
 		})
 	})
 
-	// 认证（login/logout 无需鉴权）
-	authHandler := auth.NewHandler(deps.Settings, deps.Sessions, auditRepo)
-	auth := r.Group("/api/auth")
-	{
-		auth.POST("/login", authHandler.Login)
-		auth.POST("/logout", authHandler.Logout)
-	}
-
-	// 需鉴权的接口；待改密时仅放行改密相关接口
+	// 业务接口（桌面单机模式，无鉴权）
 	protected := r.Group("/api")
-	protected.Use(middleware.Auth(deps.Sessions))
-	protected.GET("/auth/me", authHandler.Me)
-	protected.POST("/auth/password", authHandler.ChangePassword)
-	protected.Use(middleware.RequirePasswordChanged(deps.Settings, setting.SettingAuthMustChange,
-		"/api/auth/password", "/api/auth/me", "/api/auth/logout"))
 
 	// 凭据管理
 	credRepo := repo.NewCredentialRepo()
@@ -121,8 +128,7 @@ func Setup(staticFS fs.FS, deps Deps) *gin.Engine {
 
 	// 部署中心
 	deployRepo := repo.NewDeployRepo()
-	scheduleRepo := repo.NewDeployScheduleRepo()
-	deployTplHandler := deploy.NewDeployTemplateHandler(deployRepo, scheduleRepo)
+	deployTplHandler := deploy.NewDeployTemplateHandler(deployRepo)
 	tpl := protected.Group("/deploy/templates")
 	{
 		tpl.GET("", deployTplHandler.List)
@@ -130,29 +136,18 @@ func Setup(staticFS fs.FS, deps Deps) *gin.Engine {
 		tpl.PUT("/:id", deployTplHandler.Update)
 		tpl.DELETE("/:id", deployTplHandler.Delete)
 	}
-	deployTaskHandler := deploy.NewDeployHandler(deployRepo, scheduleRepo, hostRepo, credRepo,
-		deps.CryptoService, deps.SSHClient, deps.Bus, auditRepo, deps.DeployConcurrency)
-	deployTaskHandler.StartScheduler()
-	deploySchedHandler := deploy.NewDeployScheduleHandler(scheduleRepo, deployRepo, deployTaskHandler)
+	deployTaskHandler := deploy.NewDeployHandler(deployRepo, hostRepo, credRepo,
+		deps.CryptoService, deps.SSHClient, deps.Bus, deps.DeployConcurrency)
 	protected.POST("/deploy/run", deployTaskHandler.Run)
 	protected.GET("/deploy/registries", deployTaskHandler.Registries)
 	protected.GET("/deploy/tasks", deployTaskHandler.Tasks)
 	protected.GET("/deploy/tasks/:id", deployTaskHandler.TaskDetail)
-	sched := protected.Group("/deploy/schedules")
-	{
-		sched.GET("", deploySchedHandler.List)
-		sched.POST("", deploySchedHandler.Create)
-		sched.PUT("/:id", deploySchedHandler.Update)
-		sched.DELETE("/:id", deploySchedHandler.Delete)
-		sched.POST("/:id/toggle", deploySchedHandler.Toggle)
-		sched.GET("/:id/runs", deploySchedHandler.Runs)
-	}
 
 	// 任务编排
 	orchRepo := repo.NewOrchestrationRepo()
 	orchLogRepo := repo.NewOrchestrationLogRepo()
 	orchHandler := orchestration.NewOrchHandler(orchRepo, deployRepo, hostRepo, credRepo,
-		deps.CryptoService, deps.SSHClient, deps.Bus, auditRepo, orchLogRepo)
+		deps.CryptoService, deps.SSHClient, deps.Bus, orchLogRepo)
 	orch := protected.Group("/orchestrations")
 	{
 		orch.GET("", orchHandler.List)
@@ -166,7 +161,7 @@ func Setup(staticFS fs.FS, deps Deps) *gin.Engine {
 
 	// 套件部署
 	stackHandler := stack.NewStackHandler(repo.NewStackRepo(), deployRepo, hostRepo, credRepo,
-		deps.CryptoService, deps.SSHClient, deps.Bus, auditRepo, deps.DeployConcurrency)
+		deps.CryptoService, deps.SSHClient, deps.Bus, deps.DeployConcurrency)
 	stacks := protected.Group("/stacks")
 	{
 		stacks.GET("", stackHandler.List)
@@ -222,7 +217,7 @@ func Setup(staticFS fs.FS, deps Deps) *gin.Engine {
 	// 工具-Elasticsearch 连接与浏览
 	esRepo := repo.NewESRepo()
 	esViewRepo := repo.NewESViewRepo()
-	esHandler := esapi.NewHandler(esRepo, deps.CryptoService).WithViewRepo(esViewRepo).WithAuditRepo(auditRepo)
+	esHandler := esapi.NewHandler(esRepo, deps.CryptoService).WithViewRepo(esViewRepo)
 	es := protected.Group("/es")
 	{
 		es.GET("", esHandler.List)
@@ -287,6 +282,85 @@ func Setup(staticFS fs.FS, deps Deps) *gin.Engine {
 		sftp.GET("/:id/download", sftpHandler.Download)
 		sftp.DELETE("/:id/delete", sftpHandler.Remove)
 		sftp.POST("/:id/rename", sftpHandler.Rename)
+	}
+
+	// 工具-MySQL 连接、库表浏览与 SQL 执行
+	mysqlRepo := repo.NewMySQLRepo()
+	mysqlHandler := mysqlapi.NewHandler(mysqlapi.Deps{
+		Repo:     mysqlRepo,
+		AIRepo:   repo.NewMySQLAIRepo(),
+		LogRepo:  repo.NewMySQLLogRepo(),
+		HostRepo: hostRepo,
+		CredRepo: credRepo,
+		CryptoS:  deps.CryptoService,
+		SSHC:     deps.SSHClient,
+		Settings: deps.Settings,
+	})
+	my := protected.Group("/mysql")
+	{
+		my.GET("", mysqlHandler.List)
+		my.POST("", mysqlHandler.Create)
+		my.PUT("/:id", mysqlHandler.Update)
+		my.DELETE("/:id", mysqlHandler.Delete)
+		my.GET("/:id/ping", mysqlHandler.Ping)
+		my.GET("/:id/databases", mysqlHandler.Databases)
+		my.GET("/:id/tables", mysqlHandler.Tables)
+		my.GET("/:id/columns", mysqlHandler.Columns)
+		my.GET("/:id/table", mysqlHandler.TableDetail)
+		my.GET("/:id/mode", mysqlHandler.GetMode)
+		my.PUT("/:id/mode", mysqlHandler.SetMode)
+		my.POST("/:id/query", mysqlHandler.Query)
+		// AI：接入配置（全局）+ 语义目录 + 自然语言生成 SQL
+		// AI 接入配置已上提为平台设置（/api/settings/ai），工具内不再自带配置读写接口
+		my.GET("/:id/ai/catalog", mysqlHandler.GetCatalog)
+		my.POST("/:id/ai/catalog", mysqlHandler.BuildCatalog)
+		my.POST("/:id/ai/sql", mysqlHandler.GenerateSQL)
+		// 使用记录：SQL 执行记录（人在工具里执行的语句）与 AI 调用记录（含 token 用量），各查各的
+		my.GET("/sql-logs", mysqlHandler.GetSQLLogs)
+		my.DELETE("/sql-logs", mysqlHandler.ClearSQLLogs)
+		my.GET("/ai/logs", mysqlHandler.GetAILogs)
+		my.DELETE("/ai/logs", mysqlHandler.ClearAILogs)
+		// 导入导出：边查边写 / 边读边执行，走本地文件（大文件不经 webview 缓冲）
+		my.POST("/:id/export", mysqlHandler.Export)
+		my.POST("/:id/import", mysqlHandler.Import)
+		my.GET("/:id/transfer/progress", mysqlHandler.TransferProgress)
+	}
+
+	// 工具-Redis 连接、key 浏览与值预览（只读工具，无写入门禁）
+	redisHandler := redisapi.NewHandler(redisapi.Deps{
+		Repo:     repo.NewRedisRepo(),
+		HostRepo: hostRepo,
+		CredRepo: credRepo,
+		CryptoS:  deps.CryptoService,
+		SSHC:     deps.SSHClient,
+	})
+	rd := protected.Group("/redis")
+	{
+		rd.GET("", redisHandler.List)
+		rd.POST("", redisHandler.Create)
+		rd.PUT("/:id", redisHandler.Update)
+		rd.DELETE("/:id", redisHandler.Delete)
+		rd.GET("/:id/ping", redisHandler.Ping)
+		rd.GET("/:id/databases", redisHandler.Databases)
+		// key 浏览：结尾模糊匹配 + 游标会话（首次 / 更多 / 全部共用一个接口）
+		rd.POST("/:id/keys", redisHandler.Keys)
+		rd.GET("/:id/key", redisHandler.Key)
+	}
+
+	// 平台设置：AI 接入、运行参数与系统信息（设置页唯一的入口，任何功能要调模型都走这套配置）
+	settingsHandler := settingsapi.NewHandler(settingsapi.Deps{
+		Settings: deps.Settings,
+		CryptoS:  deps.CryptoService,
+	})
+	st := protected.Group("/settings")
+	{
+		st.GET("/ai", settingsHandler.GetAI)
+		st.PUT("/ai", settingsHandler.SaveAI)
+		st.POST("/ai/test", settingsHandler.TestAI)
+		st.POST("/ai/models", settingsHandler.ListAIModels)
+		st.GET("/platform", settingsHandler.GetPlatform)
+		st.PUT("/platform", settingsHandler.SavePlatform)
+		st.GET("/system", settingsHandler.GetSystem)
 	}
 
 	// 总览 & 审计日志（审计日志统一走 /api/sse/audits 单一查询流）
