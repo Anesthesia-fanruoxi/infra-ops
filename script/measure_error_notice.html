@@ -60,6 +60,18 @@ const cases = {
     config: { url: '/api/redis/1/ping', method: 'get' }, message: 'Network Error' }),
   js: () => ErrorNotice.notifyPlain('前端脚本异常 · redis_explorer.js:214', ["Cannot read properties of undefined (reading 'scanId')"]),
   batch: () => { for (let i = 0; i < 9; i++) ErrorNotice.notifyApiError(apiErr()) },
+  // benign：浏览器布局噪音（sftp 页实测）必须被全局钩子丢弃，一次通知都不出
+  benign: () => {
+    ErrorNotice.attachGlobalHooks()
+    // 手工派发真实事件对象：走的就是线上 window error 钩子那一条路
+    window.dispatchEvent(new ErrorEvent('error', {
+      message: 'ResizeObserver loop completed with undelivered notifications.',
+      filename: '/static/pages/sftp.js', lineno: 1
+    }))
+    window.dispatchEvent(new ErrorEvent('error', {
+      message: 'ResizeObserver loop limit exceeded', filename: 'x.js', lineno: 2
+    }))
+  },
   empty: () => {}
 }
 
@@ -75,7 +87,14 @@ Vue.createApp({
         n.classList.remove('el-notification-fade-enter-from')
       })
       const notes = document.querySelectorAll('.infra-error-notice')
-      ok(notes.length > 0 || kind === 'empty', kind + ': 通知已渲染', 'count=' + notes.length)
+      ok(notes.length > 0 || kind === 'empty' || kind === 'benign', kind + ': 通知已渲染', 'count=' + notes.length)
+      if (kind === 'benign') {
+        ok(liveCount() === 0 && notes.length === 0,
+          'ResizeObserver 噪音被全局钩子完全丢弃（不弹任何通知）',
+          'live=' + liveCount() + ' dom=' + notes.length)
+        document.getElementById('probe').textContent = out.join('\n') + '\nDONE ' + kind
+        return
+      }
       const alive = liveCount()
       ok(alive <= ErrorNotice.MAX_LIVE, '存活通知数不超过 MAX_LIVE',
         alive + ' <= ' + ErrorNotice.MAX_LIVE + ' (DOM节点 ' + notes.length + ')')

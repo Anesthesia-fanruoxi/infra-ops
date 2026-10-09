@@ -108,6 +108,18 @@
     }
   }
 
+  // 浏览器自身的布局噪音不是页面异常：ResizeObserver 一帧内的多次尺寸调整会让
+  // Chrome 抛「ResizeObserver loop completed with undelivered notifications」
+  // （旧版措辞为 loop limit exceeded），通知下一帧会自动送达，无实际影响、
+  // 也无法在页面侧修复。这类消息在全局钩子处直接丢弃——sftp 页实测弹过一次，
+  // 用户看到这种「异常」只会困惑，而且它不代表任何功能坏了。
+  const BENIGN_NOISE_RE = /^ResizeObserver loop (completed with undelivered notifications|limit exceeded)\b/i
+
+  // isBenignNoise：纯函数，门禁直接对它做行为断言。
+  function isBenignNoise(msg) {
+    return BENIGN_NOISE_RE.test(String(msg || ''))
+  }
+
   function notify(info) {
     if (typeof ElementPlus === 'undefined' || !ElementPlus.ElNotification) {
       // 兜底：通知组件都拿不到时，至少别把错误吞干净
@@ -144,6 +156,7 @@
     window.__infraErrorHooks = true
 
     window.addEventListener('error', function (ev) {
+      if (isBenignNoise(ev.message)) return
       const file = String(ev.filename || '').split('/').pop()
       const where = file ? file + (ev.lineno ? ':' + ev.lineno : '') : ''
       notifyPlain('前端脚本异常' + (where ? ' · ' + where : ''),
@@ -154,6 +167,7 @@
       const r = ev.reason
       // 走 api 出来的错误已由拦截器报过，别重复弹两条
       if (r && (r.config || r.response)) return
+      if (isBenignNoise(r && (r.message !== undefined ? r.message : r))) return
       notifyPlain('未处理的异步错误', [fmtErr(r)])
     })
   }
@@ -162,6 +176,7 @@
     MAX_LIVE: MAX_LIVE,
     STATUS_HINT: STATUS_HINT,
     describeApiError: describeApiError,
+    isBenignNoise: isBenignNoise,
     notify: notify,
     notifyApiError: notifyApiError,
     notifyPlain: notifyPlain,

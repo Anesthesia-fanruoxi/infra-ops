@@ -700,12 +700,17 @@ const rSrc = {}
 for (const rel of [R_UTIL, R_VAL, R_EXP, R_PAGE]) rSrc[rel] = ((sources.find(s => s[0] === rel)) || [])[1] || ''
 
 // 16a. 空匹配串必须被拦（前端挡在按钮与入口，后端再挡一次）
-check(/ElMessage\.warning\([^)]*要匹配的结尾内容/.test(rSrc[R_EXP]),
+check(/ElMessage\.warning\([^)]*要匹配的开头内容/.test(rSrc[R_EXP]),
   'redis_explorer.js 的 search 必须显式拒绝空匹配串（留空等价于 KEYS *）')
-check(/:disabled="!suffix\.trim\(\)"/.test(rSrc[R_EXP]),
-  '「查询」按钮须以 suffix.trim() 为可用条件，空串时不得可点')
-check(/\bsuffix\.trim\(\)/.test(rSrc[R_EXP]),
+check(/:disabled="!prefix\.trim\(\)"/.test(rSrc[R_EXP]),
+  '「查询」按钮须以 prefix.trim() 为可用条件，空串时不得可点')
+check(/\bprefix\.trim\(\)/.test(rSrc[R_EXP]),
   'redis_explorer.js 必须对匹配串做 trim 判定（只有空白字符也算空）')
+// 匹配语义是「前缀」：输入 ops: 要下发 ops:*，请求字段名也必须是 prefix
+check(/前缀匹配/.test(rSrc[R_EXP]) && !/结尾匹配/.test(rSrc[R_EXP]),
+  'redis_explorer.js 的匹配语义应为前缀匹配（输入开头内容，下发 前缀*），不得残留结尾匹配')
+check(/\bprefix:\s*s\b/.test(rSrc[R_EXP]),
+  'redis_explorer.js 的请求体必须用 prefix 字段（后端 scanReq.Prefix 按前缀拼 MATCH）')
 
 // 16b. 「展示全部」必须先有匹配结果。
 //      行为断言，不是文本断言：只读 canAll 的源码文本会假绿——
@@ -906,6 +911,32 @@ if (EN) {
   check(fakeInsts[1].closed === true,
     '超过 MAX_LIVE 后应关闭最早的一条（批量请求全失败时不能糊满整屏）')
   check(fakeInsts[fakeInsts.length - 1].closed === false, '最新一条通知不应被立即关闭')
+
+  // 浏览器噪音过滤：ResizeObserver 循环报错是 Chrome 一帧内未送达的布局通知（下一帧自动补送），
+  // 无实际影响也修不了——sftp 页实测被全局钩子弹成「前端脚本异常」，只会吓到用户。
+  // 钩子级行为断言：先打桩捕获真实监听器，再分别喂噪音与真异常，看 liveCount 账本。
+  check(typeof EN.isBenignNoise === 'function', 'ErrorNotice.isBenignNoise 缺失（浏览器布局噪音过滤）')
+  check(EN.isBenignNoise('ResizeObserver loop completed with undelivered notifications.')
+    && EN.isBenignNoise('ResizeObserver loop limit exceeded'),
+    'isBenignNoise 必须识别 ResizeObserver loop 的新旧两版措辞')
+  check(!EN.isBenignNoise("Cannot read properties of undefined (reading 'id')")
+    && !EN.isBenignNoise('ResizeObserver is not defined'),
+    'isBenignNoise 不得误伤真实异常（如 ResizeObserver 本身缺失）')
+  const hooks = {}
+  sandbox.addEventListener = (type, fn) => { hooks[type] = fn }
+  EN.attachGlobalHooks()
+  check(typeof hooks.error === 'function' && typeof hooks.unhandledrejection === 'function',
+    'attachGlobalHooks 必须注册 window error 与 unhandledrejection 两个钩子')
+  // 注意：liveCount 是滚动窗口（恒 ≤ MAX_LIVE），弹没弹要看实例创建数 fakeInsts.length 的增量
+  const baseN = fakeInsts.length
+  hooks.error({ message: 'ResizeObserver loop completed with undelivered notifications.',
+    filename: '/static/pages/sftp.js', lineno: 1 })
+  check(fakeInsts.length === baseN, 'window error 收到 ResizeObserver 噪音不得弹通知')
+  hooks.error({ message: 'Uncaught TypeError: x is not a function',
+    filename: '/static/pages/sftp.js', lineno: 9 })
+  check(fakeInsts.length === baseN + 1, 'window error 收到真实异常必须弹通知（过滤器不得扩大化）')
+  hooks.unhandledrejection({ reason: new Error('ResizeObserver loop completed with undelivered notifications.') })
+  check(fakeInsts.length === baseN + 1, 'unhandledrejection 收到 ResizeObserver 噪音同样不得弹')
   delete sandbox.ElementPlus.ElNotification
 }
 
