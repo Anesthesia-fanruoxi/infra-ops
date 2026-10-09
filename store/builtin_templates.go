@@ -308,6 +308,15 @@ var builtinTemplates = []builtinTemplate{
 		services:    `[{"name":"SFTP","url":"sftp://{{ip}}:{{port}}","web":false}]`,
 		path:        "builtin/install-sftp.sh",
 	},
+	{
+		name:        "部署 Certd",
+		description: "docker compose 部署 Certd 证书自动申请与部署平台（生成 compose.yml 落盘）：HTTP/HTTPS 双端口、数据目录持久化（数据库与证书都在该目录，请定期备份）、东八时区、watchtower 自动更新标签。忘记管理员密码可将「重置管理员密码」设为 yes 重建容器，密码重置为 123456（登录后请改回 no 重跑）。依赖 Docker。",
+		category:    "工具",
+		requires:    requiresDocker,
+		variables:   `[{"name":"port","label":"HTTP 端口","default":"7001","required":true},{"name":"https_port","label":"HTTPS 端口","default":"7002","required":true},{"name":"home_dir","label":"数据目录（证书与数据库，请定期备份）","default":"/data/certd","required":true},{"name":"reset_admin_passwd","label":"重置管理员密码(yes/no)","default":"no","required":true},{"name":"image","label":"镜像","default":"registry.cn-shenzhen.aliyuncs.com/handsfree/certd:latest","required":true}]`,
+		services:    `[{"name":"Certd 控制台","url":"http://{{ip}}:{{port}}","web":true}]`,
+		path:        "builtin/install-certd.sh",
+	},
 }
 
 // loadBuiltinScript 读取模板脚本并注入其引用的资源占位符。
