@@ -14,7 +14,11 @@ window.EsDiscover = {
     <el-button text @click="$emit('back')"><el-icon><Back /></el-icon></el-button>
     <span class="es-disc-view">{{view.name}}</span>
     <span class="mono es-disc-pattern">{{view.index_pattern}}</span>
-    <el-button style="margin-left:auto" @click="analyze = true">分析</el-button>
+    <!-- 时间排序：一个按钮切换方向（默认降序），点一下变升序再点切回；每次查询都带上该参数 -->
+    <el-button size="small" style="margin-left:auto" @click="toggleSort">
+      {{ sortOrder === 'asc' ? '时间 ↑ 升序' : '时间 ↓ 降序' }}
+    </el-button>
+    <el-button @click="analyze = true">分析</el-button>
   </div>
   <es-kql-bar :conn-id="conn.id" :view-id="view.id" v-model:kql="kql" v-model:start="start" v-model:end="end" @run="runSearch" />
   <div class="es-trunc-hint" v-if="windowTruncated">匹配 <b>{{total}}</b> 条，仅可浏览前 <b>{{windowSize}}</b> 条，请收窄时间范围或补充条件</div>
@@ -42,8 +46,8 @@ window.EsDiscover = {
           <div class="es-doc-body">
             <div v-for="kv in docFields(row)" :key="kv.k" class="es-doc-line">
               <span class="mono es-doc-key">{{kv.k}}</span><span class="es-doc-sep">:</span>
-              <span v-if="row.highlight && row.highlight[kv.k]" class="mono es-doc-val es-hl" v-html="renderHl(row.highlight[kv.k])"></span>
-              <span v-else class="mono es-doc-val">{{fmtVal(kv.v)}}</span>
+              <!-- 命中高亮：查询时刻从查询串快照命中项，每个命中项一个颜色（见 hlValue/extractHlTerms） -->
+              <span class="mono es-doc-val" v-html="hlValue(kv.v)"></span>
             </div>
           </div>
         </div>
@@ -63,6 +67,8 @@ window.EsDiscover = {
     return {
       fields: [], kql: '', start: '', end: '',
       timeField: (this.view && this.view.time_field) || '', selField: '',
+      sortOrder: 'desc', // 时间排序方向：desc=最新优先（默认）/ asc=最早优先
+      hlTerms: [], // 命中高亮项：只在「查询」时刻从查询串快照（打字不触发），每项一色
       resultId: '', hits: [], total: 0, windowSize: 1000, windowTruncated: false,
       histogram: [], histH: 90,
       pageSize: 100, loadingMore: false, searching: false,
@@ -122,6 +128,12 @@ window.EsDiscover = {
       this.end = fmt(now); this.start = fmt(new Date(now.getTime() - 86400000))
       this.runSearch()
     },
+    // toggleSort 时间排序切换：默认降序，点一下变升序（再点切回）；切换即按新方向重查
+    // （runSearch 每次查询恒带 sort_order，后端只认 asc/desc，非法值回落降序）
+    toggleSort() {
+      this.sortOrder = this.sortOrder === 'asc' ? 'desc' : 'asc'
+      this.runSearch()
+    },
     async runSearch() {
       if (!this.start || !this.end) { this.$message.warning('请选择时间范围'); return }
       this.searching = true
@@ -129,11 +141,14 @@ window.EsDiscover = {
         const r = await api.post('/es/' + this.conn.id + '/search', {
           view_id: this.view.id, kql: this.kql, start: this.start, end: this.end,
           page_size: this.pageSize,
+          sort_order: this.sortOrder || 'desc',
           // columns 传全部字段：_source 放开为全量（卡片展示完整日志），highlight 随之覆盖所有 text 字段
           columns: this.fields.map(f => f.path), histogram_interval: this.histInterval()
         })
         if (r.code === 0) {
           const d = r.data
+          // 高亮项按「本次真正执行的查询串」快照：之后在输入框打字不会改动已渲染的高亮
+          this.hlTerms = this.extractHlTerms(this.kql)
           // 新查询直接覆盖旧结果（后端缓存同键覆盖，前端同步重置增量状态）
           this.resultId = d.result_id; this.hits = d.hits || []
           this.total = d.total; this.windowSize = d.window
@@ -204,6 +219,56 @@ window.EsDiscover = {
       if (v === null || v === undefined) return '—'
       return typeof v === 'object' ? JSON.stringify(v) : String(v)
     },
+    // ---- 命中高亮：只在「查询」时刻从查询串快照命中项（打字不触发），每个命中项一个颜色 ----
+    // extractHlTerms 提取查询串里的命中项：引号短语整体、field:value 取「取值」部分、裸词；
+    // and / or / not 与字段名本身不参与。按出现顺序去重，最多 6 项（与色板容量一致）。
+    extractHlTerms(kql) {
+      const terms = []
+      const add = (t) => {
+        t = String(t == null ? '' : t).trim()
+        if (!t || /^(and|or|not)$/i.test(t) || t.length > 64) return
+        if (!terms.some(x => x.toLowerCase() === t.toLowerCase())) terms.push(t)
+      }
+      const re = /"([^"]*)"|'([^']*)'|([A-Za-z_][\w.]*)\s*:\s*(?:>=|<=|>|<)?\s*([^\s()",]+)|([^\s()\[\],:]+)/g
+      let m
+      while ((m = re.exec(String(kql || '')))) {
+        if (m[1] != null || m[2] != null) add(m[1] != null ? m[1] : m[2])
+        else if (m[4] != null) add(m[4].replace(/^[<>=!]+/, ''))
+        else if (m[5] != null) add(m[5].replace(/^[<>=!]+/, '').replace(/[<>=!]+$/, ''))
+      }
+      return terms.slice(0, 6)
+    },
+    escHtml(s) {
+      return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+    },
+    // wrapHl 单遍扫描把每个命中项包成带色 span（c0..c5 按查询串出现顺序）：
+    // 大小写不敏感、同一项所有出现处同色；重叠时更长的项优先（timeout 不被 time 吃掉）
+    wrapHl(text, terms) {
+      const src = String(text == null ? '' : text)
+      if (!terms.length) return this.escHtml(src)
+      const sorted = terms.slice().sort((a, b) => b.length - a.length)
+      let re = null
+      try {
+        re = new RegExp('(' + sorted.map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + ')', 'gi')
+      } catch (e) { return this.escHtml(src) }
+      let out = '', last = 0
+      src.replace(re, (match, _g, off) => {
+        out += this.escHtml(src.slice(last, off))
+        const ti = terms.findIndex(t => t.toLowerCase() === match.toLowerCase())
+        out += '<span class="es-hlchip c' + ((ti >= 0 ? ti : 0) % 6) + '">' + this.escHtml(match) + '</span>'
+        last = off + match.length
+        return match
+      })
+      out += this.escHtml(src.slice(last))
+      return out
+    },
+    // hlValue 文档值渲染：命中项着色，其余照原样转义
+    hlValue(v) {
+      const text = this.fmtVal(v)
+      if (text === '—') return '—'
+      return this.wrapHl(text, this.hlTerms || [])
+    },
     // 时间字段展示恒为北京时间（UTC+8，含毫秒）；仅展示换算，不改变任何请求口径
     fmtTime(v) {
       if (v === null || v === undefined || v === '') return '—'
@@ -214,12 +279,6 @@ window.EsDiscover = {
       const p = n => String(n).padStart(2, '0')
       return t.getUTCFullYear() + '-' + p(t.getUTCMonth() + 1) + '-' + p(t.getUTCDate()) + ' ' +
         p(t.getUTCHours()) + ':' + p(t.getUTCMinutes()) + ':' + p(t.getUTCSeconds()) + '.' + String(t.getUTCMilliseconds()).padStart(3, '0')
-    },
-    // 高亮片段渲染前必须转义 < > &（pre_tags 白名单只留 <mark>）
-    renderHl(frags) {
-      const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-      return (Array.isArray(frags) ? frags.join(' … ') : String(frags)).split(/(<mark>|<\/mark>)/)
-        .map(s => (s === '<mark>' || s === '</mark>') ? s : esc(s)).join('')
     },
     fmtBucket(b) {
       if (!b || !b.key) return ''

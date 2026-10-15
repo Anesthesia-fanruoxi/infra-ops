@@ -1,14 +1,13 @@
 // ai_catalog.go 表语义目录：按库读表与字段注释 → 分批交给模型归纳用途与字段含义 → 落库缓存。
 // token 约法：输入用紧凑 JSON（缩进只给眼睛看，进模型就是白花），输出用 notes 顺序数组
 // （字段名输入里已有，不复述）+ 长度双限（purpose 30 字 / note 20 字）+「注释清楚就照抄」。
-// 类型标记：目录同时记下每个字段的真实列类型，生成 SQL 时据此把相对时间自适应成
-// 日期字面量或 Unix 时间戳；int 时间戳列落库前抽一条真实值探测单位（秒 / 毫秒）一并记下。
+// 类型标记：目录同时记下每个字段的真实列类型，生成 SQL 时时间条件只有两种写法——
+// 日期时间类型换算成日期字面量；int 时间戳统一按毫秒（13 位）换算。全过程不读取任何表数据。
 package mysql
 
 import (
 	"context"
 	"crypto/sha256"
-	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -42,8 +41,6 @@ type columnBrief struct {
 	Type    string `json:"type"`
 	Key     string `json:"key,omitempty"`
 	Comment string `json:"comment,omitempty"`
-	// Unit 时间戳单位（ms / s）：落库前由真实值探测填入，只在本地流转，不进模型请求
-	Unit string `json:"-"`
 }
 
 // catalogReply 模型返回的单表归纳结果。
@@ -394,8 +391,6 @@ func (h *Handler) buildSchemaCatalog(ctx context.Context, conn *model.MySQLConn,
 					state.Failed++
 					continue
 				}
-				// 落库前对时间相关 int 列抽一条真实值，探测存的是秒还是毫秒（写穿到 brief 的列切片）
-				probeTimestampUnits(ctx, sess.db, schema, b.Table, b.Columns)
 				if err := h.aiRepo.UpsertCatalog(conn.ID, buildCatalogEntry(schema, b, fps[i], r)); err != nil {
 					state.Failed++
 					continue
@@ -518,7 +513,7 @@ func catalogDigest(replies []catalogReply) string {
 
 // buildCatalogEntry 把模型返回对齐到真实字段：以库里的字段顺序为准，notes 按下标回填；
 // 数量不符（模型没按约定给全）时整表退回原注释，避免错位把 A 字段的说明挂到 B 字段上。
-// 字段的真实类型与时间戳单位随条目一并标记，供生成 SQL 时做时间格式自适应。
+// 字段的真实类型随条目一并标记，供生成 SQL 时做时间格式自适应。
 func buildCatalogEntry(schema string, b tableBrief, fp string, r catalogReply) *model.MySQLAICatalogEntry {
 	aligned := len(r.Notes) == len(b.Columns)
 	cols := make([]model.MySQLAIColumn, 0, len(b.Columns))
@@ -530,7 +525,7 @@ func buildCatalogEntry(schema string, b tableBrief, fp string, r catalogReply) *
 		if note == "" {
 			note = c.Comment
 		}
-		cols = append(cols, model.MySQLAIColumn{Name: c.Name, Note: note, Type: c.Type, Unit: c.Unit})
+		cols = append(cols, model.MySQLAIColumn{Name: c.Name, Note: note, Type: c.Type})
 	}
 	return &model.MySQLAICatalogEntry{
 		SchemaName:  schema,
@@ -539,46 +534,4 @@ func buildCatalogEntry(schema string, b tableBrief, fp string, r catalogReply) *
 		Columns:     cols,
 		Fingerprint: fp,
 	}
-}
-
-// probeTimestampUnits 对时间相关的 int 列各抽一条正值样本，写回时间戳单位（s / ms）。
-// 传进来的是 brief 的列切片，改动直接落回待入库的条目；探测不出（空表 / 超时 / 权限）留空，
-// 生成 SQL 时按秒级兜底。
-func probeTimestampUnits(ctx context.Context, db *sql.DB, schema, table string, cols []columnBrief) {
-	for j := range cols {
-		c := &cols[j]
-		if c.Unit != "" || intFamily(c.Type) == "" || !looksTemporalColumn(c.Name, c.Comment) {
-			continue
-		}
-		c.Unit = probeTimestampUnit(ctx, db, schema, table, c.Name)
-	}
-}
-
-// probeTimestampUnit 取该列第一条正值判断单位：>= 1e11（12 位起）必为毫秒
-// （毫秒到达 1e11 是 1973 年，秒级要 5138 年才够 12 位）；>= 1e8（1973 年）判秒。
-// MAX_EXECUTION_TIME 兜底防大表无索引列拖慢建目录；判不了返回空。
-func probeTimestampUnit(ctx context.Context, db *sql.DB, schema, table, col string) string {
-	q := fmt.Sprintf("SELECT /*+ MAX_EXECUTION_TIME(2000) */ `%s` FROM `%s`.`%s` WHERE `%s` > 0 LIMIT 1",
-		escapeIdent(col), escapeIdent(schema), escapeIdent(table), escapeIdent(col))
-	var v sql.NullInt64
-	if err := db.QueryRowContext(ctx, q).Scan(&v); err != nil || !v.Valid {
-		return ""
-	}
-	return timestampUnit(v.Int64)
-}
-
-// timestampUnit 按量级判定时间戳单位：12 位起为毫秒，8 位起为秒，其余（0 / 小值）判不了。
-func timestampUnit(v int64) string {
-	switch {
-	case v >= 100_000_000_000:
-		return "ms"
-	case v >= 100_000_000:
-		return "s"
-	}
-	return ""
-}
-
-// escapeIdent 反引号转义：名字来自 information_schema，防怪名破坏探测语句。
-func escapeIdent(s string) string {
-	return strings.ReplaceAll(s, "`", "``")
 }

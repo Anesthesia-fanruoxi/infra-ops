@@ -59,7 +59,8 @@ type Result struct {
 // Client Chat Completions 客户端。
 type Client struct {
 	cfg Config
-	hc  *http.Client
+	hc  *http.Client // 非流式（Chat / ListModels）：整体请求超时受 cfg.Timeout 控制
+	shc *http.Client // 流式（ChatStream）：不设整体超时，超时由空闲看门狗控制（见 stream.go）
 }
 
 // New 创建客户端；Timeout 未给定时取默认值。
@@ -67,7 +68,7 @@ func New(cfg Config) *Client {
 	if cfg.Timeout <= 0 {
 		cfg.Timeout = defaultTimeout
 	}
-	return &Client{cfg: cfg, hc: &http.Client{Timeout: cfg.Timeout}}
+	return &Client{cfg: cfg, hc: &http.Client{Timeout: cfg.Timeout}, shc: &http.Client{}}
 }
 
 // base 归一化出 API 根地址：去尾斜杠、剥离已带的具体端点。

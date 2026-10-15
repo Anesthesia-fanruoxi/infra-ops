@@ -45,6 +45,7 @@ type exportReq struct {
 	Sheet       string `json:"sheet"`  // xlsx 工作表名；留空取表名
 	BatchRows   int    `json:"batch_rows"`
 	BatchBytes  int    `json:"batch_bytes"`
+	StripSchema bool   `json:"strip_schema"` // INSERT 只写表名不带库名；查询照原样带库执行
 	ProgressKey string `json:"progress_key"`
 }
 
@@ -120,7 +121,7 @@ func (h *Handler) Export(c *gin.Context) {
 			resp.Fail(c, resp.CodeBadRequest, "无法从 SQL 推断目标表名，请手动填写表名")
 			return
 		}
-		job.table = table
+		job.table = insertTarget(table, plain, req.StripSchema)
 	}
 	if job.sheet == "" {
 		job.sheet = plain
@@ -315,6 +316,17 @@ func qualifyTable(schema, want, sqlText string) (qualified, plain string) {
 		return quoteIdent(name), name
 	}
 	return quoteIdent(schema) + "." + quoteIdent(name), name
+}
+
+// insertTarget 产出 INSERT 的目标表名。
+// strip=true 时只写表名不带库名：查询本身照原样带库执行，但 dump 里的 INSERT
+// 落到哪个库都能导——目标库在导入时再选（这正是「转储到另一个库」的场景）。
+// strip=false 保持限定名（`db`.`t`），导入时目标库必须一致。
+func insertTarget(qualified, plain string, strip bool) string {
+	if strip {
+		return quoteIdent(plain)
+	}
+	return qualified
 }
 
 // normalizeExportTarget 校验并补全导出路径。扩展名与格式不符时补上，

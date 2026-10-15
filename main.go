@@ -130,6 +130,10 @@ func main() {
 	// ES 数据视图异步同步：延迟 10s 先跑一次，此后每 4h 一轮
 	go esapi.NewViewSyncManager(cryptoSvc, repo.NewESRepo(), repo.NewESViewRepo()).Run(context.Background())
 
+	// ES 系统自带字段缓存：延迟 15s 探测一轮（错开上面的视图同步），此后每 24h 一轮。
+	// 生成 logstash 配置时读库即可 —— 不让一个纯本地的拼装动作去依赖集群在线
+	go esapi.NewFieldCacheManager(cryptoSvc, repo.NewESRepo(), repo.NewESFieldRepo()).Run(context.Background())
+
 	// 创建桌面应用与主窗口
 	winOpts := application.WindowsOptions{}
 	if hasArg("-cdp") {
@@ -171,8 +175,14 @@ func main() {
 		// --wails-draggable 拖拽区。保留默认的 DWM 装饰（阴影/圆角/边缘缩放/
 		// 最小化与贴靠动画不受影响）。
 		Frameless: true,
+		// 文件拖放入库：窗口接受外部文件拖放（WebView2 原生捕获、JS 回传真实路径），
+		// 命中带 data-file-drop-target 的元素后经 desktop/file_drop.go 转发给前端；
+		// 数据导入面板据此支持「把文件直接拖到面板上」。
+		EnableFileDrop: true,
 	})
 	window.Center()
+	// 拖放事件只到 Go 监听层，这里转发成前端事件（见 desktop/file_drop.go）
+	desktop.BindFileDrop(app, window)
 	app.RegisterService(application.NewService(desktop.NewSSEBridge(app, engine)))
 	app.RegisterService(application.NewService(desktop.NewFileService(app, window, sftpapi.NewHandler(repo.NewSFTPRepo(), cryptoSvc))))
 	// F12 开 DevTools：Wails 关掉了浏览器加速键且 Windows 不派发 key binding 事件，

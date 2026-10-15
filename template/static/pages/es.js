@@ -6,7 +6,9 @@ window.ESPage = {
     'es-index-tab': window.EsIndexTab,
     'es-views-tab': window.EsViewsTab,
     'es-lifecycle-tab': window.EsLifecycleTab,
-    'es-templates-tab': window.EsTemplatesTab
+    'es-templates-tab': window.EsTemplatesTab,
+    'es-grok-tab': window.EsGrokTab,
+    'es-import-tab': window.EsImportTab
   },
   template: `
 <div>
@@ -220,6 +222,14 @@ window.ESPage = {
         <el-tab-pane label="索引模板" name="templates" lazy>
           <es-templates-tab :conn="current" />
         </el-tab-pane>
+
+        <el-tab-pane label="Grok 解析" name="grok" lazy>
+          <es-grok-tab :conn="current" />
+        </el-tab-pane>
+
+        <el-tab-pane label="数据导入" name="import" lazy>
+          <es-import-tab :conn="current" />
+        </el-tab-pane>
       </el-tabs>
     </div>
   </template>
@@ -243,7 +253,9 @@ window.ESPage = {
         { name: 'indices', label: '索引' },
         { name: 'views', label: '数据视图' },
         { name: 'lifecycle', label: '生命周期' },
-        { name: 'templates', label: '索引模板' }
+        { name: 'templates', label: '索引模板' },
+        { name: 'grok', label: 'Grok 解析' },
+        { name: 'import', label: '数据导入' }
       ]
     }
   },

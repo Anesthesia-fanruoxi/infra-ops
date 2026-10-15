@@ -25,6 +25,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"infra-ops/api/shared"
 	"infra-ops/common/aiopenai"
 	"infra-ops/common/resp"
 	"infra-ops/model"
@@ -199,6 +200,13 @@ func (h *Handler) AnalyzeExplain(c *gin.Context) {
 	qcancel()
 
 	mode := h.modes.get(conn.ID, defaultMode(conn))
+
+	// —— 前置校验与重跑取计划都已通过：进入流式返回 ——
+	// 响应头一经发出，后续失败只能以 event: error 帧回传。
+	sw, ok := shared.NewSSEStream(c)
+	if !ok {
+		return
+	}
 	trace := h.beginTrace(aiTraceParams{
 		Kind:    model.AILogKindExplain,
 		Conn:    conn,
@@ -210,22 +218,41 @@ func (h *Handler) AnalyzeExplain(c *gin.Context) {
 	defer trace.done()
 	trace.row.Expr = truncateRunes(strings.TrimSpace(req.SQL), logSQLMax)
 
-	aiRes, err := client.Chat(c.Request.Context(), []aiopenai.Message{
+	// 流式草稿：逐段提取 summary / findings / suggestions / index_statements / optimized_sql
+	// 的字符串增量；数组字段带下标，前端按下标追加
+	scanner := &shared.JSONStreamScanner{}
+	aiRes, err := client.ChatStream(c.Request.Context(), []aiopenai.Message{
 		{Role: "system", Content: explainPromptHead},
 		{Role: "user", Content: fmt.Sprintf(explainUserPrompt, strings.TrimSpace(req.SQL), digest.RowCount, explainDigestMaxRows, strings.Join(digest.Lines, "\n"), explainTablesText(digest.Tables))},
+	}, func(chunk string) error {
+		scanner.Feed(chunk, func(ev shared.JSONStringEvent) {
+			switch ev.Field {
+			case "summary", "optimized_sql":
+				if ev.Index < 0 {
+					sw.Send("delta", gin.H{"field": ev.Field, "text": ev.Delta})
+				}
+			case "findings", "suggestions", "index_statements":
+				if ev.Index >= 0 {
+					sw.Send("delta", gin.H{"field": ev.Field, "index": ev.Index, "text": ev.Delta})
+				}
+			}
+		})
+		return nil
 	})
 	if err != nil {
 		trace.fail(err)
-		resp.Fail(c, resp.CodeInternal, err.Error())
+		sw.Send("error", gin.H{"message": err.Error()})
 		return
 	}
 	trace.fill(aiRes)
 	trace.row.Content = truncateRunes(aiRes.Content, logContentMax)
 
+	// —— 以下与原同步逻辑一致：清洗以流结束后的完整文本为准 ——
 	var reply explainReply
 	if err := unmarshalModelJSON(aiRes.Content, &reply); err != nil {
-		trace.fail(err)
-		resp.Fail(c, resp.CodeInternal, "解析模型返回失败: "+err.Error())
+		perr := fmt.Errorf("解析模型返回失败: %w", err)
+		trace.fail(perr)
+		sw.Send("error", gin.H{"message": perr.Error()})
 		return
 	}
 	findings, suggestions := reply.Findings, reply.Suggestions
@@ -239,7 +266,7 @@ func (h *Handler) AnalyzeExplain(c *gin.Context) {
 	if explainSameSQL(optSQL, stmts[0]) {
 		optSQL = "" // 模型把原句抄回：没有实际改动，不展示
 	}
-	resp.OK(c, model.MySQLAIExplainResult{
+	sw.Send("final", model.MySQLAIExplainResult{
 		Summary:         strings.TrimSpace(reply.Summary),
 		Findings:        findings,
 		Suggestions:     suggestions,

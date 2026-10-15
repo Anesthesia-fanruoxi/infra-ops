@@ -24,7 +24,8 @@ window.AIRecords = {
         { value: 'promql', label: '生成 PromQL' },
         { value: 'explain', label: '结果解读' },
         { value: 'sql', label: '生成 SQL' },
-        { value: 'catalog', label: '语义目录' }
+        { value: 'catalog', label: '语义目录' },
+        { value: 'grok', label: '生成 Grok' }
       ]
     },
     // 是否展示「菜单」列与按菜单汇总（审计页用）
@@ -210,9 +211,10 @@ window.AIRecords = {
       if (kind === 'explain') return '结果解读'
       if (kind === 'catalog') return '语义目录'
       if (kind === 'sql') return '生成 SQL'
+      if (kind === 'grok') return '生成 Grok'
       return kind || '未知'
     },
-    // 四类徽章各用一个色系（蓝 / 绿 / 紫 / 灰），审计页同屏出现时能直接扫出类型
+    // 类型徽章分色系（蓝 / 绿 / 靛），审计页同屏出现时能直接扫出类型；未登记的走灰底兜底
     kindClass(kind) {
       if (kind === 'promql') return 'vm'
       if (kind === 'explain') return 'host'

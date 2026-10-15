@@ -43,6 +43,12 @@ window.MySQLExport = {
         <span class="mysql-transfer-hint">{{ isDump ? '默认转储回原表，可改' : (insertTable ? '从 SQL 推断，可改' : '未能从 SQL 推断，请手填') }}</span>
       </div>
 
+      <div class="mysql-transfer-row" v-if="isSQL">
+        <span class="mysql-transfer-label">去掉库名</span>
+        <el-checkbox v-model="stripSchema" :disabled="busy">INSERT 只写表名，不带库名前缀</el-checkbox>
+        <span class="mysql-transfer-hint">查询照原样带库执行；dump 落到哪个库都能导，目标库导入时再选</span>
+      </div>
+
       <div class="mysql-transfer-row" v-if="isXLSX">
         <span class="mysql-transfer-label">工作表名</span>
         <el-input v-model="sheet" size="small" :placeholder="plainTable || '结果'" style="width:220px" />
@@ -96,6 +102,7 @@ window.MySQLExport = {
       open: true,
       format: 'sql',
       insertTable: '',
+      stripSchema: false,
       sheet: '',
       batchRows: 200,
       batchOptions: [100, 200, 500, 1000],
@@ -175,6 +182,7 @@ window.MySQLExport = {
           table: this.insertTable.trim(),
           sheet: this.sheet.trim(),
           batch_rows: this.batchRows,
+          strip_schema: this.stripSchema,
           progress_key: key
         }, { timeout: 0 })
         if (!r || r.code !== 0) { this.error = (r && r.message) || '导出失败'; return }

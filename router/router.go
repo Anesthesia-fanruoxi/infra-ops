@@ -219,7 +219,9 @@ func Setup(staticFS fs.FS, deps Deps) *gin.Engine {
 	// 工具-Elasticsearch 连接与浏览
 	esRepo := repo.NewESRepo()
 	esViewRepo := repo.NewESViewRepo()
-	esHandler := esapi.NewHandler(esRepo, deps.CryptoService).WithViewRepo(esViewRepo)
+	esHandler := esapi.NewHandler(esRepo, deps.CryptoService).WithViewRepo(esViewRepo).
+		WithAI(deps.Settings, repo.NewAILogRepo()).
+		WithFieldCache(repo.NewESFieldRepo())
 	es := protected.Group("/es")
 	{
 		es.GET("", esHandler.List)
@@ -230,6 +232,8 @@ func Setup(staticFS fs.FS, deps Deps) *gin.Engine {
 		es.GET("/:id/overview", esHandler.Overview)
 		es.GET("/:id/nodes", esHandler.Nodes)
 		es.GET("/:id/indices", esHandler.Indices)
+		// 索引页总数走独立请求：列表先渲染，总数位异步转圈等它回来
+		es.GET("/:id/indices/total", esHandler.IndicesTotal)
 		es.GET("/:id/indices/:index/mapping", esHandler.IndexMapping)
 		es.POST("/:id/index", esHandler.CreateIndex)
 		es.DELETE("/:id/index/:index", esHandler.DeleteIndex)
@@ -266,6 +270,30 @@ func Setup(staticFS fs.FS, deps Deps) *gin.Engine {
 		es.GET("/:id/component-templates", esHandler.ListComponentTemplates)
 		es.PUT("/:id/component-templates/:name", esHandler.PutComponentTemplate)
 		es.DELETE("/:id/component-templates/:name", esHandler.DeleteComponentTemplate)
+		// Grok 解析（本地引擎，不依赖集群；AI 走平台统一接入）
+		es.POST("/:id/grok/parse", esHandler.GrokParse)
+		es.POST("/:id/grok/ai", esHandler.GrokAI)
+		// 按已调通的 pattern 生成可直接粘贴的 Logstash filter（骨架本地拼装，mutate 可 AI 增强）
+		es.POST("/:id/grok/logstash", esHandler.GrokLogstash)
+		// 系统自带字段缓存：决定生成配置时 remove_field 删哪些（后台探测 + 人工补充）
+		es.GET("/:id/default-fields", esHandler.FieldCacheGet)
+		es.PUT("/:id/default-fields", esHandler.FieldCachePutExtra)
+		es.POST("/:id/default-fields/refresh", esHandler.FieldCacheRefresh)
+		// 数据导入（仅桌面端）：预览 → 两阶段导入 → 进度轮询 / 取消。
+		// 文件走原生对话框取本地路径、Go 侧流式读；进度照 mysql 的口径用
+		// 「注册表 + 轮询」而不是 SSE（要的是「一次请求一个流」的按需进度）。
+		es.POST("/:id/import/preview", esHandler.ImportPreview)
+		es.GET("/:id/import/exists", esHandler.ImportExists)
+		// 导入后核实：目标索引当前文档数（前端每 5 秒刷新一次、最长 1 分钟，确认全部写入）
+		es.GET("/:id/import/count", esHandler.ImportCount)
+		// 导入分析：手动触发的一条 SSE 流水线（识别文件类型 → 抽样 → AI 生成 pattern），
+		// 旁白与生成过程都摊在一条可读的日志流里
+		es.POST("/:id/import/analyze", esHandler.ImportAnalyze)
+		es.POST("/:id/import", esHandler.Import)
+		es.GET("/:id/import/progress", esHandler.ImportProgress)
+		es.POST("/:id/import/cancel", esHandler.ImportCancel)
+		// 跳过超阈值时的暂停决策：continue 继续导入 / abort 中止（转重新生成 + 删除重建）
+		es.POST("/:id/import/resume", esHandler.ImportResume)
 	}
 
 	// 工具-SFTP 连接、浏览与文件传输

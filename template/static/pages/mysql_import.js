@@ -26,7 +26,10 @@ window.MySQLImport = {
 
       <div class="mysql-transfer-row">
         <span class="mysql-transfer-label">目标库</span>
-        <el-input v-model="targetSchema" size="small" :placeholder="schema || '连接的默认库'" style="width:220px" />
+        <el-select v-model="targetSchema" size="small" filterable allow-create default-first-option
+          :loading="loadingDBs" placeholder="选择或输入库名" style="width:220px">
+          <el-option v-for="d in databases" :key="d" :value="d" :label="d" />
+        </el-select>
         <span class="mysql-transfer-hint">文件里没有库名前缀的语句会落到这里</span>
       </div>
 
@@ -85,6 +88,8 @@ window.MySQLImport = {
       open: true,
       source: '',
       targetSchema: '',
+      databases: [],
+      loadingDBs: false,
       batchSize: 500,
       batchOptions: [100, 500, 1000, 5000],
       onError: 'stop',
@@ -99,9 +104,25 @@ window.MySQLImport = {
   computed: {
     tu() { return window.MySQLTransferUtil }
   },
-  mounted() { this.targetSchema = this.schema || '' },
+  mounted() {
+    this.targetSchema = this.schema || ''
+    this.loadDatabases()
+  },
   beforeUnmount() { this.stopPolling() },
   methods: {
+    // loadDatabases 拉库清单给下拉选。拉不到（连接失败等）就退化为手输——
+    // allow-create 一直开着，清单只是加速输入，绝不拦导入。
+    async loadDatabases() {
+      this.loadingDBs = true
+      try {
+        const r = await api.get('/mysql/' + this.connId + '/databases')
+        if (r && r.code === 0) {
+          const sysDBs = ['information_schema', 'performance_schema', 'mysql', 'sys']
+          this.databases = (r.data?.list || []).filter(d => !sysDBs.includes(String(d).toLowerCase()))
+        }
+      } catch (e) { /* 清单是加速项，取不到不影响导入 */ }
+      finally { this.loadingDBs = false }
+    },
     payload(confirmed, key) {
       return {
         source: this.source,

@@ -53,6 +53,13 @@ func newESCClient(rawURL string, insecure bool, authType, username, password str
 
 // do 发起 HTTP 请求，返回状态码与响应体。
 func (c *escClient) do(ctx context.Context, method, path string, body []byte) (int, []byte, error) {
+	return c.doRaw(ctx, method, path, "application/json", body)
+}
+
+// doRaw 同 do，但可指定 Content-Type。
+// _bulk 必须用 application/x-ndjson —— 发成 application/json 时 ES 会整段当作
+// 一个 JSON 解析，报的错与真实原因（换行分隔的行格式）毫无关系，很难查。
+func (c *escClient) doRaw(ctx context.Context, method, path, contentType string, body []byte) (int, []byte, error) {
 	var reader io.Reader
 	if body != nil {
 		reader = bytes.NewReader(body)
@@ -61,8 +68,8 @@ func (c *escClient) do(ctx context.Context, method, path string, body []byte) (i
 	if err != nil {
 		return 0, nil, err
 	}
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
+	if body != nil && contentType != "" {
+		req.Header.Set("Content-Type", contentType)
 	}
 	if c.username != "" {
 		req.SetBasicAuth(c.username, c.password)

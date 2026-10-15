@@ -20,6 +20,8 @@
   <script src="/static/wails-shim.js"></script>
   <!-- 统一错误出口：app.js 的拦截器与全局 error/unhandledrejection 都经它弹出（必须早于 app.js 装载） -->
   <script src="/static/error_notice.js"></script>
+  <!-- AI 输出高亮：把模型结论里的数值 / 风险 / 正常 / 注意词与标识符着色（AI 面板 v-html 用） -->
+  <script src="/static/ai_highlight.js"></script>
   <script src="/static/pages/overview.js"></script>
   <script src="/static/pages/hosts.js"></script>
   <script src="/static/pages/credentials.js"></script>
@@ -117,6 +119,11 @@
   <script src="/static/pages/es_template_build.js"></script>
   <script src="/static/pages/es_template_quick.js"></script>
   <script src="/static/pages/es_templates.js"></script>
+  <!-- Logstash 配置区块是 Grok 面板的子组件，必须**先于** es_grok.js 装载：
+       组件在定义时就要取到 window.EsGrokLogstash，晚一行就是白屏（门禁锁了顺序） -->
+  <script src="/static/pages/es_grok_logstash.js"></script>
+  <script src="/static/pages/es_grok.js"></script>
+  <script src="/static/pages/es_import.js"></script>
   <script src="/static/pages/es.js"></script>
   <script src="/static/pages/sftp.js"></script>
   <!-- MySQL 工具：树 / 结果网格 / 表详情 / AI 面板先于工作台，工作台先于页面 -->

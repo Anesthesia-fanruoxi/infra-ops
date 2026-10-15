@@ -16,6 +16,9 @@ const (
 	esCodeTimeInvalid       = 4010
 	esCodeResultStale       = 4011
 	esCodeAnalyzeInvalid    = 4012
+	esCodeGrokInvalid       = 4016 // Grok：pattern 编译失败 / 输入非法（message 带 pattern 名与原因）
+	esCodeImportInvalid     = 4017 // 导入：文件不可读 / 索引名非法 / 规则编译失败
+	esCodeImportCanceled    = 4018 // 导入被用户取消（已写入的部分保留）
 )
 
 // 403/409 段：写操作白名单与冲突

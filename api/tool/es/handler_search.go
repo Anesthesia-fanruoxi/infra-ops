@@ -27,6 +27,8 @@ type searchReq struct {
 	Columns           []string `json:"columns"`
 	HistogramInterval string   `json:"histogram_interval"`
 	PageSize          int      `json:"page_size"`
+	// SortOrder 时间排序方向：asc = 最早优先；空/其余 = 降序（最新优先，默认口径）
+	SortOrder string `json:"sort_order"`
 }
 
 // newRequestID 短请求 ID，用于串联 debug 日志。
@@ -102,7 +104,7 @@ func (h *Handler) SearchKQL(c *gin.Context) {
 		resp.ErrHTTP(c, http.StatusBadRequest, esCodeTimeInvalid, "时间参数非法: "+terr.Error())
 		return
 	}
-	body, derr := BuildSearchBody(schema, req.KQL, startMs, endMs, req.Columns, req.HistogramInterval)
+	body, derr := BuildSearchBody(schema, req.KQL, startMs, endMs, req.Columns, req.HistogramInterval, req.SortOrder)
 	if derr != nil {
 		failDSLErr(c, derr)
 		return

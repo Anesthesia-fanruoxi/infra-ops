@@ -191,6 +191,29 @@ func TestQualifyTable(t *testing.T) {
 	}
 }
 
+// TestInsertTargetStrip 「去掉库名」开关：INSERT 只写表名（不带库名前缀），
+// 查询本身照原样带库执行 —— dump 落到哪个库都能导，目标库导入时再选。
+func TestInsertTargetStrip(t *testing.T) {
+	cases := []struct {
+		qualified, plain string
+		strip            bool
+		want             string
+	}{
+		{"`db`.`users`", "users", true, "`users`"},
+		{"`db`.`users`", "users", false, "`db`.`users`"},
+		// 表名带特殊字符时同样要过反引号转义，不能因为去了库名就裸拼
+		{"`db`.`weird-name`", "weird-name", true, "`weird-name`"},
+		{"`db`.`order`", "order", true, "`order`"},
+	}
+	for _, c := range cases {
+		got := insertTarget(c.qualified, c.plain, c.strip)
+		if got != c.want {
+			t.Errorf("insertTarget(%q,%q,%v) = %q，期望 %q",
+				c.qualified, c.plain, c.strip, got, c.want)
+		}
+	}
+}
+
 func TestNormalizeExportTarget(t *testing.T) {
 	dir := t.TempDir()
 

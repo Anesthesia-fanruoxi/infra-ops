@@ -94,6 +94,8 @@ window.MySQLWorkbench = {
       error: '',
       // 产生当前结果的 SQL：AI 分析（仅 EXPLAIN 类结果）以它为准，而不是编辑器现内容
       lastRunSql: '',
+      // 上一次 AI 追加进编辑器的那一段：AI 面板「追加生成」要按它做原位替换（见 onUseSQL）
+      lastAiSQL: '',
       running: false,
       // 正在发取消请求（防重复点；中断是毫秒级，只是兜个竞态）
       canceling: false,
@@ -179,12 +181,23 @@ window.MySQLWorkbench = {
     },
     // AI 生成的 SQL 追加进编辑器（编辑器在三个页签下都可见），不自动执行。
     // opts.auto = 生成后自动追加：留在 AI 页签看用量与涉及表，不切结果页。
-    // 追加而不覆盖：连续生成就是在拼一段可整段执行的脚本（每条语句自带分号，后端保证）。
+    // 首次生成追加而不覆盖：连续生成就是在拼一段可整段执行的脚本（每条语句自带分号，后端保证）。
+    // opts.replaceAi（AI 面板的「追加生成」）= 用新版本替换上一次 AI 追加的那一段：
+    // 追加的语义是「改进上一版」，堆着两版反而要人肉删；仅在编辑器末尾仍是上次那段时替换，
+    // 用户手改过就退回追加，绝不覆盖手写内容。
     onUseSQL(text, opts) {
       const add = String(text || '').trim()
       if (!add) return
       const cur = this.sql.replace(/\s+$/, '')
+      if (opts && opts.replaceAi && this.lastAiSQL && cur.endsWith(this.lastAiSQL)) {
+        const head = cur.slice(0, cur.length - this.lastAiSQL.length).replace(/\s+$/, '')
+        this.sql = head ? head + '\n\n' + add : add
+        this.lastAiSQL = add
+        ElMessage.success('已用新版本替换上一次 AI 生成的语句')
+        return
+      }
       this.sql = cur ? cur + '\n\n' + add : add
+      this.lastAiSQL = add
       if (!(opts && opts.auto)) this.tab = 'data'
       ElMessage.success((cur ? '已追加到' : '已填入') + '编辑器，确认后点「执行」')
     },

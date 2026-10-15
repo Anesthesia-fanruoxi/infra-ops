@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>measure · ES 控制台页面（集成）</title>
+  <link rel="stylesheet" href="../template/static/vendor/element-plus.css">
+  <link rel="stylesheet" href="../template/static/style.css">
+  <style>
+    body { margin: 0; background: #F5F7FA; }
+    #app { min-height: 100vh; }
+    #out { margin: 12px 24px; padding: 12px; background: #111827; color: #A7F3D0; font: 12px/1.6 monospace; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <!-- 高度链必须与真机**逐层一致**：.content > .page-fade > <页面组件根节点>。
+         这里曾多套了一层 div，于是 `.content > .page-fade:has(.es-workspace) > div` 命中的是
+         量台自己的包装层、而不是 ESPage 的根节点 —— .es-workspace 被当成内容撑高，
+         量出来的「pane 不能滚动」全是量台自己的假象（真机上这一层是命中的）。
+         量台结构一旦与真机差一层，全高布局的结论就全部作废。 -->
+    <div class="content" style="height:100vh">
+      <div class="page-fade">
+        <page-es ref="page" />
+      </div>
+    </div>
+  </div>
+  <pre id="out"></pre>
+<!--
+  用法（无头浏览器，跑真实页面组件的真实路径）：
+    "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe" --headless=new --disable-gpu \
+      --window-size=1440,900 --virtual-time-budget=15000 --dump-dom \
+      "file:///D:/project/go/infra-ops/script/measure_es_page.html?tab=grok"
+
+  场景（?tab=…）：overview / indices / views / lifecycle / templates / grok / all（逐个切一遍）
+
+  为什么需要它（这个台子是被一次线上空白逼出来的）：
+  子组件级量台（measure_es_grok.html）只挂 es-grok-tab 本身，绕过了
+  「es.js 的 tabs 数组 → 自定义页签按钮 → el-tabs v-model → el-tab-pane(lazy) → 组件注册」这条路。
+  实测证明这条路会单独出问题（页签出来了、内容空白），所以必须有页面级集成台：
+  只有把真实 ESPage 挂起来、真的切页签，才能同时验证「页签是否出现」与「内容是否渲染」，以及
+  容器（.el-tabs__content 是 flex column + overflow:hidden）会不会把内容压掉。
+-->
+  <script src="../template/static/vendor/vue.global.prod.js"></script>
+  <script src="../template/static/vendor/element-plus.min.js"></script>
+  <script src="../template/static/vendor/element-plus-icons-vue.min.js"></script>
+  <script src="../template/static/vendor/element-plus-zh-cn.min.js"></script>
+
+  <!-- 被测页面（真实文件，顺序与 index.html 一致） -->
+  <script src="../template/static/pages/es_index.js"></script>
+  <script src="../template/static/pages/es_fields.js"></script>
+  <script src="../template/static/pages/es_kql.js"></script>
+  <script src="../template/static/pages/es_analyze.js"></script>
+  <script src="../template/static/pages/es_discover.js"></script>
+  <script src="../template/static/pages/es_views.js"></script>
+  <script src="../template/static/pages/es_lifecycle.js"></script>
+  <script src="../template/static/pages/es_template_build.js"></script>
+  <script src="../template/static/pages/es_template_quick.js"></script>
+  <script src="../template/static/pages/es_templates.js"></script>
+  <script src="../template/static/pages/es_grok_logstash.js"></script>
+  <script src="../template/static/pages/es_grok.js"></script>
+  <script src="../template/static/pages/es.js"></script>
+
+  <script>
+const QS = new URLSearchParams(location.search)
+const TAB = QS.get('tab') || 'grok'
+const SHOT = QS.get('shot') === 'true'
+// ai=1：走一遍「贴样例 → AI 生成」（含 phase 修正帧），用来目检 AI 区与校验行的版式
+const STAGE_AI = QS.get('ai') === '1'
+
+window.__errors = []
+window.addEventListener('error', function (e) {
+  window.__errors.push(String(e.message) + ' @ ' + String(e.filename || '?').split('/').pop() + ':' + String(e.lineno || 0))
+})
+window.addEventListener('unhandledrejection', function (e) {
+  window.__errors.push('rejection: ' + String((e.reason && e.reason.message) || e.reason))
+})
+window.__warns = []
+
+// 样例日志：与 PARSE_PAYLOAD 的行一一对应（贴进去解析/生成的结果才对得上）
+const SAMPLE_LINES = [
+  '2026-10-10 14:20:31 ERROR [order-service,trace=9f2c] com.example.OrderController - create order failed: timeout',
+  '2026-10-10 14:20:32 INFO [order-service,trace=9f2d] com.example.OrderService - order created ok',
+  '2026-10-10 14:20:33 WARN [order-service]',
+  '=== line without any timestamp or level ==='
+].join('\n')
+
+window.ElMessage = ElementPlus.ElMessage
+window.ElMessageBox = ElementPlus.ElMessageBox
+
+// ===================== mock 后端 =====================
+window.__gets = []
+function delay(ms, v) { return new Promise(function (res) { setTimeout(function () { res(v) }, ms) }) }
+const OVERVIEW = { status: 'green', version: '8.13.2', cluster_name: 'es-prod', nodes: 3, data_nodes: 3,
+  active_shards: 12, active_primary_shards: 6, unassigned_shards: 0, initializing_shards: 0, relocating_shards: 0 }
+window.api = {
+  get: function (url, opts) {
+    window.__gets.push(url)
+    if (url === '/es') return delay(10, { code: 0, data: { list: [], total: 0 } })
+    if (/\/overview$/.test(url)) return delay(10, { code: 0, data: OVERVIEW })
+    if (/\/nodes$/.test(url)) return delay(10, { code: 0, data: { list: [] } })
+    if (/\/indices$/.test(url)) return delay(10, { code: 0, data: { list: [] } })
+    if (/\/views$/.test(url)) return delay(10, { code: 0, data: { list: [] } })
+    if (/\/ilm\/policies$/.test(url)) return delay(10, { code: 0, data: { list: [] } })
+    if (/\/index-templates$/.test(url)) return delay(10, { code: 0, data: { list: [] } })
+    return delay(10, { code: 0, data: {} })
+  },
+  post: function (url) {
+    window.__gets.push('POST ' + url)
+    if (/\/grok\/parse$/.test(url)) {
+      return delay(10, { code: 0, data: PARSE_PAYLOAD })
+    }
+    return delay(10, { code: 0, data: {} })
+  }
+}
+
+// 解析结果：四行覆盖三种状态（整行命中 / 部分命中 / 未命中），右栏版式才有东西可看
+const F1 = [{ name: 'ts', value: '2026-10-10 14:20:31' }, { name: 'level', value: 'ERROR' },
+  { name: 'ctx', value: 'order-service,trace=9f2c' }, { name: 'logger', value: 'com.example.OrderController' },
+  { name: 'message', value: 'create order failed: timeout' }]
+const PARSE_PAYLOAD = {
+  total: 4, matched: 2, partial: 1, missed: 1, truncated: false,
+  patterns: ['%{TIMESTAMP_ISO8601:ts} %{LOGLEVEL:level} \\[%{DATA:ctx}\\] %{JAVACLASS:logger} - %{GREEDYDATA:message}'],
+  lines: [
+    { no: 1, raw: '2026-10-10 14:20:31 ERROR [order-service,trace=9f2c] com.example.OrderController - create order failed: timeout', matched: true, partial: false, pattern_index: 0, fields: F1 },
+    { no: 2, raw: '2026-10-10 14:20:32 INFO [order-service,trace=9f2d] com.example.OrderService - order created ok', matched: true, partial: false, pattern_index: 0, fields: F1.map(function (f) { return { name: f.name, value: f.value } }) },
+    { no: 3, raw: '2026-10-10 14:20:33 WARN [order-service]', matched: false, partial: true, pattern_index: 0, fields: [{ name: 'ts', value: '2026-10-10 14:20:33' }, { name: 'level', value: 'WARN' }] },
+    { no: 4, raw: '=== line without any timestamp or level ===', matched: false, partial: false, pattern_index: -1, fields: [] }
+  ]
+}
+
+// ===================== 流式 mock（AI 生成） =====================
+// 桌面桥的「POST + SSE」在量台里的等价物（与 wails-shim.js 的 __INFRA_SSE__.post 同签名）；
+// 帧脚本按真实协议投：delta 草稿 → phase（首稿未命中、正在修正）→ delta → final。
+window.__ssePosts = []
+function grokAIFinal() {
+  return {
+    patterns: ['%{TIMESTAMP_ISO8601:ts} %{LOGLEVEL:level} \\[%{DATA:ctx}\\] %{JAVACLASS:logger} - %{GREEDYDATA:message}'],
+    definitions: {},
+    explain: '标准 Java 应用日志：时间戳 + 级别 + 方括号上下文 + logger + 消息正文，末尾用 GREEDYDATA 兜住可变的消息部分。',
+    fields: [{ name: 'ts', desc: '日志时间' }, { name: 'level', desc: '日志级别' },
+      { name: 'ctx', desc: '应用与 trace 上下文' }, { name: 'logger', desc: '出日志的类' },
+      { name: 'message', desc: '消息正文' }],
+    verify: { ok: true, matched: 4, total: 4, partial: 0, missed: 0, attempts: 2, adopted_retry: true, error: '' },
+    usage: { calls: 2, total_tokens: 1687, elapsed_ms: 11421, source: 'api' }
+  }
+}
+window.__INFRA_SSE__ = {
+  post: function (url, body, handlers) {
+    window.__ssePosts.push({ url: url, body: body || {} })
+    const h = handlers || {}
+    const emit = function (type, obj) { if (typeof h.onEvent === 'function') h.onEvent(type, JSON.stringify(obj)) }
+    const t = []
+    if (STAGE_AI) {
+      t.push(setTimeout(function () { emit('delta', { field: 'patterns', index: 0, text: '%{TIMESTAMP_ISO8601:ts} \\| ' }) }, 30))
+      t.push(setTimeout(function () { emit('phase', { stage: 'retry', message: '未整行命中', matched: 0, total: 4 }) }, 60))
+      t.push(setTimeout(function () {
+        emit('delta', { field: 'patterns', index: 0, text: '%{TIMESTAMP_ISO8601:ts} %{LOGLEVEL:level} \\[%{DATA:ctx}\\] %{JAVACLASS:logger} - %{GREEDYDATA:message}' })
+        emit('delta', { field: 'explain', text: '标准 Java 应用日志：时间戳 + 级别 + 上下文 + logger + 消息。' })
+      }, 90))
+      t.push(setTimeout(function () { emit('final', grokAIFinal()) }, 140))
+    } else {
+      t.push(setTimeout(function () { emit('final', grokAIFinal()) }, 20))
+    }
+    t.push(setTimeout(function () { if (typeof h.onEnd === 'function') h.onEnd({ status: 200, contentType: 'text/event-stream' }) }, 200))
+    return { close: function () { t.forEach(clearTimeout) } }
+  }
+}
+
+const app = Vue.createApp({})
+app.use(ElementPlus)
+for (const k in ElementPlusIconsVue) { if (k !== 'default') app.component(k, ElementPlusIconsVue[k]) }
+// 连接列表视图用的空态组件：本台子只跑控制台视图，给个桩避免未注册警告干扰排查
+app.component('empty-state', { props: ['text'], template: '<div class="stub-empty">{{ text }}</div>' })
+app.component('page-es', window.ESPage)
+app.config.warnHandler = function (msg, vm, trace) { window.__warns.push(msg) }
+// 生产版 Vue 把渲染期异常交给 errorHandler（不抛到 window），
+// 组件渲染炸掉时表现为「页签在、内容空白且没有任何报错」，所以必须显式接住。
+app.config.errorHandler = function (err, vm, info) {
+  window.__errors.push('vue: ' + String((err && err.message) || err) + ' @' + String(info))
+}
+const vm = app.mount('#app')
+
+// ===================== 断言 =====================
+const L = []
+function push(s) { L.push(s) }
+function q(sel) { return document.querySelector(sel) }
+function qa(sel) { return [].slice.call(document.querySelectorAll(sel)) }
+function txt(el) { return el ? el.textContent.replace(/\s+/g, ' ').trim().slice(0, 120) : '—' }
+function geo(el) {
+  if (!el) return 'null'
+  const r = el.getBoundingClientRect()
+  return Math.round(r.width) + '×' + Math.round(r.height) + ' @' + Math.round(r.left) + ',' + Math.round(r.top)
+}
+function finish() { if (!SHOT) document.getElementById('out').textContent = L.join('\n') }
+function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms) }) }
+// 程序化填 v-model 输入框：直接改 value 不会触发 Vue 的更新，必须过一遍原生 setter + input 事件
+function setVal(el, v) {
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set
+  setter.call(el, v)
+  el.dispatchEvent(new Event('input', { bubbles: true }))
+}
+function btnByText(root, text) {
+  return [].slice.call(root.querySelectorAll('button')).filter(function (b) {
+    return b.textContent.replace(/\s+/g, '').indexOf(text) >= 0
+  })[0]
+}
+
+async function run() {
+  const page = vm.$refs.page
+  push('场景 tab=' + TAB + '  视口 ' + window.innerWidth + '×' + window.innerHeight)
+  // 直接进控制台视图（不起连接列表），并把当前页签设为被测项
+  page.enter({ id: 1, name: 'es-prod', url: 'http://10.20.30.51:9200', insecure: false, auth_type: 'basic' })
+  await sleep(250)
+  push('  组件注册: es-grok-tab=' + (typeof (window.ESPage.components || {})['es-grok-tab'])
+    + '  window.EsGrokTab=' + (typeof window.EsGrokTab))
+  push('  tabs = ' + (window.ESPage.computed.tabs.call({}).map(function (t) { return t.name + ':' + t.label }).join(' , ')))
+
+  // 模板编译自检：runtime 编译失败时报的是 SyntaxError（Invalid or unexpected token），
+  // 而生产版 Vue 只把它交给 errorHandler，界面表现就是「页签在、内容空白」。
+  // 逐个模板单独 compile 一次，把故障面缩到具体文件。
+  ;[['ESPage', window.ESPage], ['EsGrokTab', window.EsGrokTab]].forEach(function (pair) {
+    try { Vue.compile(pair[1].template); push('  模板编译 ' + pair[0] + ' = OK') } catch (e) {
+      push('  模板编译 ' + pair[0] + ' = FAIL: ' + e.message)
+      // 逐行差分：删掉哪一行之后能编译通过，那一行就是元凶（生成代码里的非法 token）
+      const lines = String(pair[1].template).split('\n')
+      const fixes = []
+      for (let i = 0; i < lines.length; i++) {
+        const t2 = lines.slice(0, i).concat(lines.slice(i + 1)).join('\n')
+        try { Vue.compile(t2); fixes.push(i + 1) } catch (e2) { /* 仍失败：不是这一行 */ }
+      }
+      push('      删掉后可编译的行号: ' + (fixes.join(',') || '（无单行可修复）'))
+      fixes.slice(0, 4).forEach(function (ln) { push('      L' + ln + ' = ' + lines[ln - 1].trim().slice(0, 170)) })
+    }
+  })
+
+  // 高度链自检：ES 工作台是全高布局（.es-workspace 靠 flex:1 撑），任何一层断掉
+  // 都会让 .el-tabs__content 变成 0 高 —— 现象就是「页签在、内容一片空白」。
+  // 先打印整条链，别在断点上猜。
+  // 高度链自检放在切到 grok 页签之后（页签是 lazy 的，提前跑会得到「未渲染」）：
+  // 从被测面板**向上走**逐层打印 —— 固定选择器列表会随 DOM 变化失效，向上走一定能看到断在哪一层。
+  // ES 工作台是全高布局，任何一层塌成内容高，页签内容区就变成「内容撑高 + overflow:hidden」，
+  // 现象是底部被静默裁掉、还滚不到（实测就踩了这个）。
+
+  const list = TAB === 'all' ? ['overview', 'indices', 'views', 'lifecycle', 'templates', 'grok'] : [TAB]
+  for (const t of list) {
+    page.activeTab = t
+    await sleep(320)
+    const panes = qa('.el-tabs__content > .el-tab-pane')
+    const shown = panes.filter(function (p) { return p.offsetParent !== null || p.offsetHeight > 0 })
+    const pane = shown[shown.length - 1]
+    const contentEl = pane && pane.firstElementChild
+    push('  [' + t + '] pane 总数=' + panes.length + ' 可见=' + shown.length
+      + '  可见 pane 子元素 = ' + (contentEl ? contentEl.tagName.toLowerCase() + '.' + contentEl.className : 'null')
+      + '  几何 = ' + geo(contentEl) + '  pane几何=' + geo(pane))
+    if (t === 'grok') {
+      push('      grok 内部: wrap=' + geo(q('.es-grok-wrap')) + '  grid=' + geo(q('.es-grok-grid'))
+        + '  textarea=' + qa('textarea').length + ' 个')
+      // 真走一遍「贴样例 → 点解析 / 点 AI 生成」：组件在页面里的接线（v-model、按钮、请求、SSE）
+      // 比单挂组件更接近真机，而且右栏有结果之后，stat 的 sticky 几何才量得到
+      const tas = qa('.es-grok-pane.is-input textarea')
+      if (tas.length >= 2) {
+        setVal(tas[0], SAMPLE_LINES)
+        if (STAGE_AI) {
+          const aiBtn = btnByText(q('.es-grok-pane.is-input'), 'AI生成')
+          if (aiBtn) { aiBtn.click(); await sleep(500) }
+          const patVal = String(q('.es-grok-pane.is-input textarea:nth-of-type(1)') ? tas[1].value : '')
+          push('      AI 生成后: 校验行 = ' + txt(q('.es-grok-ai-status'))
+            + ' | pattern 已回填 = ' + (patVal.indexOf('GREEDYDATA') >= 0 ? 'YES' : 'NO')
+            + ' | 生成后自动复跑解析 ' + window.__gets.filter(function (u) { return String(u).indexOf('grok/parse') >= 0 }).length + ' 次')
+          push('      字段解释 ' + qa('.es-grok-fgrid .es-grok-fitem').length + ' 条  网格列 = '
+            + (q('.es-grok-fgrid') ? getComputedStyle(q('.es-grok-fgrid')).gridTemplateColumns : '—'))
+        } else {
+          setVal(tas[1], '%{TIMESTAMP_ISO8601:ts} %{LOGLEVEL:level} \\[%{DATA:ctx}\\] %{JAVACLASS:logger} - %{GREEDYDATA:message}')
+          const btn = btnByText(q('.es-grok-pane.is-input'), '解析')
+          if (btn) { btn.click(); await sleep(260) }
+          push('      点「解析」后右栏: 卡片=' + qa('.es-grok-card').length + ' 张  统计条 = ' + txt(q('.es-grok-stat')))
+        }
+      }
+      const content = q('.reg-es-tabs .el-tabs__content')
+      push('      容器 .el-tabs__content = ' + geo(content) + '  overflow=' + getComputedStyle(content).overflow)
+      ;(function () {
+        let el = q('.es-grok-wrap'), depth = 0
+        while (el && depth < 12) {
+          const cs = getComputedStyle(el)
+          push('      链↑ ' + el.tagName.toLowerCase() + '.' + (String(el.className).split(' ')[0] || '-')
+            + ' ' + geo(el) + ' h=' + cs.height + ' disp=' + cs.display
+            + ' flex=' + cs.flex + ' minH=' + cs.minHeight + ' ovf=' + cs.overflow)
+          if (el.classList && el.classList.contains('content')) break
+          el = el.parentElement
+          depth++
+        }
+      })()
+      const wrap = q('.es-grok-wrap')
+      if (wrap) push('      .es-grok-wrap height=' + getComputedStyle(wrap).height + '  scrollH=' + wrap.scrollHeight + '  clientH=' + wrap.clientHeight)
+      const grid = q('.es-grok-grid')
+      if (grid) push('      .es-grok-grid 列数=' + getComputedStyle(grid).gridTemplateColumns)
+      // —— 两栏各自滚动：这是本次布局改动的核心契约 ——
+      // ① pane 必须与可用高度等高（align-items: stretch），不是按内容撑高
+      // ② pane 的 overflow-y 必须是 auto，否则内容超出时会被静默裁掉（原来就是整页滚、右栏留白）
+      // ③ 塞 2000px 假内容进去：**页面本身不许被撑长**，只有左栏出现内部滚动
+      //（③ 是「数据不够长量不出问题」的防呆：不塞满，pane 的 scrollH 永远等于 clientH，断言假绿）
+      const panes = qa('.es-grok-pane')
+      push('      两栏: ' + panes.map(function (p) {
+        const cs = getComputedStyle(p)
+        return String(p.className).split(' ').pop() + '=' + Math.round(p.getBoundingClientRect().height)
+          + '(ovfY=' + cs.overflowY + ')'
+      }).join(' , '))
+      const pageBefore = document.documentElement.scrollHeight
+      const left = q('.es-grok-pane.is-input')
+      if (left) {
+        const probe = document.createElement('div')
+        probe.id = 'fill-probe'
+        // 必须 flex-shrink:0：pane 是高度受限的 flex column，子项默认可被压缩，
+        // 不写死的话塞进去的 2000px 会被压成 0，量出来的「不可滚动」是假象
+        probe.style.cssText = 'flex:0 0 2000px'
+        left.appendChild(probe)
+        const pageAfter = document.documentElement.scrollHeight
+        push('      塞 2000px 后: 左栏 scrollH=' + left.scrollHeight + ' clientH=' + left.clientHeight
+          + '  可滚动=' + (left.scrollHeight > left.clientHeight + 1 && getComputedStyle(left).overflowY === 'auto' ? 'YES' : 'NO')
+          + '  页面 scrollH ' + pageBefore + '→' + pageAfter
+          + '（页签内容区高 ' + Math.round((content ? content.getBoundingClientRect().height : 0))
+          + ' · 视口 ' + window.innerHeight + '）')
+        push('      ⇒ 页面未被撑长 = ' + (pageAfter <= pageBefore + 1 ? 'YES（滚动被关在左右栏里）' : 'NO（又被撑成整页滚动）'))
+        left.removeChild(probe)
+      }
+      // 统计条 sticky：滚动时要能盖住下面的卡片（底色不能透明），否则文字会从底下穿过去
+      const stat = q('.es-grok-stat')
+      if (stat) {
+        const cs = getComputedStyle(stat)
+        push('      统计条 position=' + cs.position + ' background=' + cs.backgroundColor)
+      }
+      // 有效底色：pane 自己一路透明，底色来自更外层（sticky 元素必须与它一致才看不出接缝）
+      let node = q('.es-grok-pane'), bg = ''
+      while (node) {
+        const c = getComputedStyle(node).backgroundColor
+        if (c && c !== 'rgba(0, 0, 0, 0)' && c !== 'transparent') { bg = c + ' ← .' + String(node.className).split(' ')[0]; break }
+        node = node.parentElement
+      }
+      push('      pane 有效底色 = ' + (bg || '未找到（一路透明）'))
+    }
+  }
+  push('Vue 警告 ' + window.__warns.length + ' 条' + (window.__warns.length ? ' -> ' + window.__warns.slice(0, 3).join(' | ') : ''))
+  push('JS 错误 ' + window.__errors.length + ' 条' + (window.__errors.length ? ' -> ' + window.__errors.join(' | ') : ''))
+  finish()
+}
+
+setTimeout(run, 300)
+  </script>
+</body>
+</html>

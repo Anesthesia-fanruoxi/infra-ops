@@ -93,6 +93,8 @@ type MetricsQueryDigest struct {
 }
 
 // MetricsAIExplainResult AI 解读查询结果。
+// 只有三段结构化结论：前端会对文本里的数值 / 异常 / 正常等关键信息做着色（ai_highlight.js），
+// 故这里不提供长文段——信息量交给 findings（每条带数字），排版交给前端。
 type MetricsAIExplainResult struct {
 	Summary     string             `json:"summary"`
 	Findings    []string           `json:"findings"`

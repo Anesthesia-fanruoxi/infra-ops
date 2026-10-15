@@ -114,3 +114,28 @@ type ESView struct {
 	CreatedAt    string `json:"created_at"`
 	UpdatedAt    string `json:"updated_at"`
 }
+
+// ESFieldCache 一个 ES 连接的「系统自带字段」缓存（生成 logstash 配置时删哪些字段用）。
+//
+// 为什么落库、而不是生成时现查：
+//   - 这份清单要从集群里探测（读版本 → 该版本的 ECS 组件模板 → 再核对集群里真实存在哪些），
+//     每次生成配置都打一遍集群既慢、又让一个纯本地的拼装动作依赖集群在线；
+//   - 它随版本变化得很慢（集群升级才会变），所以启动时探测一次、之后按周期刷新就够。
+//
+// Fields 与 Extra 分开存的原因不同：前者是探测出来的（会被下一轮覆盖），后者是人工登记的
+// （offset / logYear / logMillis 这类 ECS 之外的采集器字段），**任何一轮探测都不许动它**。
+type ESFieldCache struct {
+	ID        int64  `json:"id"`
+	ConnID    int64  `json:"conn_id"`
+	ESVersion string `json:"es_version"` // 探测时的集群版本，如 8.13.0
+	// Fields 自动发现：候选池 ∩ 该版本 ECS 定义里存在 ∩ 集群里真实存在
+	Fields []string `json:"fields"`
+	// Extra 人工补充：ECS 之外的采集器自定义字段，界面上可编辑
+	Extra []string `json:"extra"`
+	// Status ok | no_ecs（该版本没有 ECS 组件模板，退化为候选池）| failed
+	Status   string `json:"status"`
+	Error    string `json:"error"`
+	SyncedAt string `json:"synced_at"`
+	// UpdatedAt 只随 Extra 变化（探测覆盖的是 Fields，不算「人工改动」）
+	UpdatedAt string `json:"updated_at"`
+}

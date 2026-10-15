@@ -12,6 +12,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"regexp"
@@ -44,6 +45,25 @@ func NewSSEBridge(app *application.App, handler http.Handler) *SSEBridge {
 // rawURL 为应用内相对路径（如 /api/sse/hosts?tag=x）。
 // 订阅成功后数据经 sse:<clientID> 事件推送。
 func (b *SSEBridge) Open(clientID string, rawURL string) error {
+	return b.open(clientID, http.MethodGet, rawURL, nil)
+}
+
+// OpenPOST 订阅一个应用内 SSE 端点（POST + JSON 请求体）。
+//
+// 存在的原因：AI 生成类接口的上下文（问题、模式、上一轮结果）都在 POST body 里，
+// 而桥与前端消费方式（EventSource 封装）只发 GET；与其把上下文改道查询串
+// （长度与转义都是坑），不如让桥支持 POST。
+func (b *SSEBridge) OpenPOST(clientID string, rawURL string, body string) error {
+	// 请求体上限：防异常调用把内存拉满；正常 AI 请求（都是工具侧拼的提示词）远小于此
+	const maxBodyBytes = 4 << 20
+	if len(body) > maxBodyBytes {
+		return fmt.Errorf("请求体过大: %d 字节", len(body))
+	}
+	return b.open(clientID, http.MethodPost, rawURL, strings.NewReader(body))
+}
+
+// open 订阅的应用内请求公共路径：校验 → 注册 → 起转发行。
+func (b *SSEBridge) open(clientID, method, rawURL string, body io.Reader) error {
 	if !clientIDRe.MatchString(clientID) {
 		return fmt.Errorf("非法的订阅标识: %q", clientID)
 	}
@@ -51,13 +71,16 @@ func (b *SSEBridge) Open(clientID string, rawURL string) error {
 		return fmt.Errorf("非法的流地址: %q", rawURL)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://desktop.internal"+rawURL, nil)
+	req, err := http.NewRequestWithContext(ctx, method, "http://desktop.internal"+rawURL, body)
 	if err != nil {
 		cancel()
 		return err
 	}
 	req.Header.Set("Accept", "text/event-stream")
 	req.Header.Set("Cache-Control", "no-cache")
+	if method == http.MethodPost {
+		req.Header.Set("Content-Type", "application/json")
+	}
 
 	b.mu.Lock()
 	if _, exists := b.subs[clientID]; exists {

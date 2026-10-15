@@ -55,3 +55,7 @@ Thumbs.db
 *.log
 *.tmp
 *.temp
+
+# 渲染台临时产物（Edge 临时 profile 与截图）
+script/_shots/
+script/__measure_profile/

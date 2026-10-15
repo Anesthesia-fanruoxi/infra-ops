@@ -1,11 +1,11 @@
 // ai_sql.go 自然语言 → SQL。上下文取自语义目录，不直接读库。
 // 生成范围跟会话模式走：只读模式只给查询，可写模式才给写语句（执行侧另有门禁）。
 // 相对时间（今天 / 上周…）以提示词里注入的当前时间为基准换算成具体值；字段的时间类型标记
-// 在生成语义目录时已随目录写入上下文，换算写法据此自适应（日期字面量 / Unix 时间戳）；
-// int 时间戳列按目录里探测出的单位（秒 / 毫秒）换算。
+// 在生成语义目录时已随目录写入上下文：日期时间类型用日期字面量，int 时间戳统一按毫秒（13 位）换算。
 package mysql
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -13,6 +13,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"infra-ops/api/shared"
 	"infra-ops/common/aiopenai"
 	"infra-ops/common/resp"
 	"infra-ops/model"
@@ -29,7 +30,7 @@ const sqlPromptHead = `你是 MySQL 查询助手，负责把用户的自然语�
 4. 只用下面给出的表和字段，不要编造不存在的表或字段；
 5. 每条语句末尾都写分号；查询需要限制返回量时加 LIMIT；
 6. 用户提到「今天 / 昨天 / 本周 / 上周 / 最近 N 天 / 本月」这类相对时间时，按上面的当前时间换算成具体值写进 SQL，不要用 CURDATE()、NOW() 这类函数；同一天用「>= 当天 00:00:00 且 < 次日 00:00:00」表达；
-7. 时间条件的写法跟字段的类型标记走：[date] / [datetime] / [timestamp] 等日期时间类型用字符串字面量（如 '2026-10-09 00:00:00'）；[int 时间戳·毫秒] 换算成毫秒级（13 位）Unix 时间戳数字，[int 时间戳·秒] 或 [int 时间戳] 换算成秒级（10 位）数字；没有标记时按字段名与说明判断存法；
+7. 时间条件只有两种写法，跟字段的类型标记走：[date] / [datetime] / [timestamp] 等日期时间类型用字符串字面量（如 '2026-10-09 00:00:00'）；[int 时间戳] 一律换算成毫秒级（13 位）Unix 时间戳数字；没有类型标记时按字段名与说明判断存法，判断为 int 时间戳的同样按毫秒处理；
 8. 只写用户明确提出的条件，不要自行添加用户没提到的过滤（如 is_delete = 0、status = 1），即使是常见业务约定也不要加。
 输出结构：{"sql":"查询语句","tables":["用到的表名"],"explain":"一句话说明这条 SQL 做了什么"}`
 
@@ -72,6 +73,71 @@ type sqlReply struct {
 type aiSQLReq struct {
 	Schema   string `json:"schema" binding:"required"`
 	Question string `json:"question" binding:"required"`
+	// Prev 追加生成的上下文：Question 是最初那个需求（前端固定为首轮原文，不随后续轮次漂移），
+	// SQL 是最近一版生成结果。只带一轮——追加一次基本够用，上下文体积恒定。
+	Prev *aiSQLPrev `json:"prev"`
+}
+
+// aiSQLPrev 上一轮的生成结果（追加生成用）。
+type aiSQLPrev struct {
+	Schema   string   `json:"schema"`
+	Question string   `json:"question"`
+	SQL      string   `json:"sql"`
+	Tables   []string `json:"tables"`
+	Explain  string   `json:"explain"`
+}
+
+// sqlFollowupPrompt 追加生成的第二段用户消息：上一版 SQL 已作为 assistant 消息回灌，
+// 这里给「上一轮需求 + 本轮追加要求 + 当前目标库」——目标库可能被切过，必须以本次请求为准。
+const sqlFollowupPrompt = `当前目标库：%s
+最初的需求：%s
+最近一版 SQL：见上一条 JSON 的 sql 字段——它是按这个需求与后续追加要求逐步改出来的。
+用户在本轮提出追加要求：%s
+请在最近一版的基础上按追加要求修改，仍然成立的部分保持不变，按同样的 JSON 结构输出（sql / tables / explain 三个字段都要给全）。`
+
+// 追加上下文里文本字段的截断上限：只带一轮，但要防超长文本把上下文撑爆。
+const (
+	sqlPrevQuestionMax = 1000
+	sqlPrevTextMax     = 2000
+	sqlPrevExplainMax  = 500
+)
+
+// buildSQLFollowupMessages 组装追加生成的对话尾巴（assistant 上一版 + user 追加要求）。
+// 上一轮没有 SQL 时返回 nil，调用方按单轮生成处理。
+func buildSQLFollowupMessages(prev *aiSQLPrev, schema, question string) []aiopenai.Message {
+	if prev == nil || strings.TrimSpace(prev.SQL) == "" {
+		return nil
+	}
+	assistant := marshalSQLReply(&sqlReply{
+		SQL:     truncateRunes(strings.TrimSpace(prev.SQL), sqlPrevTextMax),
+		Tables:  prev.Tables,
+		Explain: truncateRunes(strings.TrimSpace(prev.Explain), sqlPrevExplainMax),
+	})
+	if assistant == "" {
+		return nil
+	}
+	return []aiopenai.Message{
+		{Role: "assistant", Content: assistant},
+		{Role: "user", Content: fmt.Sprintf(sqlFollowupPrompt, schema,
+			truncateRunes(strings.TrimSpace(prev.Question), sqlPrevQuestionMax), question)},
+	}
+}
+
+// marshalSQLReply 把上一版生成结果序列化成 assistant 消息（追加生成用）。
+func marshalSQLReply(reply *sqlReply) string {
+	b, err := json.Marshal(reply)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
+// traceQuestion 调用记录里的问题文本：追加生成加个前缀，翻记录时一眼能分清首轮与追加。
+func traceQuestion(question string, followup bool) string {
+	if !followup {
+		return question
+	}
+	return "追加：" + question
 }
 
 // GenerateSQL POST /api/mysql/:id/ai/sql
@@ -119,9 +185,25 @@ func (h *Handler) GenerateSQL(c *gin.Context) {
 		return
 	}
 
-	picked := pickTables(entries, question, sqlContextTables)
+	// 首轮问题：追加生成时用「上一轮的原话」——否则对话读起来是
+	// user 说追加要求 → assistant 答的是上一版 → user 又说一遍追加要求，模型容易答跑偏。
+	baseQuestion := question
+	if req.Prev != nil && strings.TrimSpace(req.Prev.Question) != "" {
+		baseQuestion = truncateRunes(strings.TrimSpace(req.Prev.Question), sqlPrevQuestionMax)
+	}
+	// 挑表关键词把两轮问题合起来用：追加要求里新提到的表也能被选进上下文
+	picked := pickTables(entries, baseQuestion+" "+question, sqlContextTables)
 	// 生成范围跟着会话模式走：与门禁的判断 1 同源，两处不能有两套口径
 	mode := h.modes.get(conn.ID, defaultMode(conn))
+
+	// —— 前置校验全部通过：进入流式返回 ——
+	// 响应头一经发出，后续失败只能以 event: error 帧回传（resp.Fail 是 200+JSON，
+	// 前端流式消费端把它识别为业务错误而不是流结束）。
+	sw, ok := shared.NewSSEStream(c)
+	if !ok {
+		return
+	}
+
 	// 每次生成都落一条调用记录（含 token 用量）；成功时把记录 id 一并回传前端，
 	// 追加进编辑器执行时带回来，两张记录表由此绑定。
 	trace := h.beginTrace(aiTraceParams{
@@ -132,41 +214,61 @@ func (h *Handler) GenerateSQL(c *gin.Context) {
 		Model:      aiCfg.Model,
 		BaseURL:    aiCfg.BaseURL,
 		TableCount: len(picked),
-		Question:   question,
+		Question:   traceQuestion(question, req.Prev != nil),
 	})
 	defer trace.done()
 
 	ctx := c.Request.Context()
-	res, err := client.Chat(ctx, []aiopenai.Message{
+	msgs := []aiopenai.Message{
 		{Role: "system", Content: sqlSystemPrompt(mode)},
-		{Role: "user", Content: fmt.Sprintf(sqlUserPrompt, schema, catalogContext(picked), question)},
+		{Role: "user", Content: fmt.Sprintf(sqlUserPrompt, schema, catalogContext(picked), baseQuestion)},
+	}
+	// 追加生成：把上一轮的 SQL 与追加要求接在首轮对话之后（只带一轮，上下文体积恒定）
+	msgs = append(msgs, buildSQLFollowupMessages(req.Prev, schema, question)...)
+
+	// 流式草稿：从模型输出的 JSON 文本里逐段提取 sql / explain 的字符串增量。
+	// tables 数组不进草稿——终稿一并给全，草稿阶段推它只会让界面闪动。
+	scanner := &shared.JSONStreamScanner{}
+	res, err := client.ChatStream(ctx, msgs, func(chunk string) error {
+		scanner.Feed(chunk, func(ev shared.JSONStringEvent) {
+			if ev.Index >= 0 {
+				return
+			}
+			if ev.Field == "sql" || ev.Field == "explain" {
+				sw.Send("delta", gin.H{"field": ev.Field, "text": ev.Delta})
+			}
+		})
+		return nil
 	})
 	if err != nil {
 		trace.fail(err)
-		resp.Fail(c, resp.CodeInternal, err.Error())
+		sw.Send("error", gin.H{"message": err.Error()})
 		return
 	}
 	trace.fill(res)
 	text := res.Content
 
+	// —— 以下与原同步逻辑一致：解析、门禁、分类，全部以流结束后的完整文本为准 ——
 	var reply sqlReply
 	if err := unmarshalModelJSON(text, &reply); err != nil {
-		trace.fail(fmt.Errorf("解析模型返回失败: %w", err))
-		resp.Fail(c, resp.CodeInternal, "解析模型返回失败: "+err.Error())
+		perr := fmt.Errorf("解析模型返回失败: %w", err)
+		trace.fail(perr)
+		sw.Send("error", gin.H{"message": perr.Error()})
 		return
 	}
 	trace.row.Content = truncateRunes(text, logContentMax)
 	sqlText := strings.TrimSpace(reply.SQL)
 	if sqlText == "" {
-		trace.fail(fmt.Errorf("模型返回的内容里没有 SQL"))
-		resp.Fail(c, resp.CodeInternal, "模型没有生成 SQL，请换个说法再试")
+		perr := fmt.Errorf("模型没有生成 SQL，请换个说法再试")
+		trace.fail(perr)
+		sw.Send("error", gin.H{"message": perr.Error()})
 		return
 	}
 	// 每次生成都以分号收尾：前端会把结果追加进编辑器，多条语句拼在一起时每条都要自带终结符
 	sqlText = ensureTrailingSemicolon(sqlText)
 	if err := guardGeneration(sqlText, mode); err != nil {
 		trace.fail(err)
-		resp.Fail(c, resp.CodeBadRequest, err.Error())
+		sw.Send("error", gin.H{"message": err.Error()})
 		return
 	}
 	trace.row.Expr = truncateRunes(sqlText, logSQLMax)
@@ -178,7 +280,7 @@ func (h *Handler) GenerateSQL(c *gin.Context) {
 	if tables == nil {
 		tables = []string{}
 	}
-	resp.OK(c, model.MySQLAISQLResult{
+	sw.Send("final", model.MySQLAISQLResult{
 		SQL:            sqlText,
 		Tables:         tables,
 		Explain:        strings.TrimSpace(reply.Explain),
@@ -361,8 +463,8 @@ func catalogContext(entries []model.MySQLAICatalogEntry) string {
 }
 
 // columnTypeHint 时间相关字段的类型标记：日期时间类型原样标（datetime / date / timestamp…），
-// 整数类型结合名字与说明判断是否 Unix 时间戳，带探测单位就标出秒 / 毫秒。其余列返回空串；
-// 旧目录没有类型标记也不标。
+// 整数类型结合名字与说明判断是否 Unix 时间戳（统一按毫秒换算，不再标秒 / 毫秒单位）。
+// 其余列返回空串；旧目录没有类型标记也不标。
 func columnTypeHint(c model.MySQLAIColumn) string {
 	t := strings.ToLower(strings.TrimSpace(c.Type))
 	if i := strings.IndexByte(t, '('); i >= 0 {
@@ -376,19 +478,13 @@ func columnTypeHint(c model.MySQLAIColumn) string {
 		return "[" + t + "]"
 	}
 	if intFamily(t) != "" && looksTemporalColumn(c.Name, c.Note) {
-		switch c.Unit {
-		case "ms":
-			return "[int 时间戳·毫秒]"
-		case "s":
-			return "[int 时间戳·秒]"
-		}
 		return "[int 时间戳]"
 	}
 	return ""
 }
 
 // intFamily 归一化整数列类型（去掉括号精度与 unsigned 等后缀），非整型返回空串：
-// 建目录时的单位探测与生成 SQL 时的类型标记共用这一份判定。
+// 与 looksTemporalColumn 一起判定 int 时间戳列（生成 SQL 时的类型标记用）。
 func intFamily(t string) string {
 	t = strings.ToLower(strings.TrimSpace(t))
 	if i := strings.IndexByte(t, '('); i >= 0 {

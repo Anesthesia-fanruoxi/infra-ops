@@ -5,14 +5,20 @@ window.EsIndexTab = {
   template: `
 <div>
   <div class="reg-statbar es-statbar">
-    <div class="reg-stat"><span class="reg-stat-num mono">{{indices.length}}</span><span class="reg-stat-label">展示索引<span v-if="indices.length>=100" style="color:#9CA3AF;font-weight:400">（已达前100上限）</span></span></div>
-    <div class="reg-stat"><span class="reg-stat-num mono" :class="{muted:idxKw&&!filteredIndices.length}">{{filteredIndices.length}}</span><span class="reg-stat-label">当前过滤</span></div>
-    <div class="reg-stat"><span class="reg-stat-num mono">{{idxSummary.docs>=0?idxSummary.docs:'-'}}</span><span class="reg-stat-label">文档数（展示）</span></div>
+    <div class="reg-stat">
+      <span class="reg-stat-num mono" v-if="!loadingTotal">{{allTotal}}</span>
+      <!-- 总数与列表拆成两个请求：列表先到先渲染，总数位异步转圈等它回来 -->
+      <span class="reg-stat-num" v-else><el-icon class="is-loading"><Loading /></el-icon></span>
+      <span class="reg-stat-label">索引总数</span>
+    </div>
+    <div class="reg-stat"><span class="reg-stat-num mono" :class="{muted:idxKw&&!idxTotal}">{{idxTotal}}</span><span class="reg-stat-label">{{idxKw?'搜索匹配':'当前展示'}}</span></div>
+    <div class="reg-stat"><span class="reg-stat-num mono">{{idxSummary.docs>=0?idxSummary.docs:'-'}}</span><span class="reg-stat-label">文档数（展示 {{indices.length}} 条）</span></div>
   </div>
   <div class="es-toolbar">
-    <el-input v-model="idxKw" placeholder="过滤索引..." clearable prefix-icon="Search" style="width:220px" @input="applyIdxFilter" />
+    <el-input v-model="idxKw" placeholder="搜索索引（在全部索引里匹配）..." clearable prefix-icon="Search" style="width:260px" @input="onIdxKw" />
     <el-button type="primary" style="margin-left:auto" @click="openCreate">新建索引</el-button>
   </div>
+  <div class="es-qc-hint" v-if="idxTruncated" style="margin:-2px 0 6px">共匹配 {{idxTotal}} 个索引，仅展示前 {{indices.length}} 条——用搜索缩小范围</div>
   <el-table class="hosts-table" :data="filteredIndices" style="width:100%" size="small" v-loading="loadingIndices">
     <el-table-column label="索引" min-width="200">
       <template #default="{row}"><span class="mono es-link" @click="showMapping(row)">{{row.index}}</span></template>
@@ -49,6 +55,7 @@ window.EsIndexTab = {
   data() {
     return {
       indices: [], filteredIndices: [], idxKw: '', loadingIndices: false,
+      idxTotal: 0, allTotal: 0, loadingTotal: false, idxTruncated: false,
       createDialog: false, createForm: { index: '', shards: 1, replicas: 0 }, creating: false,
       mappingDrawer: false, mappingIndex: '', mappingText: '', loadingMapping: false
     }
@@ -61,14 +68,52 @@ window.EsIndexTab = {
     }
   },
   mounted() { this.loadIndices() },
+  beforeUnmount() { if (this._idxTimer) { clearTimeout(this._idxTimer); this._idxTimer = null } },
   methods: {
     async loadIndices() {
       this.loadingIndices = true
-      try { const r = await api.get('/es/' + this.conn.id + '/indices'); if (r.code === 0) { this.indices = r.data?.list || []; this.applyIdxFilter() } } catch (e) { /* */ } finally { this.loadingIndices = false }
+      this.loadTotal() // 总数独立异步：慢一步也不挡列表渲染
+      try {
+        const r = await api.get('/es/' + this.conn.id + '/indices')
+        if (r.code === 0) this.applyIdxResp(r.data)
+      } catch (e) { /* */ } finally { this.loadingIndices = false }
     },
-    applyIdxFilter() {
-      const k = this.idxKw.trim().toLowerCase()
-      this.filteredIndices = k ? this.indices.filter(i => i.index.toLowerCase().includes(k)) : this.indices.slice()
+    // loadTotal 索引总数：独立请求 + 左上角转圈；只列索引名（不含统计列），比列表请求轻
+    async loadTotal() {
+      this.loadingTotal = true
+      try {
+        const r = await api.get('/es/' + this.conn.id + '/indices/total')
+        if (r.code === 0 && r.data) this.allTotal = r.data.total || 0
+      } catch (e) { /* 总数是旁路展示：取不到保留旧值 */ } finally { this.loadingTotal = false }
+    },
+    // onIdxKw 搜索框输入：防抖后走后端在全部索引里匹配（不再只过滤已加载的前 100 条）
+    onIdxKw() {
+      if (this._idxTimer) clearTimeout(this._idxTimer)
+      this._idxTimer = setTimeout(() => this.searchIndices(), 300)
+    },
+    async searchIndices() {
+      const q = this.idxKw.trim()
+      // 无通配符按「包含」搜（*q*）；用户自己写了 * / ? 就原样交给 ES 当索引导出模式
+      const glob = q ? (/[*?]/.test(q) ? q : '*' + q + '*') : ''
+      this.loadingIndices = true
+      try {
+        const r = await api.get('/es/' + this.conn.id + '/indices', { params: glob ? { q: glob } : {} })
+        if (r.code === 0) this.applyIdxResp(r.data)
+      } catch (e) { /* */ } finally { this.loadingIndices = false }
+    },
+    // applyIdxResp 落地一次 /indices 结果（列表与搜索匹配数）。
+    // 左上角「索引总数」不从这里取：它走 /indices/total 独立异步（见 loadTotal）。
+    applyIdxResp(d) {
+      d = d || {}
+      this.indices = d.list || []
+      this.filteredIndices = this.indices.slice()
+      this.idxTotal = d.total || 0
+      this.idxTruncated = !!d.truncated
+    },
+    // reload 新建/删除后刷新：有搜索词就沿用搜索，别把用户打回全量列表（总数一并重取）
+    reload() {
+      if (this.idxKw.trim()) { this.loadTotal(); return this.searchIndices() }
+      return this.loadIndices()
     },
     openCreate() { this.createForm = { index: '', shards: 1, replicas: 0 }; this.createDialog = true },
     async doCreateIndex() {
@@ -76,14 +121,14 @@ window.EsIndexTab = {
       this.creating = true
       try {
         const r = await api.post('/es/' + this.conn.id + '/index', this.createForm)
-        if (r.code === 0) { this.createDialog = false; this.$message.success('索引创建成功'); this.loadIndices() }
+        if (r.code === 0) { this.createDialog = false; this.$message.success('索引创建成功'); this.reload() }
       } catch (e) { /* */ } finally { this.creating = false }
     },
     delIndex(row) {
       this.$confirm('确认删除索引「' + row.index + '」？' + row.docs_count + ' 个文档将一并删除，此操作不可恢复！', '删除索引', { type: 'warning' }).then(() => {
         this.$confirm('再次确认：删除索引 ' + row.index + ' 会永久丢失全部数据。', '二次确认', { type: 'warning' }).then(async () => {
           row._deleting = true
-          try { const r = await api.delete('/es/' + this.conn.id + '/index/' + encodeURIComponent(row.index)); if (r.code === 0) { this.$message.success('索引已删除'); this.loadIndices() } } catch (e) { /* */ } finally { row._deleting = false }
+          try { const r = await api.delete('/es/' + this.conn.id + '/index/' + encodeURIComponent(row.index)); if (r.code === 0) { this.$message.success('索引已删除'); this.reload() } } catch (e) { /* */ } finally { row._deleting = false }
         }).catch(() => {})
       }).catch(() => {})
     },

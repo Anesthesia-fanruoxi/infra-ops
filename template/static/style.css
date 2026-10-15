@@ -1717,6 +1717,16 @@ html[data-win-maximised] .win-ctl .win-ico-restore { display: block; }
 .mysql-ai-tip { font-size: 11.5px; color: var(--text-faint); }
 .mysql-ai-error { flex-shrink: 0; padding: 10px 12px; border: 1px solid #FCA5A5; border-radius: 10px; background: #FEF2F2; color: #B91C1C; font-size: 12.5px; }
 .mysql-ai-error pre { margin: 0; font-family: var(--font-mono); font-size: 12px; white-space: pre-wrap; word-break: break-all; }
+/* 流式草稿：模型边生成边显示的实时预览（完成且校验通过后自动追加进编辑器，草稿即收） */
+.mysql-ai-draft { flex-shrink: 0; padding: 10px 12px; border: 1px dashed var(--border); border-radius: 10px; background: var(--bg-faint); }
+.mysql-ai-draft-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.mysql-ai-draft-tag { padding: 1px 7px; border-radius: 5px; font-size: 10.5px; font-weight: 700; letter-spacing: .4px; }
+.mysql-ai-draft-tag.is-live { background: var(--brand-soft); color: var(--brand); }
+.mysql-ai-draft-tag.is-dead { background: var(--warn-soft); color: var(--warn); }
+.mysql-ai-draft-hint { font-size: 11.5px; color: var(--text-faint); }
+.mysql-ai-draft-sql { margin: 0; font-family: var(--font-mono); font-size: 12px; line-height: 1.6; white-space: pre-wrap; word-break: break-all; color: var(--text-main); }
+.mysql-ai-draft-explain { margin-top: 4px; font-size: 12px; line-height: 1.6; color: var(--text-sub); }
+.mysql-ai-draft-wait { font-size: 12px; color: var(--text-faint); }
 /* 生成反馈：涉及表徽标（左上角贴边，默认不伸缩） */
 .mysql-ai-tables { flex-shrink: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 
@@ -2026,7 +2036,14 @@ html[data-win-maximised] .win-ctl .win-ico-restore { display: block; }
 .es-doc-key { flex-shrink: 0; color: #1D63D8; font-weight: 600; }
 .es-doc-sep { color: var(--text-sub, #9CA3AF); }
 .es-doc-val { white-space: pre-wrap; word-break: break-all; }
-.es-hl mark { background: #FFE58F; color: inherit; padding: 0 1px; border-radius: 2px; }
+/* ES 命中高亮：每个命中项一个颜色（按查询串里的出现顺序 c0..c5），同一项全文同色 */
+.es-hlchip { padding: 0 1px; border-radius: 2px; }
+.es-hlchip.c0 { background: #FFE58F; color: #614700; }
+.es-hlchip.c1 { background: #B7EB8F; color: #274916; }
+.es-hlchip.c2 { background: #91D5FF; color: #003A8C; }
+.es-hlchip.c3 { background: #FFADD2; color: #861951; }
+.es-hlchip.c4 { background: #D3ADF7; color: #391085; }
+.es-hlchip.c5 { background: #FFD8BF; color: #873800; }
 .es-docs-more { text-align: center; padding: 2px 0 6px; flex-shrink: 0; }
 .es-result-bar { display: flex; align-items: center; font-size: 12.5px; color: var(--text-sub, #6B7280); margin-top: 10px; }
 
@@ -2226,6 +2243,123 @@ html[data-win-maximised] .win-ctl .win-ico-restore { display: block; }
 
 /* 索引/视图 折叠行内空隙 */
 .es-an-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 4px; }
+
+/* ===== ES · Grok 解析 ===== */
+/* 左右两栏各自滚动：左栏（样例 + pattern + AI 区）与右栏（逐行结果）都可能很长，
+   谁变长都不该把整页撑出滚动条、更不该把对方顶走。前提是 .el-tab-pane 有确定高度（见下方 :has 规则）。*/
+.es-grok-wrap { height: 100%; min-height: 0; display: flex; flex-direction: column; }
+.es-grok-grid { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); gap: 16px; align-items: stretch; }
+.es-grok-pane { min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 8px; overflow-y: auto; }
+/* ⛔ 高度受限的 flex column 里，子项的自动最小尺寸归 0 会被压缩：不写 flex-shrink:0，
+   内容一长就是「每个输入框被压扁」而不是「出现滚动条」（本项目已踩过多次）。 */
+.es-grok-pane > * { flex-shrink: 0; }
+.es-grok-pane.is-input { padding-right: 8px; } /* 与右栏留出视觉分隔，滚动条也不压字 */
+.es-grok-pane .es-area-label { margin-top: 4px; }
+.es-grok-sep { flex-shrink: 0; height: 1px; background: var(--border); margin: 6px 0 2px; }
+/* 多行输入用等宽字体：日志与 pattern 里的空白、方括号必须一眼可辨 */
+.es-grok-mono .el-textarea__inner { font-family: var(--font-mono); font-size: 12.5px; line-height: 1.6; }
+.es-grok-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.es-grok-hint { font-size: 11.5px; color: var(--text-faint); line-height: 1.6; }
+.es-grok-error { border: 1px solid var(--danger); border-radius: 8px; padding: 8px 12px; background: var(--danger-soft); }
+.es-grok-error-title { font-size: 12px; font-weight: 600; color: var(--danger); margin-bottom: 4px; }
+.es-grok-error pre { margin: 0; font-family: var(--font-mono); font-size: 12px; line-height: 1.6; color: var(--text-main); white-space: pre-wrap; word-break: break-all; }
+.es-grok-toggle { display: flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; font-size: 12.5px; color: var(--text-sub); }
+.es-grok-ai-result { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; background: var(--bg-faint); }
+.es-grok-explain { margin: 0 0 6px; font-family: inherit; font-size: 12.5px; line-height: 1.7; color: var(--text-main); white-space: pre-wrap; word-break: break-all; }
+/* AI 字段解释改成多列网格：名字等宽 + 说明，扫读比挤成一整段强得多（原来 inline-block 会糊成文字墙） */
+.es-grok-fgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 3px 16px; }
+.es-grok-fitem { display: flex; align-items: baseline; gap: 6px; min-width: 0; font-size: 12px; color: var(--text-sub); }
+.es-grok-fitem b { flex-shrink: 0; color: var(--purple); font-weight: 600; }
+.es-grok-fitem span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.es-grok-usage { margin-top: 6px; font-size: 11.5px; color: var(--text-faint); }
+/* 生成质量说明行：服务端 final 前已在样例上实跑过，这里把「命中几行」摊开说 */
+.es-grok-ai-status { display: flex; align-items: center; gap: 7px; font-size: 12px; line-height: 1.6; padding: 6px 10px; border-radius: 8px; }
+.es-grok-ai-status.is-ok { background: var(--ok-soft); color: var(--ok); }
+.es-grok-ai-status.is-warn { background: var(--warn-soft); color: var(--warn); }
+.es-grok-dot { flex-shrink: 0; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+/* 流式草稿：pattern / 说明边生成边显示的实时预览（终稿填入 pattern 框后草稿即收） */
+.es-grok-draft { border: 1px dashed var(--border); border-radius: 8px; padding: 8px 12px; background: var(--bg-faint); }
+.es-grok-draft-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.es-grok-draft-tag { padding: 1px 7px; border-radius: 5px; font-size: 10.5px; font-weight: 700; letter-spacing: .4px; }
+.es-grok-draft-tag.is-live { background: var(--brand-soft); color: var(--brand); }
+.es-grok-draft-tag.is-dead { background: var(--warn-soft); color: var(--warn); }
+.es-grok-draft-body { margin: 0; font-family: var(--font-mono); font-size: 12px; line-height: 1.7; white-space: pre-wrap; word-break: break-all; color: var(--text-main); }
+.es-grok-draft-explain { margin-top: 4px; font-size: 12px; line-height: 1.7; color: var(--text-sub); }
+.es-grok-draft-wait { font-size: 12px; color: var(--text-faint); }
+/* 统计条贴在右栏顶部：翻看下面几行时不用回头找总数。
+   背景必须与容器一致（.el-tabs__pane 底色是 --bg-card），否则滚动时文字会从底下穿过去 */
+.es-grok-stat { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 14px; flex-wrap: wrap; font-size: 12.5px; color: var(--text-sub); padding: 2px 0 8px; background: var(--bg-card, #fff); }
+.es-grok-stat b { font-family: var(--font-mono); }
+.es-grok-stat .ok { color: var(--ok); }
+.es-grok-stat .part, .es-grok-stat .warn { color: var(--warn); }
+.es-grok-stat .bad { color: var(--danger); }
+.es-grok-lines { display: flex; flex-direction: column; gap: 8px; }
+/* 左侧色条即状态：整行命中绿 / 部分命中橙 / 未命中红，扫一眼就知道哪几行有问题 */
+.es-grok-card { border: 1px solid var(--border); border-left-width: 3px; border-radius: 8px; padding: 8px 12px; background: var(--bg-card); }
+.es-grok-card.is-ok { border-left-color: var(--ok); }
+.es-grok-card.is-part { border-left-color: var(--warn); }
+.es-grok-card.is-miss { border-left-color: var(--danger); }
+.es-grok-card-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.es-grok-no { flex-shrink: 0; font-size: 11.5px; color: var(--text-faint); }
+.es-grok-badge { flex-shrink: 0; font-size: 11px; padding: 0 6px; border-radius: 3px; background: var(--neutral-soft); color: var(--text-sub); }
+/* 命中的行单行省略即可；未命中/部分命中的原文是排查对象，给两行且不省略 */
+.es-grok-raw { flex: 1; min-width: 0; font-size: 12px; color: var(--text-main); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.es-grok-card.is-miss .es-grok-raw, .es-grok-card.is-part .es-grok-raw {
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; white-space: normal; word-break: break-all;
+}
+.es-grok-fields { margin-top: 6px; display: flex; flex-direction: column; gap: 2px; }
+.es-grok-frow { display: flex; align-items: baseline; gap: 8px; font-size: 12px; min-width: 0; }
+.es-grok-fname { flex-shrink: 0; min-width: 120px; color: var(--purple); }
+.es-grok-fval { min-width: 0; color: var(--text-main); word-break: break-all; }
+.es-grok-ftype { flex-shrink: 0; font-size: 10.5px; color: var(--text-faint); }
+.es-grok-tip { margin-top: 6px; font-size: 12px; line-height: 1.7; color: var(--text-sub); }
+.es-grok-tip.is-miss { color: var(--danger); }
+.es-grok-tip.is-part { color: var(--warn); }
+.es-grok-blank { padding: 28px 8px; text-align: center; font-size: 13px; line-height: 1.9; color: var(--text-sub); }
+
+/* Logstash 配置区块：AI 未启用是中性态（不是告警），所以 is-idle 用灰而不是黄 */
+.es-grok-ai-status.is-idle { background: var(--neutral-soft); color: var(--text-sub); }
+.es-grok-ls { display: flex; flex-direction: column; gap: 8px; flex-shrink: 0; }
+.es-grok-ls-form { display: flex; align-items: center; gap: 8px; }
+.es-grok-ls-form .el-input { flex: 1 1 0; min-width: 0; }
+.es-grok-ls-form .el-button { flex-shrink: 0; }
+.es-grok-ls-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+/* 开关行 + 字段清单：清单里的三种 chip 用颜色区分来源（自动 / 人工补充 / 恒定删的 message），
+   否则用户看不出某个字段是自己填的、还是探测出来的、删不删得掉 */
+.es-grok-ls-opts { display: flex; align-items: center; gap: 8px; }
+.es-grok-ls-opts .el-switch { flex-shrink: 0; }
+.es-grok-ls-meta { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.es-grok-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
+.es-grok-chip { padding: 0 6px; border-radius: 4px; font-family: var(--font-mono); font-size: 11.5px;
+  background: var(--neutral-soft); color: var(--text-sub); }
+.es-grok-chip.is-extra { background: var(--brand-soft); color: var(--brand); }
+.es-grok-chip.is-fixed { background: var(--warn-soft); color: var(--warn); }
+.es-grok-ls-extra { display: flex; align-items: center; gap: 8px; }
+.es-grok-ls-extra .el-input { flex: 1 1 0; min-width: 0; }
+.es-grok-ls-extra .el-button { flex-shrink: 0; }
+/* white-space: pre + 横向滚动：配置是给人粘贴的，缩进必须原样保留（wrap 会把对齐拆散） */
+.es-grok-ls-code { margin: 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--bg-faint); font-family: var(--font-mono); font-size: 12px; line-height: 1.65;
+  color: var(--text-main); white-space: pre; overflow-x: auto; }
+.es-grok-ls-drop { font-size: 11.5px; line-height: 1.7; color: var(--warn); }
+.es-grok-ls-drop b { font-weight: 600; }
+.es-grok-ls-drop span + span::before { content: '；'; }
+
+@media (max-width: 1200px) {
+  /* 窄屏单列：这时「两栏各自滚动」反而别扭，改由外层整页滚。
+     ⛔ 必须同时让 grid 退出「定高挤压」：只改列数的话，两个 pane 仍被当成
+     定高容器里的两行平分高度 + overflow 可见 ⇒ 内容直接叠压到下一行上（实测截图糊成一团）。
+     grid 改成不伸缩（按内容撑），pane 不再限高、交给 .es-grok-wrap 滚。 */
+  .es-grok-grid { grid-template-columns: minmax(0, 1fr); flex: 0 0 auto; }
+  .es-grok-pane { min-height: auto; overflow-y: visible; }
+  .es-grok-pane.is-input { padding-right: 0; }
+  .es-grok-wrap { overflow-y: auto; }
+  /* 两个输入框 + 按钮在窄屏挤成一行会把占位符压成一个字 */
+  .es-grok-ls-form { flex-wrap: wrap; }
+  .es-grok-ls-form .el-input { flex: 1 1 160px; }
+  .es-grok-ls-extra { flex-wrap: wrap; }
+  .es-grok-ls-extra .el-input { flex: 1 1 160px; }
+}
 
 /* ===== 设置页 ===== */
 .tool-page--settings .tool-intro { background: linear-gradient(115deg, #1e293b 0%, #334155 55%, #475569 100%); box-shadow: 0 12px 26px rgba(51, 65, 85, .18); }
@@ -2467,6 +2601,17 @@ html[data-win-maximised] .win-ctl .win-ico-restore { display: block; }
 .metrics-ai-tip { font-size: 11.5px; color: var(--text-faint); }
 .metrics-ai-error { margin-top: 10px; padding: 9px 12px; border: 1px solid var(--danger); border-radius: var(--radius-btn); background: var(--danger-soft); color: var(--danger); font-size: 12.5px; line-height: 1.7; }
 .metrics-ai-error pre { margin: 0; white-space: pre-wrap; word-break: break-all; font-family: var(--font-mono); font-size: 12px; }
+/* 流式草稿：表达式边生成边显示的实时预览（终稿自动填入表达式框后草稿即收） */
+.metrics-ai-draft { margin-top: 10px; padding: 9px 12px; border: 1px dashed var(--border); border-radius: var(--radius-btn); background: var(--bg-faint); }
+.metrics-ai-draft-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.metrics-ai-draft-tag { padding: 1px 7px; border-radius: 5px; font-size: 10.5px; font-weight: 700; letter-spacing: .4px; }
+.metrics-ai-draft-tag.is-live { background: var(--brand-soft); color: var(--brand); }
+.metrics-ai-draft-tag.is-dead { background: var(--warn-soft); color: var(--warn); }
+.metrics-ai-draft-hint { font-size: 11.5px; color: var(--text-faint); }
+.metrics-ai-draft-note { margin-bottom: 6px; font-size: 12px; line-height: 1.7; color: var(--warn); }
+.metrics-ai-draft-expr { margin: 0; font-family: var(--font-mono); font-size: 12px; line-height: 1.7; white-space: pre-wrap; word-break: break-all; color: var(--text-main); }
+.metrics-ai-draft-explain { margin-top: 4px; font-size: 12px; line-height: 1.7; color: var(--text-sub); }
+.metrics-ai-draft-wait { font-size: 12px; color: var(--text-faint); }
 /* 生成开销（头部行内）：token / 参考指标 / 耗时 */
 .metrics-ai-head .metrics-ai-usage { margin-top: 0; }
 .metrics-ai-range { margin-top: 10px; font-size: 12px; line-height: 1.7; color: var(--text-sub); }
@@ -2493,6 +2638,24 @@ html[data-win-maximised] .win-ctl .win-ico-restore { display: block; }
 .metrics-ai-digest-body { margin-top: 8px; max-height: 260px; overflow: auto; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-faint); }
 .metrics-ai-digest-line { font-size: 11.5px; line-height: 1.8; color: var(--text-sub); white-space: pre-wrap; word-break: break-all; }
 
+/* AI 解读弹框（metrics_ai.js）：结论可能很长，正文区限高滚动，页脚固定「关闭 / 重新分析」 */
+.metrics-ai-explain-dialog { max-width: calc(100vw - 32px); }
+.metrics-ai-explain-dialog .el-dialog__body { max-height: 62vh; overflow-y: auto; }
+.metrics-ai-explain-dialog .el-dialog__footer { display: flex; align-items: center; gap: 8px; }
+.metrics-ai-dialog-head { display: flex; align-items: center; gap: 8px; }
+.metrics-ai-dialog-head .metrics-ai-title { font-size: 15px; }
+.metrics-ai-dialog-hint { margin-right: auto; font-size: 11.5px; color: var(--text-faint); }
+
+/* AI 输出高亮（ai_highlight.js）：模型结论里的重点信息着色。
+   规则是字面匹配，只给「看得见的关键信息」上色，正文颜色不变，避免整段花掉 */
+.ai-hl-num { color: var(--brand); font-weight: 600; font-variant-numeric: tabular-nums; }
+.ai-hl-bad { color: var(--danger); font-weight: 600; }
+.ai-hl-warn { color: var(--warn); font-weight: 600; }
+.ai-hl-good { color: var(--ok); font-weight: 600; }
+.ai-hl-code { padding: 0 3px; border-radius: 3px; font-family: var(--font-mono); font-size: 92%; color: var(--purple); background: var(--purple-soft); }
+/* 实体名（容器 / 服务 / 主机 / 域名）：只换字体不加底色，避免名字一多整段变花 */
+.ai-hl-name { font-family: var(--font-mono); font-size: 92%; color: var(--text-main); }
+
 /* 设置 · 备份恢复（settings_backup.js）：左右两栏，路径输入 + 浏览并排 */
 .bk-pane { display: flex; flex-direction: column; gap: 12px; padding: 14px 16px;
   border: 1px solid var(--border); border-radius: 10px; background: var(--bg-faint); min-width: 0; }
@@ -2504,3 +2667,132 @@ html[data-win-maximised] .win-ctl .win-ico-restore { display: block; }
 .bk-alert { margin: 2px 0; }
 .bk-result { font-size: 12px; color: var(--text-sub); word-break: break-all; }
 .bk-files { margin-top: 10px; }
+
+/* ---------- ES · 数据导入（es_import.js） ----------
+   面板整体纵向排布、自行滚动；各行用 flex-wrap 而不是固定宽度，
+   窄屏时控件自然换行，不必再写一套断点。 */
+.es-imp-wrap { height: 100%; min-height: 0; display: flex; flex-direction: column; gap: 12px; overflow-y: auto; }
+.es-imp-head { display: flex; flex-direction: column; gap: 8px; }
+.es-imp-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.es-imp-row > .es-imp-label { width: 62px; flex-shrink: 0; }
+/* 多行输入行（日志格式说明）：标签顶端对齐、textarea 占满剩余宽度 */
+.es-imp-row.is-block { align-items: flex-start; }
+.es-imp-row.is-block .el-textarea { flex: 1 1 480px; min-width: 0; }
+.es-imp-label { font-size: 12px; color: var(--text-sub); }
+/* 本地文件路径可能很长：盒宽上限 + min-width:0（flex 子项才肯缩）+ 单行省略，缺一不可 */
+.es-imp-path { flex: 1 1 220px; min-width: 0; max-width: 100%; font-size: 12px; color: var(--text-main);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.es-imp-hint { font-size: 11.5px; color: var(--text-faint); line-height: 1.6; word-break: break-all; }
+.es-imp-hint.is-warn { color: var(--warn); }
+.es-imp-short { width: 190px; flex-shrink: 0; }
+.es-imp-mono .el-textarea__inner, .es-imp-mono .el-input__inner { font-family: var(--font-mono); font-size: 12.5px; }
+
+.es-imp-rule { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px;
+  border: 1px solid var(--border); border-radius: 10px; }
+.es-imp-rule-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.es-imp-rule-title { font-size: 12.5px; font-weight: 600; color: var(--text-main); }
+.es-imp-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.es-imp-field > .es-imp-label { font-size: 11.5px; }
+.es-imp-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.es-imp-hint-input { flex: 1 1 200px; min-width: 0; }
+.es-imp-ai-status { display: flex; align-items: center; gap: 7px; font-size: 12px; line-height: 1.6; padding: 6px 10px; border-radius: 8px; }
+.es-imp-ai-status.is-ok { background: var(--ok-soft); color: var(--ok); }
+.es-imp-ai-status.is-bad { background: var(--danger-soft); color: var(--danger); }
+.es-imp-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex-shrink: 0; }
+.es-imp-toggle { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px;
+  color: var(--text-sub); cursor: pointer; user-select: none; }
+
+.es-imp-foot { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.es-imp-panel { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px;
+  border: 1px solid var(--border); border-radius: 10px; }
+.es-imp-sub { font-size: 12px; color: var(--text-sub); }
+.es-imp-sub.is-warn { color: var(--warn); }
+.es-imp-sub.is-bad { color: var(--danger); }
+.es-imp-table { width: 100%; }
+.es-imp-detail { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.es-imp-detail pre { margin: 0; padding: 6px 8px; border-radius: 6px; background: var(--bg-faint);
+  font-family: var(--font-mono); font-size: 12px; line-height: 1.6; color: var(--text-main);
+  white-space: pre-wrap; word-break: break-all; }
+/* 检查日志：SSE 按步骤追加（文件类型 → 抽样 → AI 生成），时间 + 状态标记 + 结果，限高内滚 */
+.es-imp-analyze { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+.es-imp-analyze-body { max-height: 240px; overflow: auto; padding: 8px 10px; border-radius: 8px;
+  background: var(--bg-faint); font-size: 12px; line-height: 1.7;
+  display: flex; flex-direction: column; gap: 2px; }
+.es-imp-analyze-line { color: var(--text-main); white-space: pre-wrap; word-break: break-all;
+  display: flex; gap: 8px; }
+.es-imp-log-time { flex: none; color: var(--text-faint); }
+.es-imp-log-mark { flex: none; width: 1em; text-align: center; color: var(--text-sub); }
+.es-imp-log-text { flex: 1; min-width: 0; }
+.es-imp-analyze-line.is-ok .es-imp-log-mark, .es-imp-analyze-line.is-ok .es-imp-log-text { color: var(--ok); }
+.es-imp-analyze-line.is-warn .es-imp-log-mark, .es-imp-analyze-line.is-warn .es-imp-log-text { color: var(--warn); }
+.es-imp-analyze-line.is-err .es-imp-log-mark, .es-imp-analyze-line.is-err .es-imp-log-text { color: var(--danger); }
+/* 子行（压缩包文件清单 / 生成的 pattern）：缩进对齐到正文，不重复时间与标记 */
+.es-imp-analyze-line.is-sub { padding-left: 86px; color: var(--text-sub); }
+.es-imp-analyze-draft { margin: 0; color: var(--purple); white-space: pre-wrap; word-break: break-all; }
+.es-imp-analyze-wait { color: var(--text-faint); }
+.es-imp-error { padding: 8px 12px; border: 1px solid var(--danger); border-radius: 8px; background: var(--danger-soft); }
+.es-imp-error pre { margin: 4px 0 0; font-family: var(--font-mono); font-size: 12px; line-height: 1.6;
+  color: var(--text-main); white-space: pre-wrap; word-break: break-all; }
+
+/* 进度条：条数要读完文件才知道，所以用不定态流动条，不假装有百分比 */
+.es-imp-progress { display: flex; flex-direction: column; gap: 6px; }
+.es-imp-bar { height: 4px; border-radius: 2px; background: var(--bg-hover); overflow: hidden; }
+.es-imp-bar span { display: block; width: 30%; height: 100%; border-radius: 2px; background: var(--info);
+  animation: es-imp-slide 1.1s ease-in-out infinite; }
+@keyframes es-imp-slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(400%); } }
+.es-imp-progress-meta { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--text-sub); }
+.es-imp-progress-meta b { color: var(--text-main); font-weight: 600; }
+
+.es-imp-result { font-size: 12.5px; line-height: 1.8; color: var(--text-main); }
+.es-imp-result .is-ok { color: var(--ok); font-weight: 600; }
+.es-imp-result .is-warn { color: var(--warn); }
+.es-imp-result .is-bad { color: var(--danger); }
+
+/* 预览弹框：左「字段定义」/ 右「解析预览」（前 20 行）。两栏都要 min-width:0 才肯缩，
+   窄屏 flex-wrap 自然叠放，不必再写一套断点 */
+.es-imp-preview { max-width: 94vw; }
+/* 弹框上下各留 10%：top 由 el-dialog 控制，内容区限高兜住下半边，超出在弹框内部滚动 */
+.es-imp-preview .el-dialog__body { max-height: calc(80vh - 130px); overflow: auto; }
+.es-imp-pv-body { display: flex; gap: 12px; min-width: 0; flex-wrap: wrap; }
+.es-imp-pv-col { flex: 1 1 340px; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+/* 左「字段定义」窄、右「解析预览」宽；两栏都限高内滚，20 行卡片随弹框高度取空间。
+   左栏要容下三列（系统生成字段 / 映射字段 / 类型），给足最小宽度，避免列被压到换行截断 */
+.es-imp-pv-col.is-fields { flex: 0 1 440px; }
+.es-imp-pv-col.is-rows { flex: 1 1 460px; }
+.es-imp-pv-rows { max-height: calc(80vh - 280px); overflow: auto; display: flex; flex-direction: column; gap: 8px; }
+/* 逐行预览的来源标签（多文件 / 压缩包条目才有；单文件普通来源不显示） */
+.es-imp-pv-origin { flex: none; max-width: 160px; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; color: var(--text-sub); font-size: 11px; }
+/* 文件拖放：面板整体是放置目标（Wails 运行时在拖拽悬停时加 file-drop-target-active） */
+.es-imp-wrap.file-drop-target-active { outline: 2px dashed var(--info); outline-offset: -6px;
+  border-radius: 10px; background: var(--bg-faint); }
+/* date 类型着色：字段多时一眼分清哪些是时间字段（建 date 映射的会带 format，值得留意） */
+.es-imp-table .is-date { color: var(--purple); }
+/* 字段名单行省略而不是折行：body_bytes_sent 这类长名在窄列里换行非常难读 */
+.es-imp-table .cell .mono { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.es-imp-table .el-select.is-date .el-select__selected-item,
+.es-imp-table .el-select.is-date .el-select__placeholder { color: var(--purple); font-weight: 600; }
+.es-imp-progress-drawer .es-imp-progress { margin-top: 8px; }
+/* 进度抽屉的逐文件清单：完成打勾（绿）、当前转圈、未处理灰点 */
+.es-imp-filelist { display: flex; flex-direction: column; gap: 3px; margin: 10px 0;
+  max-height: 240px; overflow: auto; }
+.es-imp-file { display: flex; gap: 8px; align-items: center; font-size: 12px; color: var(--text-sub); }
+.es-imp-file.is-done { color: var(--ok); }
+.es-imp-file.is-active { color: var(--text-main); }
+.es-imp-file-mark { flex: none; width: 14px; text-align: center; }
+.es-imp-file-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.es-imp-drawer-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+/* 暂停决策框：65% 宽 + 上下各留 15%；正文限高内滚，20 条跳过样例不会把弹框撑出屏幕 */
+.es-imp-pause-dlg { max-width: 94vw; }
+.es-imp-pause-dlg .el-dialog__body { max-height: calc(70vh - 160px); overflow: auto; }
+/* 导入结果区的补救动作（用跳过样本重新生成 / 删除索引重建导入） */
+.es-imp-remedy { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+
+/* 确认导入框：默认 420px 太窄，长路径直接被顶出去看不全 */
+.es-imp-confirm { width: 640px; max-width: 92vw; }
+.es-imp-confirm .el-message-box__message { word-break: break-all; }
+
+@media (max-width: 900px) {
+  .es-imp-row { align-items: flex-start; }
+  .es-imp-short, .es-imp-hint-input { width: 100%; flex: 1 1 100%; }
+}

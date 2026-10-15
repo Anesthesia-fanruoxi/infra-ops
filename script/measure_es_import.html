@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>measure · ES · 数据导入</title>
+  <link rel="stylesheet" href="../template/static/vendor/element-plus.css">
+  <link rel="stylesheet" href="../template/static/style.css">
+  <style>
+    body { margin: 0; background: #F5F7FA; }
+    #app { min-height: 100vh; }
+    #out { margin: 12px 24px; padding: 12px; background: #111827; color: #A7F3D0; font: 12px/1.6 monospace; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div class="page-card" style="margin:24px;padding:16px">
+      <es-import-tab ref="imp" :conn="conn" />
+    </div>
+  </div>
+  <pre id="out"></pre>
+<!--
+  用法（无头浏览器，实测几何与断言，不估算）：
+    推荐用现成的runner（自己管 Edge 临时 profile，跑完删掉）：
+      python script/_run_measure_import.py              # 5 场景 × 1440/800 两档视口，打印断言
+      python script/_run_measure_import.py long result  # 只跑指定场景
+      python script/_run_measure_import.py --shot       # 出 PNG 到 script/_shots/
+    手跑单个场景（等价）：
+      "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe" --headless=new --disable-gpu \
+        --window-size=1440,900 --virtual-time-budget=12000 --dump-dom \
+        "file:///D:/project/go/infra-ops/script/measure_es_import.html?stage=preview"
+      截图：--dump-dom 换成 --screenshot=shot.png 并加 &shot=true
+
+  场景（?stage=…，默认 preview）：
+    preview    预览后的版式：字段类型表 + 逐行解析预览（只有这两栏）
+    long       超长文件路径 / 超长字段名 / 超长索引名 / 超长字段值：一律不许把面板撑出横向滚动条
+    result     导入结果版式：统计行 + 写入失败明细 + 被丢掉的字段
+    archive    压缩包来源：包内文件清单与统计
+    窄视口      加 --window-size=800,900 即可（与 stage 无关）
+
+  为什么建这个台子：导入面板的信息密度高（路径、类型表、样本、失败明细都是长文本），
+  「会不会被撑破」「长路径有没有省成省略号」「样本区是不是自己滚」这几件事只有真渲染能量出来。
+  直接摆组件状态而不是走请求：请求链路已由 _fe_smoke.js 的行为断言覆盖，这里专量版式。
+
+  ⚠️ 这个台子只挂组件本身，没有真机的高度链（.content > .page-fade > 页面根节点）：
+     .es-imp-wrap 的 height:100% / 内滚动在这里量不到，那是量台没有定高容器，不是缺陷。
+-->
+  <script src="../template/static/vendor/vue.global.prod.js"></script>
+  <script src="../template/static/vendor/element-plus.min.js"></script>
+  <script src="../template/static/vendor/element-plus-icons-vue.min.js"></script>
+  <script src="../template/static/vendor/element-plus-zh-cn.min.js"></script>
+
+  <!-- 被测组件（真实文件，顺序同 index.html） -->
+  <script src="../template/static/pages/es_import.js"></script>
+
+  <script>
+const QS = new URLSearchParams(location.search)
+const STAGE = QS.get('stage') || 'preview'
+const SHOT = QS.get('shot') === 'true'
+
+window.__errors = []
+window.__posts = []
+window.addEventListener('error', function (e) {
+  window.__errors.push(String(e.message) + ' @ ' + String(e.filename || '?').split('/').pop() + ':' + String(e.lineno || 0))
+})
+window.addEventListener('unhandledrejection', function (e) {
+  window.__errors.push('rejection: ' + String((e.reason && e.reason.message) || e.reason))
+})
+
+const SHORT_PATH = 'C:/logs/app-2026-10-14.jsonl'
+// 长度是刻意卡出来的：路径自然宽必须大于宽视口下 .es-imp-path 的盒宽（1440 时约 1103px），
+// 否则「已省略=no」只是因为放得下，什么都没验证到。实测这一条自然宽 ≈1360px。
+const LONG_PATH = 'C:/Users/anesthesia/AppData/Local/Temp/infra-ops/导出的日志归档/2026-10-14/一个故意写得很长的目录名用来验证省略号/归档副本-2026-10-14-继续拉长以覆盖宽视口/application-access-2026-10-14-full.backup.jsonl'
+const LONG_FIELD = 'upstream_response_time_from_gateway_cluster_node_alpha'
+const LONG_VALUE = '/api/v1/orders/detail?id=8f2c1d0e-4a7b-4c1e-9f30-12ab34cd56ef&trace=9f2c1d0e4a7b4c1e9f3012ab34cd56ef&full=1'
+const TYPE_OPTIONS = ['keyword', 'long', 'double', 'boolean', 'text', 'date']
+
+function basePreview() {
+  return {
+    source: SHORT_PATH, size: 2048, kind: 'json', files: [],
+    scanned: 8, matched: 8, partial: 0, skipped: 0, skip_reasons: [],
+    type_options: TYPE_OPTIONS, index: 'logs-2026.10', index_exists: false, scan_capped: false
+  }
+}
+
+// api 桩：只覆盖「预览 / 预检 / 取消」，真跑流程不在本台范围内（见文件头说明）
+window.api = {
+  post: function (url, body, cfg) {
+    window.__posts.push({ url: url, body: body, cfg: cfg })
+    if (url.indexOf('/import/cancel') >= 0) return Promise.resolve({ code: 0, data: { cancelled: true } })
+    return Promise.resolve({ code: 0, data: basePreview() })
+  },
+  get: function () { return Promise.resolve({ code: 0, data: { found: false } }) }
+}
+
+const app = Vue.createApp({
+  data() { return { conn: { id: 1, name: 'es-prod' } } }
+})
+app.use(ElementPlus)
+app.component('es-import-tab', window.EsImportTab)
+const vm = app.mount('#app')
+
+// ===================== 断言 =====================
+const L = []
+function push(s) { L.push(s) }
+function q(sel) { return document.querySelector(sel) }
+function qa(sel) { return [].slice.call(document.querySelectorAll(sel)) }
+function txt(el) { return el ? el.textContent.replace(/\s+/g, ' ').trim() : '—' }
+function tick() { return new Promise(function (r) { Vue.nextTick(r) }) }
+function finish() {
+  if (SHOT) return
+  document.getElementById('out').textContent = L.join('\n')
+}
+
+function geom(tag) {
+  const wrap = q('.es-imp-wrap')
+  if (!wrap) { push('!! 面板未渲染'); return }
+  const r = wrap.getBoundingClientRect()
+  push(tag + ' 面板宽 ' + Math.round(r.width) + ' × 高 ' + Math.round(r.height)
+    + '  docScrollW=' + document.documentElement.scrollWidth + ' clientW=' + document.documentElement.clientWidth
+    + '  横向溢出=' + (document.documentElement.scrollWidth > document.documentElement.clientWidth + 1 ? 'YES' : 'no'))
+
+  // 文件路径是最容易撑破的一处：盒宽上限 + min-width:0 + textOverflow 三样缺一不可。
+  // ⚠️ 别用 scrollWidth 判截断：overflow:hidden + text-overflow:ellipsis 会把 scrollWidth 裁到盒宽，
+  //    于是「明明省了省略号」也量成 1103/1103。用同字体隐藏探针量自然宽度才判得准。
+  const p = q('.es-imp-path')
+  if (p) {
+    const pr = p.getBoundingClientRect()
+    const cs = getComputedStyle(p)
+    const probe = document.createElement('span')
+    probe.textContent = p.textContent
+    probe.style.cssText = 'position:absolute;left:-9999px;top:0;white-space:nowrap;visibility:hidden;'
+      + 'font-family:' + cs.fontFamily + ';font-size:' + cs.fontSize
+      + ';font-weight:' + cs.fontWeight + ';font-style:' + cs.fontStyle
+      + ';letter-spacing:' + cs.letterSpacing
+    document.body.appendChild(probe)
+    const natural = probe.getBoundingClientRect().width
+    probe.remove()
+    const need = natural > pr.width + 1
+    push('    路径 盒宽 ' + Math.round(pr.width) + '  自然宽 ' + Math.round(natural)
+      + '  需省略=' + (need ? 'YES' : 'no')
+      + '  已省略=' + (need && cs.textOverflow === 'ellipsis' ? 'YES' : 'no')
+      + '  在面板内=' + (pr.right <= r.right + 1 ? 'YES' : 'NO'))
+  }
+
+  // 预览弹框：左右两栏 + 弹框自身不得撑出视口
+  const dlg = q('.es-imp-preview')
+  if (dlg) {
+    const dr = dlg.getBoundingClientRect()
+    push('    预览弹框 ' + Math.round(dr.width) + 'px  在视口内='
+      + (dr.left >= -1 && dr.right <= window.innerWidth + 1 ? 'YES' : 'NO')
+      + '  溢出=' + (dr.width > window.innerWidth - 20 ? 'YES' : 'no')
+      + '  纵向在视口内=' + (dr.top >= -1 && dr.bottom <= window.innerHeight + 1
+        ? 'YES(' + Math.round(dr.height) + 'px)' : 'NO(bottom=' + Math.round(dr.bottom) + ')'))
+    const cols = qa('.es-imp-pv-col')
+    push('    左右两栏 = ' + cols.map(function (c) {
+      return Math.round(c.getBoundingClientRect().width) + 'px'
+    }).join(' / '))
+    const rowsCol = q('.es-imp-pv-col .es-imp-pv-rows')
+    if (rowsCol) {
+      push('    右栏(逐行预览) 宽 ' + Math.round(rowsCol.getBoundingClientRect().width)
+        + '  clientW=' + rowsCol.clientWidth + ' scrollW=' + rowsCol.scrollWidth
+        + '  未横向溢出=' + (rowsCol.scrollWidth <= rowsCol.clientWidth + 1 ? 'YES' : 'NO')
+        + '  纵向自滚=' + getComputedStyle(rowsCol).overflowY)
+    }
+  }
+}
+
+async function run() {
+  const g = vm.$refs.imp
+  if (!g) { push('!! 组件实例未挂上（ref 失效）'); finish(); return }
+  push('场景 = ' + STAGE + '  视口 = ' + window.innerWidth + '×' + window.innerHeight)
+
+  g.index = 'logs-2026.10'
+
+  if (STAGE === 'preview') {
+    g.source = SHORT_PATH
+    g.analyzed = true
+    const pv = basePreview()
+    pv.rows = [
+      { no: 1, raw: '2026-10-14T01:00:00Z "GET /api/v1/orders HTTP/1.1" 200 0.031', status: 'matched',
+        fields: [
+          { name: '@timestamp', value: '2026-10-14T01:00:00Z', type: 'ts' },
+          { name: 'method', value: 'GET' }, { name: 'status', value: '200', type: 'int' }
+        ] },
+      { no: 2, raw: '2026-10-14T01:00:02Z "GET /api/v1/orders/9 HTTP/1.1" 404 -', status: 'partial',
+        fields: [
+          { name: '@timestamp', value: '2026-10-14T01:00:02Z', type: 'ts' },
+          { name: 'method', value: 'GET' }, { name: 'status', value: '404', type: 'int' }
+        ] },
+      { no: 3, raw: '这行故意不匹配任何 pattern', status: 'skipped', reason: '第 3 行未匹配 pattern', fields: [] }
+    ]
+    pv.types = { '@timestamp': 'date', method: 'keyword', path: 'keyword', status: 'long', rt: 'double' }
+    g.preview = pv
+    g.types = Object.assign({}, pv.types)
+    g.showPreview = true
+  } else if (STAGE === 'long') {
+    g.source = LONG_PATH
+    g.analyzed = true
+    const pv = basePreview()
+    pv.source = LONG_PATH
+    pv.index = 'logs-with-a-very-long-index-name-for-testing-2026-10-14'
+    pv.index_exists = true
+    pv.types = {}
+    pv.types[LONG_FIELD] = 'double'
+    pv.types[LONG_FIELD + '_suffix'] = 'keyword'
+    pv.skip_reasons = ['a.jsonl:12 未匹配 pattern（这一行故意写得很长很长很长很长很长很长很长很长）']
+    // 右栏要有超长原文与超长字段值：验证卡片换行 + break-all 真的把它折进盒内而不是撑出横向滚动
+    pv.rows = [
+      { no: 128, raw: LONG_VALUE + ' ' + LONG_VALUE, status: 'matched',
+        fields: [
+          { name: LONG_FIELD, value: LONG_VALUE, type: 'float' },
+          { name: LONG_FIELD + '_suffix', value: LONG_VALUE }
+        ] },
+      { no: 129, raw: 'GET /ok 200', status: 'partial', fields: [{ name: 'method', value: 'GET' }] }
+    ]
+    g.preview = pv
+    g.types = Object.assign({}, pv.types)
+    g.showPreview = true
+  } else if (STAGE === 'result') {
+    g.source = SHORT_PATH
+    g.result = {
+      source: SHORT_PATH, index: 'logs-2026.10', read: 123456, indexed: 123450, failed: 6, skipped: 12,
+      partial: 34, batches: 247, bytes: 98765432, elapsed_ms: 45200, created: true, files: [],
+      failures: [
+        'app-2026-10-14.jsonl:8821: mapper_parsing_exception: failed to parse field [status] of type [long] in document with id 8821',
+        'app-2026-10-14.jsonl:9930: illegal_argument_exception: message is too long'
+      ],
+      skip_reasons: ['app-2026-10-14.jsonl:1200 未匹配 pattern'],
+      dropped_fields: ['status', 'upstream_response_time_from_gateway_cluster_node_alpha'],
+      failures_truncated: true
+    }
+  } else if (STAGE === 'archive') {
+    g.source = 'C:/logs/archive-2026-10-14.zip'
+    g.analyzed = true
+    const pv = basePreview()
+    pv.kind = 'archive'
+    pv.files = [
+      'logs/app-2026-10-14.log', 'logs/error-2026-10-14.log', 'logs/access-2026-10-14.log',
+      'metrics/container-2026-10-14.jsonl'
+    ]
+    pv.scanned = 500
+    pv.matched = 492
+    pv.partial = 5
+    pv.skipped = 3
+    pv.scan_capped = true
+    pv.types = { ts: 'keyword', level: 'keyword', msg: 'text' }
+    pv.rows = [
+      { no: 88, raw: '2026-10-14 01:00:00 INFO order created', status: 'matched',
+        fields: [
+          { name: 'ts', value: '2026-10-14 01:00:00', type: 'ts' },
+          { name: 'level', value: 'INFO' }, { name: 'msg', value: 'order created' }
+        ] }
+    ]
+    g.preview = pv
+    g.types = Object.assign({}, pv.types)
+    g.showPreview = true
+  }
+
+  await tick()
+  await new Promise(function (r) { setTimeout(r, 120) })
+
+  if (g.preview) {
+    push('  类型表行数 = ' + qa('.es-imp-table .el-table__row').length
+      + '  首行 = ' + txt(q('.es-imp-table .el-table__row')))
+    // 逐行解析预览的行数直接数右栏的 grok 卡片
+    const cards = qa('.es-imp-pv-col.is-rows .es-grok-card')
+    push('  逐行预览卡片 = ' + cards.length)
+  }
+  if (g.result) {
+    push('  结果行 = ' + txt(q('.es-imp-result')))
+    push('  失败明细 = ' + qa('.es-imp-detail pre').length + ' 条  首条 = ' + txt(q('.es-imp-detail pre')))
+    push('  丢弃字段提示 = ' + txt(qa('.es-imp-detail .es-imp-hint')[0]))
+  }
+  geom('几何')
+  push('JS 错误 = ' + window.__errors.length + ' 条' + (window.__errors.length ? ' -> ' + window.__errors.join(' | ') : ''))
+  finish()
+}
+
+setTimeout(run, 300)
+  </script>
+</body>
+</html>

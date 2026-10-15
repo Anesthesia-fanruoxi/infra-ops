@@ -170,19 +170,11 @@ func (m *viewSyncManager) pullOne(ctx context.Context, client *escClient, v *mod
 	}
 }
 
-// resolveConn 从连接配置解密密码并构造客户端。
+// resolveConn 从连接配置解密密码并构造客户端（解密 + 构造这两步与字段探测共用一份实现）。
 func (m *viewSyncManager) resolveConn(conn *model.ESConn) (*escClient, int, string) {
-	var password []byte
-	if conn.AuthType == "basic" && len(conn.EncryptedSecret) > 0 {
-		pw, err := m.crypto.Decrypt(conn.EncryptedSecret)
-		if err != nil {
-			return nil, 0, "解密连接密码失败: " + err.Error()
-		}
-		password = pw
-	}
-	client, err := newESCClient(conn.URL, conn.Insecure, conn.AuthType, conn.Username, string(password))
+	client, err := resolveESClient(m.crypto, conn)
 	if err != nil {
-		return nil, 0, "连接地址无效: " + err.Error()
+		return nil, 0, err.Error()
 	}
 	return client, 0, ""
 }

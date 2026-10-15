@@ -431,11 +431,16 @@ func parseDateLiteral(s string) (int64, int64, error) {
 // ---------- 搜索体组装（§10） ----------
 
 // BuildSearchBody 组装 /{pattern}/_search 请求体（时间 filter gte/lt 下半开；sort/_source/highlight 取自字段表）。
+// sortOrder 控制时间排序方向：asc = 最早优先；其余（含空）一律降序（最新优先，默认口径）。
 func BuildSearchBody(schema *Schema, kql string, startMs, endMs int64,
-	columns []string, histogramInterval string) (map[string]interface{}, *dslErr) {
+	columns []string, histogramInterval string, sortOrder string) (map[string]interface{}, *dslErr) {
 	q, derr := compileQuery(kql, schema)
 	if derr != nil {
 		return nil, derr
+	}
+	order := "desc"
+	if strings.EqualFold(strings.TrimSpace(sortOrder), "asc") {
+		order = "asc"
 	}
 	inner := map[string]interface{}{}
 	if q != nil {
@@ -452,7 +457,7 @@ func BuildSearchBody(schema *Schema, kql string, startMs, endMs int64,
 		"size":             esResultWindow,
 		"track_total_hits": true,
 		"sort": []interface{}{
-			map[string]interface{}{schema.TimeField: map[string]interface{}{"order": "desc"}},
+			map[string]interface{}{schema.TimeField: map[string]interface{}{"order": order}},
 			map[string]interface{}{"_doc": map[string]interface{}{"order": "desc"}},
 		},
 	}

@@ -44,6 +44,7 @@ var migrations = []migration{
 	{34, migrateV34},
 	{35, migrateV35},
 	{36, migrateV36},
+	{37, migrateV37},
 }
 
 // migrateV33 工具-MySQL：使用记录（两张互不相关的表）。
@@ -1098,4 +1099,31 @@ func tableExists(db *sql.DB, name string) (bool, error) {
 		return false, err
 	}
 	return n > 0, nil
+}
+
+// migrateV37 ES 系统自带字段缓存：按连接存「生成 logstash 配置时要删的默认字段」。
+//
+// 单独建表而不是塞进 es_conns 的 JSON 列：这份清单是**探测产物**（带版本、时间、状态、
+// 失败原因），会被后台周期刷新整体覆盖；而人工补充（extra）是**人登记的数据**，
+// 两者混在一列里，「哪部分是自动的、哪部分是人填的」就分不清了，刷新时也容易误伤。
+func migrateV37(db *sql.DB) error {
+	stmts := []string{
+		`CREATE TABLE IF NOT EXISTS es_field_cache (
+			id         INTEGER PRIMARY KEY AUTOINCREMENT,
+			conn_id    INTEGER NOT NULL UNIQUE,
+			es_version TEXT NOT NULL DEFAULT '',
+			fields     TEXT NOT NULL DEFAULT '[]',
+			extra      TEXT NOT NULL DEFAULT '[]',
+			status     TEXT NOT NULL DEFAULT '',
+			error      TEXT NOT NULL DEFAULT '',
+			synced_at  TEXT NOT NULL DEFAULT '',
+			updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+		)`,
+	}
+	for _, s := range stmts {
+		if _, err := db.Exec(s); err != nil {
+			return err
+		}
+	}
+	return nil
 }

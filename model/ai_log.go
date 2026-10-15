@@ -8,6 +8,7 @@ package model
 const (
 	AIMenuMetrics = "metrics" // 监控查询
 	AIMenuMySQL   = "mysql"   // MySQL 工作台
+	AIMenuES      = "es"      // Elasticsearch 控制台
 )
 
 // AI 调用记录的类型、状态与 token 来源取值（后端、前端、筛选参数共用同一套口径）。
@@ -16,6 +17,7 @@ const (
 	AILogKindSQL     = "sql"     // MySQL：自然语言生成 SQL
 	// MySQL：解读 EXPLAIN 执行计划（与监控查询的结果解读同值，按 menu 区分归属）
 	AILogKindExplain = "explain"
+	AILogKindGrok    = "grok" // ES：自然语言生成 grok pattern
 
 	LogStatusOK    = "ok"
 	LogStatusError = "error"

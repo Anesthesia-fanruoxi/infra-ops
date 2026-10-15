@@ -68,11 +68,15 @@ func Audit(r *repo.AuditRepo) gin.HandlerFunc {
 	}
 }
 
-// parseResult 从响应体解析业务结果（resp 统一结构 code/message）；
-// 非 JSON 响应回落空值，仅保留 HTTP 状态可判定成败。
+// parseResult 从响应体解析业务结果：同步响应走 resp 统一结构（code/message），
+// 流式响应（SSE）取最终帧——final 帧即成功、error 帧即失败；
+// 两者都不是时回落空值，仅保留 HTTP 状态可判定成败。
 func parseResult(body []byte) (int, string) {
 	if len(body) == 0 {
 		return 0, ""
+	}
+	if code, message, ok := parseSSEFrames(body); ok {
+		return code, message
 	}
 	var r struct {
 		Code    int    `json:"code"`
@@ -82,6 +86,36 @@ func parseResult(body []byte) (int, string) {
 		return 0, ""
 	}
 	return r.Code, r.Message
+}
+
+// parseSSEFrames 从 SSE 响应体里提取业务结果：逐帧向后扫描，
+// 以最后一个 final / error 帧为准（AI 生成类接口的终稿与失败都在这两类帧里）。
+// 响应被捕获上限截断、恰好没截到最终帧时返回 ok=false，由调用方按未知结果处理。
+func parseSSEFrames(body []byte) (int, string, bool) {
+	event := ""
+	code, message, found := 0, "", false
+	for _, line := range strings.Split(string(body), "\n") {
+		line = strings.TrimRight(line, "\r")
+		if name, ok := strings.CutPrefix(line, "event:"); ok {
+			event = strings.TrimSpace(name)
+			continue
+		}
+		data, ok := strings.CutPrefix(line, "data:")
+		if !ok {
+			continue
+		}
+		switch event {
+		case "final":
+			code, message, found = 0, "ok", true
+		case "error":
+			var e struct {
+				Message string `json:"message"`
+			}
+			_ = json.Unmarshal([]byte(strings.TrimSpace(data)), &e)
+			code, message, found = 500, e.Message, true
+		}
+	}
+	return code, message, found
 }
 
 // resolveAction 生成动作标识 "METHOD /path"（剥离 /api 前缀，参数位保留 :id 形态）；非 API 路径返回空。

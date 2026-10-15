@@ -154,3 +154,52 @@ func TestResolveAIRange(t *testing.T) {
 		}
 	}
 }
+
+// TestBuildFollowupMessages 锁定追加生成的对话拼装：只带上一轮（assistant 上一版 + user 追加要求），
+// 上一版缺失时退回单轮生成，并保证追加要求里写明「range 沿用上一轮」。
+func TestBuildFollowupMessages(t *testing.T) {
+	// 没有上一轮 / 上一轮没有表达式 → 不产出上下文（调用方按单轮处理）
+	if got := buildFollowupMessages(nil, "再看内存"); got != nil {
+		t.Errorf("没有上一轮时应返回 nil，得到 %+v", got)
+	}
+	if got := buildFollowupMessages(&aiPromQLPrev{Question: "查 CPU"}, "再看内存"); got != nil {
+		t.Errorf("上一轮没有表达式时应返回 nil，得到 %+v", got)
+	}
+
+	msgs := buildFollowupMessages(&aiPromQLPrev{
+		Question: "今天各容器内存",
+		PromQL:   `container_memory_usage{namespace="scfq-service"}`,
+		Explain:  "容器内存",
+	}, "以容器名称维度展示")
+	if len(msgs) != 2 {
+		t.Fatalf("追加上下文应为 2 条消息，得到 %d", len(msgs))
+	}
+	if msgs[0].Role != "assistant" || msgs[1].Role != "user" {
+		t.Fatalf("消息角色错位: %s / %s", msgs[0].Role, msgs[1].Role)
+	}
+	// assistant 那一条必须是可解析的上一版 JSON（模型据此看到上一版表达式）
+	var prev promqlReply
+	if err := unmarshalModelJSON(msgs[0].Content, &prev); err != nil {
+		t.Fatalf("上一版 JSON 不可解析: %v（%s）", err, msgs[0].Content)
+	}
+	if prev.PromQL != `container_memory_usage{namespace="scfq-service"}` {
+		t.Errorf("上一版表达式丢失: %q", prev.PromQL)
+	}
+	// 追加要求段要带上：本轮要求 + range 沿用规则（否则用户识别出的时间范围会被清空）
+	if !strings.Contains(msgs[1].Content, "以容器名称维度展示") {
+		t.Errorf("追加要求段缺少本轮要求: %s", msgs[1].Content)
+	}
+	if !strings.Contains(msgs[1].Content, "range 沿用上一轮") {
+		t.Errorf("追加要求段缺少 range 沿用规则: %s", msgs[1].Content)
+	}
+}
+
+// TestTraceQuestion 调用记录里追加生成要能与首轮区分开。
+func TestTraceQuestion(t *testing.T) {
+	if got := traceQuestion("查内存", false); got != "查内存" {
+		t.Errorf("首轮问题不应加前缀: %q", got)
+	}
+	if got := traceQuestion("再看内存", true); got != "追加：再看内存" {
+		t.Errorf("追加问题应带前缀: %q", got)
+	}
+}

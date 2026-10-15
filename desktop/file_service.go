@@ -143,6 +143,36 @@ func (s *FileService) PickSQLFile(title string) (string, error) {
 	return path, err
 }
 
+// PickImportFiles 弹出原生多选文件对话框选择要导入到 ES 的数据文件；取消返回空列表。
+//
+// 三类来源都走这一个入口（JSON / 纯文本 / 压缩包）：具体按哪种处理由后端嗅探内容决定，
+// 这里只把过滤器放宽到这三类 —— 按扩展名硬猜反而可能挡住用户真正要选的文件。
+// 过滤器里的分号是「同一组多个扩展名」的写法，不支持时用户还能选「所有文件」。
+func (s *FileService) PickImportFiles(title string) ([]string, error) {
+	if strings.TrimSpace(title) == "" {
+		title = "选择要导入的数据文件（可多选）"
+	}
+	files, err := s.app.Dialog.OpenFile().
+		SetTitle(title).
+		CanChooseFiles(true).
+		CanChooseDirectories(false).
+		AddFilter("日志与数据文件", "*.json;*.jsonl;*.ndjson;*.log;*.txt").
+		AddFilter("压缩包", "*.zip;*.tgz;*.tar.gz").
+		AddFilter("所有文件", "*.*").
+		AttachToWindow(s.window).
+		PromptForMultipleSelection()
+	if isDialogCancelled(err) {
+		return []string{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if files == nil {
+		files = []string{}
+	}
+	return files, nil
+}
+
 // PickBackupFile 弹出原生打开对话框选择备份文件（.iopsbak）；取消返回空串。
 func (s *FileService) PickBackupFile(title string) (string, error) {
 	if strings.TrimSpace(title) == "" {

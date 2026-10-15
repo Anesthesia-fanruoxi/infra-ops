@@ -87,14 +87,12 @@ type MySQLTableDetail struct {
 
 // MySQLAIColumn AI 归纳出的单个字段说明。
 // Type 为生成目录时标记的真实列类型（如 datetime / int）：生成 SQL 时据此把「今天 / 上周」
-// 这类相对时间自适应换算成日期字面量或 Unix 时间戳，不再靠模型猜。旧目录无此字段，为空。
-// Unit 为 int 时间戳列的探测结果（ms / s）：建目录时抽一条真实值判断存的是秒还是毫秒，
-// 生成 SQL 时按对应单位换算；探测不出（空表 / 超时）留空，按秒级兜底。
+// 这类相对时间自适应换算成日期字面量（日期时间类型）或毫秒级 Unix 时间戳（int 时间戳），
+// 不再靠模型猜。旧目录无此字段，为空。
 type MySQLAIColumn struct {
 	Name string `json:"name"`
 	Note string `json:"note"`
 	Type string `json:"type,omitempty"`
-	Unit string `json:"unit,omitempty"`
 }
 
 // MySQLAICatalogEntry 表语义目录条目：AI 依据表/字段注释归纳出的用途与字段含义。

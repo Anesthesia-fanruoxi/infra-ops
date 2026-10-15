@@ -30,6 +30,10 @@ sandbox.window = sandbox
 sandbox.console = console
 sandbox.setTimeout = setTimeout
 sandbox.clearTimeout = clearTimeout
+// 轮询用的 setInterval：沙箱里不能真起定时器（会让断言进程挂住不退出），给个空实现。
+// 「取一次进度」本身由业务断言直接调方法覆盖。
+sandbox.setInterval = () => 0
+sandbox.clearInterval = noop
 sandbox.URL = { createObjectURL: () => 'blob:x', revokeObjectURL: noop }
 sandbox.Blob = function () {}
 sandbox.document = {
@@ -349,6 +353,43 @@ check(/border-right:\s*1px dashed/.test(ruleDocTime) && !/background/.test(ruleD
   'ES 文档时间列应只留虚线竖分隔、不保留卡片灰底，当前: ' + ruleDocTime.trim())
 check(/border-bottom:\s*1px dashed/.test(ruleDocsHead) && !/border-radius/.test(ruleDocsHead) && !/border:\s*1px solid/.test(ruleDocsHead),
   'ES 文档表头不应做成卡片（去圆角 / 实线边框，改虚线底边），当前: ' + ruleDocsHead.trim())
+
+// 12b. 数据视图时间升降序（用户口径「一个按钮解决：默认降序，点一下变升序」）：
+//      排序做在查询侧（ES sort 的时间字段），切换即重查；每次查询恒带 sort_order。
+{
+  const discTpl = String((sandbox.EsDiscover && sandbox.EsDiscover.template) || '')
+  check(/@click="toggleSort"/.test(discTpl) && discTpl.indexOf('时间 ↓ 降序') >= 0 && discTpl.indexOf('时间 ↑ 升序') >= 0,
+    '数据视图时间排序要用一个按钮切换（默认「时间 ↓ 降序」，点击后「时间 ↑ 升序」）')
+}
+
+// 12c. 命中高亮（用户口径「只有查询之后才触发高亮；多个匹配项多个颜色」）：
+//      命中项在查询时刻从查询串快照（打字不触发），客户端按项分色渲染。
+{
+  const discTpl = String((sandbox.EsDiscover && sandbox.EsDiscover.template) || '')
+  check(/v-html="hlValue\(kv\.v\)"/.test(discTpl) && discTpl.indexOf('renderHl') < 0,
+    '文档值要用 hlValue 渲染（查询时刻的快照命中项分色高亮），旧的 ES 片段 renderHl 应移除')
+  const t = sandbox.EsDiscover && sandbox.EsDiscover.methods.extractHlTerms
+  if (t) {
+    const terms = sandbox.EsDiscover.methods.extractHlTerms.call(sandbox.EsDiscover,
+      'env:prod and (level:error or "connection refused")')
+    check(terms.length === 3 && terms[0] === 'prod' && terms[1] === 'error' && terms[2] === 'connection refused',
+      'Discover：命中项提取（field:value 取取值、引号短语整体、and/or 不算）: ' + JSON.stringify(terms))
+    const terms2 = sandbox.EsDiscover.methods.extractHlTerms.call(sandbox.EsDiscover, 'status:>=500 500 timeout')
+    check(terms2.length === 2 && terms2.indexOf('500') >= 0 && terms2.indexOf('timeout') >= 0,
+      'Discover：范围值取数字部分、重复项去重: ' + JSON.stringify(terms2))
+  }
+}
+
+// 12d. 索引列表 / 总数异步化（用户口径「先展示前 100 个，总数异步转圈」「新建视图的右边索引列表
+//      转圈异步加载、不阻抽屉框」）：列表与总数拆成两个请求，列表先渲染；抽屉即开即用。
+{
+  const idxTpl = String((sandbox.EsIndexTab && sandbox.EsIndexTab.template) || '')
+  check(/v-if="!loadingTotal"/.test(idxTpl) && /<Loading \/>/.test(idxTpl),
+    '索引页：左上角总数位要有异步转圈（列表先渲染，总数慢一步不挡表格）')
+  const vTpl = String((sandbox.EsViewsTab && sandbox.EsViewsTab.template) || '')
+  check(vTpl.indexOf('es-view-create" v-loading') < 0 && /class="es-view-match-list" v-loading="loadingIdx"/.test(vTpl),
+    '新建视图：转圈只盖右侧索引列表，不阻塞整个抽屉')
+}
 
 // 13. 索引模板「可视化创建」：请求体由 es_template_build.js 的纯函数拼装，
 //     这里**直接调用**它们做真值断言（纯逻辑用源码文本匹配是测不出错的）。
@@ -671,6 +712,19 @@ check(/payload\(false,\s*''\)/.test(tSrc[T_IMP]), '导入必须先发一次未�
 check(/payload\(true,\s*key\)/.test(tSrc[T_IMP]), '导入的正式请求必须带 confirmed=true（payload(true, key)）')
 check(/need_confirm/.test(tSrc[T_IMP]), '导入必须处理服务端返回的 need_confirm，否则两段式确认形同虚设')
 
+// 15d. SQL 转储的「去掉库名」与导入的目标库下拉（2026-10-14 用户需求）。
+//      口径：查询照原样带库执行；strip 开了之后 INSERT 只写表名——dump 落到哪个库都能导，
+//      目标库在导入时用下拉选（清单拉不到就手输，绝不拦导入）。
+check(expData.stripSchema === false, '导出「去掉库名」默认必须为关（默认行为不变，改动要显式）')
+check(/v-model="stripSchema"/.test(tSrc[T_EXP]) && tSrc[T_EXP].indexOf('去掉库名') >= 0,
+  '导出：对话框要有「去掉库名」开关（只影响 INSERT 目标表名，不影响查询本身）')
+check(/strip_schema:\s*this\.stripSchema/.test(tSrc[T_EXP]),
+  '导出：开关要随请求带给后端（strip_schema）')
+check(/\/mysql\/' \+ this\.connId \+ '\/databases'/.test(tSrc[T_IMP]),
+  '导入：目标库下拉要打 /mysql/:id/databases 拉库清单')
+check(tSrc[T_IMP].indexOf('allow-create') >= 0,
+  '导入：库下拉要允许手输（清单拉不到时退化为手输，不能拦导入）')
+
 // 16. Redis 工具（key 浏览器）：首次上锁。
 //     三条是安全边界，不是外观偏好：
 //       ① 匹配串不得为空——空串拼出来的 `*` 就是 KEYS *，会阻塞整个实例（后端也会拦，这里拦的是「按钮看起来可点」）；
@@ -771,21 +825,25 @@ if (fs.existsSync(ROUTER)) {
   check(Object.keys(GROUP_PREFIX).length >= 8,
     '未能从 router.go 解析出路由分组（regex 可能已失效）——交叉核对形同虚设')
 
-  const registered = {}   // verb -> Set(path)
-  const addRoute = (verb, p) => {
-    if (!registered[verb]) registered[verb] = new Set()
-    registered[verb].add(p)
+  const registered = {}     // verb -> Set(path)：axios 基准（两边都不含 /api）
+  const registeredFull = {} // verb -> Set(path)：桥直连基准（两边都含 /api）
+  const addRoute = (o, verb, p) => {
+    if (!o[verb]) o[verb] = new Set()
+    o[verb].add(p)
   }
   for (const m of rsrc.matchAll(/(\w+)\.(GET|POST|PUT|DELETE)\("([^"]*)"/g)) {
     const prefix = GROUP_PREFIX[m[1]]
     if (!prefix) continue
-    addRoute(m[2], prefix + m[3])
+    addRoute(registered, m[2], prefix + m[3])
+    addRoute(registeredFull, m[2], '/api' + prefix + m[3])
   }
   // 直接挂在 protected 上的（无分组）：前缀就是 /api。
-  // 存进集合时**去掉 /api** —— 前端字面量是相对 axios baseURL('/api') 的，
-  // '/deploy/run' 对应的就是 protected.GET("/api/deploy/run")，两边要在同一基准上比。
+  // 存进 base 集时**去掉 /api** —— 前端 api 字面量是相对 axios baseURL('/api') 的，
+  // '/deploy/run' 对应的就是 protected.GET("/api/deploy/run")，两边要在同一基准上比；
+  // 桥直连集则相反：__INFRA_SSE__.post 的 rawURL 直接派发进 Gin 引擎（无 baseURL），必须自带 /api。
   for (const m of rsrc.matchAll(/protected\.(GET|POST|PUT|DELETE)\("([^"]*)"/g)) {
-    addRoute(m[1], m[2])
+    addRoute(registered, m[1], m[2])
+    addRoute(registeredFull, m[1], '/api' + m[2])
   }
   check(Object.keys(registered).length >= 4,
     '未能从 router.go 解析出任何路由（分组解析可能已失效）——交叉核对形同虚设')
@@ -796,6 +854,29 @@ if (fs.existsSync(ROUTER)) {
   const apiCall = /\bapi\.(get|post|put|delete)\(\s*'([^']+)'/g
   let scanned = 0
   const miss = []
+  // ⛔ 匹配口径（base 集与桥直连集共用）：只认两种情形 ——
+  //   ① 完整字面量逐段相等（末段可为 :param，对应前端拼了运行期 id 的写法）；
+  //   ② 字面量整体是某条注册路径的**末段截断**，且注册路径尾部全是 :param。
+  // 绝不做「逐段回退 + 前缀相等」的宽松匹配：那样 /mysql/ai/config 会被同前缀的
+  // /mysql/ai/logs 兜住，明明后端没这条却报全绿（已踩，假绿两轮才发现）。
+  const matchRoute = (segs, cands) => {
+    const eqPath = (p) => {
+      const ps = p.split('/').filter(Boolean)
+      if (ps.length !== segs.length) return false
+      for (let i = 0; i < ps.length; i++) {
+        if (i === ps.length - 1 && ps[i].startsWith(':')) continue
+        if (ps[i] !== segs[i]) return false
+      }
+      return true
+    }
+    if ([...cands].some(eqPath)) return true
+    return [...cands].some(p => {
+      const ps = p.split('/').filter(Boolean)
+      if (ps.length <= segs.length) return false
+      for (let i = 0; i < segs.length; i++) if (ps[i] !== segs[i]) return false
+      return ps.slice(segs.length).every(s => s.startsWith(':'))
+    })
+  }
   for (const [rel, code] of sources) {
     for (const m of code.matchAll(apiCall)) {
       const verb = m[1].toUpperCase()
@@ -806,35 +887,48 @@ if (fs.existsSync(ROUTER)) {
       const segs = path.split('/').filter(Boolean)
       if (!segs.length) continue
       const cands = registered[verb] || new Set()
-      // ⛔ 匹配口径：只认两种情形 ——
-      //   ① 完整字面量逐段相等（末段可为 :param，对应前端拼了运行期 id 的写法）；
-      //   ② 字面量整体是某条注册路径的**末段截断**，且注册路径尾部全是 :param。
-      // 绝不做「逐段回退 + 前缀相等」的宽松匹配：那样 /mysql/ai/config 会被同前缀的
-      // /mysql/ai/logs 兜住，明明后端没这条却报全绿（已踩，假绿两轮才发现）。
-      const eqPath = (p) => {
-        const ps = p.split('/').filter(Boolean)
-        if (ps.length !== segs.length) return false
-        for (let i = 0; i < ps.length; i++) {
-          if (i === ps.length - 1 && ps[i].startsWith(':')) continue
-          if (ps[i] !== segs[i]) return false
-        }
-        return true
-      }
-      let hit = [...cands].some(eqPath)
-      if (!hit) {
-        hit = [...cands].some(p => {
-          const ps = p.split('/').filter(Boolean)
-          if (ps.length <= segs.length) return false
-          for (let i = 0; i < segs.length; i++) if (ps[i] !== segs[i]) return false
-          return ps.slice(segs.length).every(s => s.startsWith(':'))
-        })
-      }
+      let hit = matchRoute(segs, cands)
       // 已知的静态核对盲区：路径在下一段才拼运行期值（'/stacks/instances/' + id + '/scale-out'），
       // 正则只能抓到静态那一段，深度必然不够。这类一律放行，否则误报会淹没真问题。
       const DYNAMIC_TAIL = ['/stacks/instances/', '/stacks/instances']
       if (!hit && DYNAMIC_TAIL.includes(path)) hit = true
       scanned++
       if (!hit) miss.push(rel + ' → api.' + m[1] + "('" + raw + "')")
+    }
+    // this.base() + '/xxx'（es 工具页风格，base 运行期才是 '/es/:id'）：
+    // 上面的 apiCall 正则抓不到（首参不是字面量），曾整个从核对里漏掉。
+    // 口径：字符串字面量必须是某条**同动词**已注册路径的连续末段
+    // （base 贡献的 '/es/:id' 无法定态展开，只能按末段对账）。
+    for (const m of code.matchAll(/\bapi\.(get|post|put|delete)\(\s*this\.base\(\)\s*\+\s*'([^']+)'/g)) {
+      const verb = m[1].toUpperCase()
+      const raw = m[2]
+      if (!raw.startsWith('/')) continue
+      const segs = raw.replace(/\/+$/, '').split('/').filter(Boolean)
+      if (!segs.length) continue
+      scanned++
+      const cands = registered[verb] || new Set()
+      const suffixHit = [...cands].some(p => {
+        const ps = p.split('/').filter(Boolean)
+        if (ps.length <= segs.length) return false
+        const tail = ps.slice(ps.length - segs.length)
+        return tail.every((s, i) => s === segs[i])
+      })
+      if (!suffixHit) miss.push(rel + " → api." + verb + "(this.base() + '" + raw + "')（后端未注册该末段路径）")
+    }
+    // 桥直连调用（流式）：__INFRA_SSE__.post / sse.post 的 rawURL 直接派发进 Gin 引擎，
+    // 没有 axios baseURL('/api') 兜底 ⇒ 字面量必须自带 /api 前缀，且按全前缀集比对。
+    // 真实事故（2026-10-13）：漏前缀 →「接口不存在: POST /metrics/conns/2/ai/promql」弹到 AI 面板。
+    for (const m of code.matchAll(/(?:\bsse|__INFRA_SSE__)\.post\(\s*'([^']+)'/g)) {
+      const raw = m[1]
+      scanned++
+      if (!raw.startsWith('/api/')) {
+        miss.push(rel + " → sse.post('" + raw + "')（桥直连无 baseURL，路径必须自带 /api 前缀）")
+        continue
+      }
+      const segs = raw.replace(/\/+$/, '').split('/').filter(Boolean)
+      if (!matchRoute(segs, registeredFull['POST'] || new Set())) {
+        miss.push(rel + " → sse.post('" + raw + "')（后端未注册）")
+      }
     }
   }
   check(miss.length === 0,
@@ -940,11 +1034,1135 @@ if (EN) {
   delete sandbox.ElementPlus.ElNotification
 }
 
-if (errs.length) {
-  console.log('前端装载冒烟 不通过：')
-  errs.forEach(e => console.log('  - ' + e))
-  process.exit(1)
+// 19. AI 输出高亮（ai_highlight.js）：AI 解读的结论要能一眼看到重点（数值 / 异常 / 正常 / 标识符）。
+//     它是唯一一处「把模型返回的文本拼成 HTML 再 v-html」的地方，所以转义必须由它自己做——
+//     模型原样带 < > & 时不能变成标签。断言全部走行为（分类 / 否定词优先 / 原文不丢字），
+//     不比对字面量字符串（字面量断言在改词表时会假红，在改逻辑时会假绿）。
+const AI_HL = '/static/ai_highlight.js'
+check(tOrder.indexOf(AI_HL) >= 0, 'index.html 未引入 ' + AI_HL)
+const HL = sandbox.AiHl
+check(!!HL && typeof HL.html === 'function', 'window.AiHl.html 缺失（AI 面板的着色入口）')
+if (HL && typeof HL.html === 'function') {
+  const strip = (h) => String(h).replace(/<[^>]+>/g, '')
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&amp;/g, '&')
+  const tags = (h) => [...String(h).matchAll(/class="ai-hl ai-hl-([a-z]+)"/g)].map(m => m[1])
+
+  // ① 转义优先：原文里的标签必须变实体，数值识别照旧
+  const xss = HL.html('<img src=x onerror=alert(1)> 占比 5%')
+  check(xss.indexOf('<img') < 0, 'AiHl.html 未转义输入里的 HTML 标签（v-html 注入面）: ' + xss)
+  check(tags(xss).indexOf('num') >= 0, 'AiHl.html 未识别带 % 的数值: ' + xss)
+
+  // ② 三类关键词分类：红线词 / 注意词 / 正常词各归各位
+  check(tags(HL.html('内存持续升高，已出现 OOM')).indexOf('bad') >= 0, 'AI 高亮未把 OOM 这类风险词标为 bad')
+  check(tags(HL.html('该节点负载偏高，注意观察')).indexOf('warn') >= 0, 'AI 高亮未把「偏高」标为 warn')
+  check(tags(HL.html('全集群运行平稳')).indexOf('good') >= 0, 'AI 高亮未把「平稳」标为 good')
+  // ③ 否定词优先：不能把「无异常」里的「异常」标成红（这是字面匹配最容易出的假红）
+  check(tags(HL.html('各序列均无异常')).join(',') === 'good',
+    'AiHl 必须让「无异常」整体命中 good，而不是把其中的「异常」标成 bad: ' + HL.html('各序列均无异常'))
+  check(tags(HL.html('两者无不一致项')).every(t => t === 'good'),
+    'AiHl 必须让「无不一致」整体命中 good: ' + HL.html('两者无不一致项'))
+  check(tags(HL.html('两者不一致')).join(',') === 'warn',
+    'AiHl 必须把单独出现的「不一致」标为 warn: ' + HL.html('两者不一致'))
+
+  // ④ 标识符与标签选择器（PromQL 原文在结论里必须一眼可辨）
+  const codeHtml = HL.html('建议执行 sum by (container) (container_memory_usage{namespace="scfq-service"})')
+  check(tags(codeHtml).indexOf('code') >= 0, 'AiHl 未把 PromQL 标识符标为 code: ' + codeHtml)
+  check(strip(codeHtml).indexOf('namespace="scfq-service"') >= 0, 'AiHl 丢了标签选择器原文: ' + codeHtml)
+
+  // ④b 实体名不能被数字规则切碎：mall-order-7f9c 必须整体是一个片段。
+  //     这类名字在监控解读里到处都是（容器 / 服务 / 主机名），切碎后满屏碎片数字比不染色还难读。
+  const nameHtml = HL.html('mall-order-7f9c 峰值 1.86 GB')
+  check(tags(nameHtml).indexOf('name') >= 0, 'AiHl 未把容器名这类实体名标为 name: ' + nameHtml)
+  check(nameHtml.indexOf('mall-order-7f9c') >= 0,
+    'AiHl 把实体名切碎了（名字里的数字被当成独立数值）: ' + nameHtml)
+  // ④c 时间点整体识别，不能拆成「14」+「20」
+  check(/<span class="ai-hl ai-hl-num">14:20<\/span>/.test(HL.html('峰值出现在 14:20 左右')),
+    'AiHl 应把时间点整体当作一个数值片段: ' + HL.html('峰值出现在 14:20 左右'))
+
+  // ⑤ 原文一字不丢：剥掉标签后必须完全等于输入（tokenizer 最容易在这里吞字符）
+  const samples = [
+    '过去 1 小时 3 条序列全部无异常，峰值 1.2 GB，均值 340 MB',
+    'instance="10.0.0.1:9100" 的 CPU 使用率偏高（92.5%），建议关注',
+    '磁盘写入速率 4.5 MB/s，较昨日增长 30%，未出现 OOM',
+    '`rate(http_requests_total[5m])` 全为 0'
+  ]
+  for (const s of samples) {
+    check(strip(HL.html(s)) === s, 'AiHl 改变了原文（剥标签后不一致）: ' + JSON.stringify(strip(HL.html(s))) + ' != ' + JSON.stringify(s))
+  }
+  // ⑥ 空输入不崩（字段可能缺失）
+  check(HL.html('') === '' && HL.html(null) === '' && HL.html(undefined) === '',
+    'AiHl.html 对空输入必须返回空串且不抛异常')
 }
-console.log(`前端装载冒烟 通过：脚本 ${loaded}/${expected} 个，9 个套件注册齐备，`
-  + `页面局部组件 ${Object.keys(page.components).length} 个，模板 ${page.template.length} 字符`
-  + (RECORD ? '已重录为基线。' : '逐字节一致。'))
+
+// ⑦ 解读面板接线：三段结论走 hl 渲染，且不再有已下线的「详细分析」
+const ex = sandbox.MetricsAIExplain
+const exTpl = String((ex && ex.template) || '')
+check(!!ex && typeof (ex.methods || {}).hl === 'function', 'MetricsAIExplain 必须有 hl 方法（走 AiHl.html）')
+check(/v-html="hl\(f\)"/.test(exTpl) && /v-html="hl\(s\)"/.test(exTpl),
+  '解读面板的观察发现 / 排查建议必须经 hl 着色渲染')
+check(exTpl.indexOf('result.detail') < 0, '解读面板不应再渲染 detail（详细分析已下线）')
+
+// ⑦b 解读改弹框（用户口径）：结果区按钮两态、工作台不再有内联卡片。
+//     「首次执行自动弹出 / 关闭后仍能重看 / 查看不重跑 / 重新分析覆盖」四条行为在 ⑫ 里实测。
+const wbTpl = String((sandbox.MetricsWorkbench && sandbox.MetricsWorkbench.template) || '')
+check(exTpl.indexOf('el-dialog') >= 0 && exTpl.indexOf('>关闭<') >= 0 && exTpl.indexOf('>重新分析<') >= 0,
+  '解读结论必须以弹框呈现，且自带「关闭 / 重新分析」两个动作')
+check(wbTpl.indexOf('查看解读') >= 0 && wbTpl.indexOf('重新分析') >= 0 && wbTpl.indexOf('AI 解读') >= 0,
+  '结果区必须给出「AI 解读 / 查看解读 / 重新分析」三个入口（关闭后能重看、能重生成）')
+check(wbTpl.indexOf('aiPanel') < 0,
+  '工作台不应再有内联解读卡片（aiPanel 引用）——解读已全部搬进弹框')
+check(/@state="onExplainState"/.test(wbTpl),
+  '工作台必须监听解读组件的 state 事件（按钮两态靠它同步）')
+check(/@click="viewExplain"/.test(wbTpl),
+  '「查看解读」必须走 viewExplain（只重开弹框）——接成 explain 就变成每次查看都重跑一遍')
+// 「查看解读」在**生成期间也必须可点**：弹框关掉后还能点开看流式进度。
+// 早前一版它跟着 busy 一起禁用 —— 生成中一旦关了弹框就只能干等（用户口径：解析中也要支持点击查看弹框）。
+// 锚点选在 viewExplain 这个绑定所在的那一个标签上（该绑定唯一），不是裸文本。
+const viewBtn = (wbTpl.match(/<el-button[^>]*@click="viewExplain"[^>]*>/) || [''])[0]
+check(!!viewBtn && viewBtn.indexOf(':disabled') < 0,
+  '「查看解读」不能在生成期间被禁用（否则生成中关掉弹框就只能干等）: ' + JSON.stringify(viewBtn))
+
+// ⑧ 追加生成只给一次（用户口径）：默认只有一个生成按钮，生成过一轮才出现「追加生成」，
+//    追加成功即丢弃上下文让按钮消失；因此界面上不该再有「重新开始」这种清理入口。
+const genTpl = String((sandbox.MetricsAIGen && sandbox.MetricsAIGen.template) || '')
+check(genTpl.indexOf('重新开始') < 0, '生成面板不应再有「重新开始」按钮（追加用完自然回到初始态）')
+check(/v-if="prev"[^>]*@click="generate\(true\)"/.test(genTpl),
+  '「追加生成」必须只在 prev 存在（即已生成过一轮）时出现')
+const myTpl = String((sandbox.MySQLAI && sandbox.MySQLAI.template) || '')
+check(myTpl.indexOf('重新开始') < 0, 'MySQL 生成面板不应再有「重新开始」按钮')
+check(/v-if="prev"[^>]*@click="generate\(true\)"/.test(myTpl),
+  'MySQL「追加生成」必须只在 prev 存在时出现')
+// 主按钮文案必须具体到产物（生成 PromQL / 生成 SQL），与面板标题的 kind 对齐——
+// 标题已经写了「AI 生成 X」，按钮再泛化成「AI 生成」就看不出产出什么（用户口径：两侧统一）。
+const mainLabel = (tpl) => {
+  const m = /:loading="loading && !loadingFollowup"[^>]*>([^<]+)</.exec(tpl)
+  return m ? m[1].trim() : ''
+}
+check(mainLabel(genTpl) === '生成 PromQL',
+  '监控生成面板主按钮文案必须是「生成 PromQL」，实际: ' + mainLabel(genTpl))
+check(mainLabel(myTpl) === '生成 SQL',
+  'MySQL 生成面板主按钮文案必须是「生成 SQL」，实际: ' + mainLabel(myTpl))
+
+// ⑩ ES · Grok 解析面板：页签注册 + 面板接线。tabs / components 直接取行为结果（调 computed），
+//    不是扫文本 —— 扫文本挡不住「页签加了但组件没注册」这种半拉子接线。
+const esTabs = (sandbox.ESPage && sandbox.ESPage.computed && sandbox.ESPage.computed.tabs)
+  ? sandbox.ESPage.computed.tabs.call({}) : []
+check(esTabs.some(t => t.name === 'grok'), 'ES 主页面的页签里必须有 grok（Grok 解析）')
+check(!!((sandbox.ESPage || {}).components || {})['es-grok-tab'],
+  'ES 主页面必须注册 es-grok-tab 组件（只加页签不注册组件 = 白屏）')
+const grokTpl = String((sandbox.EsGrokTab && sandbox.EsGrokTab.template) || '')
+check(!!sandbox.EsGrokTab && /@click="parse"/.test(grokTpl) && /@click="aiGenerate\(false\)"/.test(grokTpl),
+  'Grok 面板必须有「解析」与「AI 生成」两个动作')
+check(/v-if="aiPrev"[^>]*@click="aiGenerate\(true\)"/.test(grokTpl),
+  'Grok「追加生成」必须只在 aiPrev 存在（已生成过一轮）时出现')
+check(/v-for="f in l\.fields"/.test(grokTpl),
+  'Grok 结果必须逐字段列出（字段名 + 值），否则解析出来也看不出结构')
+
+// ⑩b Logstash 配置区块：独立子组件。装载顺序必须锁住 —— 子组件在**定义时**取
+//     window.EsGrokLogstash，es_grok.js 先执行就是组件注册成 undefined（点开页签白屏），
+//     与 es_template_quick 那条是同一种坑（那里靠注释约定，这里直接进断言）。
+const iLs = htmlSrc.indexOf('/static/pages/es_grok_logstash.js')
+const iGrok = htmlSrc.indexOf('/static/pages/es_grok.js')
+check(iLs >= 0 && iGrok >= 0 && iLs < iGrok,
+  'index.html 必须先引入 es_grok_logstash.js，再引入 es_grok.js（子组件定义时就要求 window.EsGrokLogstash 已存在）')
+check(!!sandbox.EsGrokLogstash, 'es_grok_logstash.js 必须定义 window.EsGrokLogstash')
+check(!!((sandbox.EsGrokTab || {}).components || {})['es-grok-logstash'],
+  'Grok 面板必须注册 es-grok-logstash 组件（只写标签不注册 = 白屏）')
+check(/<es-grok-logstash\s/.test(grokTpl), 'Grok 面板必须挂载 <es-grok-logstash>（否则这个功能根本没入口）')
+const lsTpl = String((sandbox.EsGrokLogstash && sandbox.EsGrokLogstash.template) || '')
+check(/v-model="tag"/.test(lsTpl) && /@click="generate"/.test(lsTpl),
+  'Logstash 配置区块必须有「匹配 tag」输入框与「生成配置」动作')
+check(/@click="copy"/.test(lsTpl) && /{{ config }}/.test(lsTpl),
+  'Logstash 配置区块必须把配置摊开展示并提供复制（不然生成出来拿不走）')
+
+// ⑩c 数据导入：面板只剩「文件 + 索引 + 检查 + 预览 + 日志」；规则区已整块删除
+//     （pattern 由「检查」自动生成、留在内存里），别再引回来。
+const iImp = htmlSrc.indexOf('/static/pages/es_import.js')
+check(iImp >= 0, 'index.html 必须引入 es_import.js')
+check(htmlSrc.indexOf('es_import_rule.js') < 0,
+  '导入规则区已删除：index.html 不该再引用 es_import_rule.js（pattern 由「检查」自动生成）')
+const impTpl = String((sandbox.EsImportTab && sandbox.EsImportTab.template) || '')
+check(/@click="pickFile"/.test(impTpl) && /@click="doAnalyze"/.test(impTpl),
+  '导入面板必须有「选择文件」与「检查」两个动作（检查 = 手动触发分析）')
+check(/v-if="analyzed"/.test(impTpl),
+  '「预览」必须等「检查」出结果（analyzed）才出现 —— 没结果就没有可核实的东西')
+check(/top="10vh"/.test(impTpl), '预览弹框上下各留 10%（top="10vh"）')
+check(impTpl.indexOf('扫了') < 0 && !/es-imp-pv-rule/.test(impTpl) && impTpl.indexOf('被跳过的记录（最多显示') < 0,
+  '预览弹框只留「左字段 + 右前 20 行」两栏：扫描统计 / 生效规则 / 跳过明细都不该再出现')
+check(/es-imp-log-time/.test(impTpl) && /es-imp-log-mark/.test(impTpl),
+  '检查日志要有「时间 + 状态标记」的日志样式（按步骤输出处理过程）')
+check(/data-file-drop-target/.test(impTpl) && /id="es-imp-drop"/.test(impTpl),
+  '导入面板要支持文件拖放（面板即投放目标 data-file-drop-target / id="es-imp-drop"）')
+check(/日志格式/.test(impTpl) && /v-model="hint"/.test(impTpl) && /type="textarea"/.test(impTpl),
+  '导入面板要有「日志格式」补充框（textarea，可留空）——不贴格式定义时 AI 只能凭空猜字段名')
+check(impTpl.indexOf('用跳过样本重新生成 pattern') >= 0 && impTpl.indexOf('重新导入（删除索引重建）') >= 0,
+  '导入：结果区要有补救入口（用跳过样本重新生成 / 删除索引重建）')
+check(impTpl.indexOf('被跳过的记录示例') >= 0 && /skip_samples/.test(impTpl),
+  '导入：进度弹框要展示被跳过的记录示例（供重新生成 pattern）')
+check(impTpl.indexOf('删除索引重建导入') >= 0, '预览弹框要有「删除索引重建导入」入口（索引已存在时）')
+check(impTpl.indexOf('索引计数核实') >= 0, '导入完成后要显示索引计数核实进度（每 5 秒刷新，最长 1 分钟）')
+check(/label="系统生成字段"/.test(impTpl) && /label="映射字段"/.test(impTpl) && /v-model="renames\[row\.name\]"/.test(impTpl),
+  '预览字段表要三列：系统生成字段 / 映射字段（空=不改，有值替换第一列）/ 类型')
+check(impTpl.indexOf('跳过数量超过 20 条') >= 0 && /@click="pauseDecision\('continue'\)"/.test(impTpl)
+  && /@click="pauseDecision\('refine'\)"/.test(impTpl),
+  '跳过超阈值的暂停弹框要有「继续导入」与「重新生成并删除重建」两个决策')
+check(/width="65%" top="15vh"/.test(impTpl),
+  '暂停弹框要 65% 宽、上下各留 15%（20 条样例在框内滚动，不能撑出屏幕）')
+check(/包内过滤/.test(impTpl) && /v-if="isArchive"/.test(impTpl) && /v-model="filter"/.test(impTpl),
+  '「包内过滤」输入行只在选中压缩包时出现（v-if="isArchive" + v-model="filter"）')
+check(impTpl.indexOf('importing || !sources.length') >= 0,
+  '导入：「检查」按钮的可用性要跟 sources 走（写 !source 会永远禁用）')
+check(impTpl.indexOf('pickFile') < impTpl.indexOf('es-imp-path'),
+  '「选择文件」按钮要排在「数据文件」标签后面（路径显示之前）')
+check(String((sandbox.EsImportTab.methods || {}).pickFile).indexOf('PickImportFiles') >= 0,
+  '导入：选择文件要走多选对话框 PickImportFiles（一次可选多份）')
+const shimSrc = ((sources.find(s => s[0].endsWith('static/wails-shim.js'))) || [])[1] || ''
+check(shimSrc.indexOf('__INFRA_DROP__') >= 0 && shimSrc.indexOf('infra:files-dropped') >= 0,
+  'wails-shim.js 要暴露 __INFRA_DROP__（订阅 infra:files-dropped 拿拖入文件的真实路径）')
+check(!/<es-import-rule/.test(impTpl)
+  && !('es-import-rule' in ((sandbox.EsImportTab || {}).components || {})),
+  '导入面板不该再挂载/注册 es-import-rule（规则区已删除）')
+check(/@click="doPreview"/.test(impTpl),
+  '导入面板必须能先「预览」（字段类型要先看一眼再导，不然只能等报错）')
+check(/@click="importFromPreview"/.test(impTpl),
+  '「开始导入」要放在预览弹框里（先看抽样与字段类型，确认再导）')
+check(/@click="cancel"/.test(impTpl), '导入面板在导入过程中要能给「取消」')
+// 页签挂载：只定义组件、不挂进 ESPage 的 tabs 里 = 功能没有入口
+const esPageTpl = String((sandbox.ESPage && sandbox.ESPage.template) || '')
+check(/<es-import-tab/.test(esPageTpl),
+  'es.js 的表单里必须挂载 <es-import-tab>（否则这个功能没有入口）')
+// _id 字段已砍掉：文档 id 由 ES 自动生成，别再加回界面或请求体
+check(impTpl.indexOf('idField') < 0 && impTpl.indexOf('id_field') < 0,
+  '导入：_id 字段已去掉（文档 id 由 ES 自动生成），模板里不该再出现 idField/id_field')
+// 预览是左右布局弹框：左原始数据 / 右切分结果，对照着看才知道规则切得对不对
+check(/v-model="showPreview"/.test(impTpl) && /es-imp-pv-col/.test(impTpl),
+  '导入：预览要做成左右布局弹框（左原始数据 / 右切分结果），不是塞在面板里')
+// 进度放弹框、关掉不中断：后台静默导入的两个必要条件 —— 有「查看导入进度」入口，
+// 且关闭动作绝不挂 cancel（挂了就是一关窗就取消导入）
+check(/v-model="showProgress"/.test(impTpl) && impTpl.indexOf('查看导入进度') >= 0,
+  '导入：进度要放抽屉展示，关掉后能从「查看导入进度」回到后台导入')
+check(/<el-drawer v-model="showProgress"/.test(impTpl) && /es-imp-filelist/.test(impTpl) && /<Loading \/>/.test(impTpl),
+  '导入进度要改成抽屉 + 逐文件清单（完成打勾 / 当前转圈）')
+check(impTpl.indexOf('@close="cancel"') < 0 && impTpl.indexOf('@closed="cancel"') < 0,
+  '导入：关闭进度弹框绝不能触发取消（那是后台静默导入的前提）')
+check(String((sandbox.EsImportTab.methods || {}).confirmImport).indexOf('es-imp-confirm') >= 0,
+  '导入：确认框要加宽（默认 420px 装不下长路径，用户已经吐槽过）')
+// 输入目标索引的即时校验：存在与否决定「追加还是新建」，等真跑才发现 already exists 太晚
+check(impTpl.indexOf('索引已存在，数据将追加') >= 0,
+  '导入：输入索引后要有「已存在，数据将追加」的即时提示位')
+check(String((sandbox.EsImportTab.methods || {}).checkExists).indexOf('/import/exists') >= 0,
+  '导入：即时校验要打 /import/exists 接口')
+// 工作台把 el-tabs 自带页头 display:none，屏幕上的页签按钮全部来自 tabs 计算属性 ——
+// 挂了 pane 漏挂导航项 = 用户永远点不到（2026-10-14「数据导入」实测踩过：pane 在、按钮不在）。
+// 两个集合必须一一对应，少哪头都是不可达（导航多出来的 = 死按钮）。
+const paneNames = []
+const paneRe = /<el-tab-pane[^>]*\bname="([^"]+)"/g
+let pm
+while ((pm = paneRe.exec(esPageTpl))) paneNames.push(pm[1])
+const navNames = sandbox.ESPage.computed.tabs.call({}).map(t => t.name)
+check(paneNames.length > 0, 'ESPage 模板里必须存在 el-tab-pane（结构断了？）')
+check(navNames.length === paneNames.length && paneNames.every(n => navNames.indexOf(n) >= 0)
+  && navNames.every(n => paneNames.indexOf(n) >= 0),
+  'es.js 的 tabs 计算属性必须与 el-tab-pane 一一对应（工作台藏了 el-tabs 页头，漏导航项 = 页签点不到）'
+  + ': panes=[' + paneNames.join(',') + '] nav=[' + navNames.join(',') + ']')
+
+// ⑪ 模板串健康检查：反引号模板串里的 \n 会在 JS 解析模板串时还原成**真实换行**。
+//    换行本身不致命（stacks 表单里就有合法的多行表达式），致命的是它落进**字符串字面量内部**
+//    —— 即文件里写 '...\n...'：还原后字符串被换行截断，Vue 编译报 Invalid or unexpected token
+//    → 整页空白（实测踩过：ES 工作台一处 join('\n') 全白，而 node --check 与脚本求值都发现不了）。
+//    判定必须在**文件文本**上做：解析后的字符串里分不清「作者写的多行」与「\n 还原出的换行」，
+//    而文件里「单反斜杠 + n/t/r」只有一个来源 —— 作者想在字符串里换行（正确写法是 \\n）。
+{
+  const files = []
+  const walk = (dir) => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const p = path.join(dir, e.name)
+      if (e.isDirectory()) walk(p)
+      else if (e.name.endsWith('.js')) files.push(p)
+    }
+  }
+  walk(path.join(ROOT, 'template', 'static'))
+  let tplCount = 0
+  for (const fp of files) {
+    const src = fs.readFileSync(fp, 'utf8')
+    const rel = path.relative(ROOT, fp).split(path.sep).join('/')
+    const re = /template:\s*`([\s\S]*?)`\s*,/g
+    let m
+    while ((m = re.exec(src))) {
+      tplCount++
+      const tpl = m[1]
+      const line0 = src.slice(0, m.index).split('\n').length
+      const parts = []
+      for (const it of tpl.match(/{{[\s\S]*?}}/g) || []) parts.push(['插值', it])
+      for (const at of tpl.match(/[A-Za-z0-9@:.-]+="[^"]*"/g) || []) parts.push(['属性值', at])
+      for (const [kind, text] of parts) {
+        // 单反斜杠 + n/t/r；\\n（正确写法）被 lookbehind 排除
+        if (/(?<!\\)\\[ntr]/.test(text)) {
+          check(false, `模板${kind}里写了 \\n 转义 ${rel}(模板块起于 L${line0}): ${JSON.stringify(text.slice(0, 70))}`
+            + ' —— JS 会把它还原成真实换行并截断表达式（Vue 编译失败 = 页面空白），字符串换行请写 \\\\n')
+        }
+      }
+    }
+  }
+  // 防假绿：抽取量骤降说明路径或正则失效，上面的循环会「零命中全通过」
+  check(tplCount >= 20, `模板串抽取数量异常（仅 ${tplCount} 个，预期几十个）—— 本条检查已形同虚设`)
+}
+
+// ⑨ 行为断言（不是文本断言）：直接拿假上下文调组件的 generate，
+//    锁死「首轮成功 → 出现可追加上下文；追加成功 → 立刻清空（按钮消失）；追加失败 → 保留（可重试）」。
+//    这三条是用户口径的核心，读模板 regex 锁不住（清空动作在方法体里，写错了模板照样通过）。
+//    组件方法走全局 api，沙箱本没有它（app.js 被 SKIP），这里临时打桩，断言结束恢复。
+const realApi = sandbox.api
+// AI 生成类接口已流式化（window.__INFRA_SSE__.post，桌面桥的 POST + SSE）：打桩同步投递
+// final / error 帧后收尾——面板状态在 generate 返回前完成切换，断言保持原来的线性写法。
+const sseStub = (frames) => ({
+  post: (url, body, handlers) => {
+    for (const [type, data] of frames) handlers.onEvent && handlers.onEvent(type, data)
+    handlers.onEnd && handlers.onEnd({ status: 200, contentType: 'text/event-stream' })
+    return { close: () => {} }
+  }
+})
+const sseOK = (payload) => sseStub([['final', JSON.stringify(payload)]])
+const sseErr = (message) => sseStub([['error', JSON.stringify({ message: message })]])
+const restoreStream = () => { sandbox.api = realApi; delete sandbox.__INFRA_SSE__ }
+async function followupFlow(comp, name, ctxInit, okPayload) {
+  const mk = () => Object.assign({}, comp.data(), ctxInit, { $emit: () => {} })
+  const first = mk()
+  sandbox.__INFRA_SSE__ = sseOK(okPayload)
+  await comp.methods.generate.call(first, false)
+  check(!!first.prev, name + '：首轮生成成功后必须留下可追加的上下文（否则「追加生成」按钮永不出现）')
+  sandbox.__INFRA_SSE__ = sseOK(okPayload)
+  await comp.methods.generate.call(first, true)
+  check(first.prev === null && first.base === '',
+    name + '：追加成功后必须清空上下文——追加只给一次，用完按钮要消失、回到只有一个生成按钮')
+  const retry = mk()
+  sandbox.__INFRA_SSE__ = sseOK(okPayload)
+  await comp.methods.generate.call(retry, false)
+  sandbox.__INFRA_SSE__ = sseErr('boom')
+  await comp.methods.generate.call(retry, true)
+  check(!!retry.prev, name + '：追加失败时必须保留上下文（按钮留着可重试，不能白丢一次机会）')
+}
+
+// Grok 面板的行为断言：自定义 pattern 解析、编译错误的去处、AI 生成后是否复跑。
+async function grokFlow(comp) {
+  const msg = { warning: () => {}, success: () => {}, error: () => {} }
+  // 假上下文不是 Vue 实例，computed 不会自动求值 —— patterns / definitions 必须手动接上，
+  // 否则组件方法里读 this.patterns 就是 undefined（这正是「读 length 炸掉」的原因）。
+  const mk = () => {
+    const ctx = Object.assign({}, comp.data(), { conn: { id: 7 }, $message: msg })
+    Object.defineProperty(ctx, 'patterns', { get: () => comp.computed.patterns.call(ctx) })
+    Object.defineProperty(ctx, 'definitions', { get: () => comp.computed.definitions.call(ctx) })
+    // 组件内部会 this.parse() 复用自身（解析按钮 / AI 生成后自动复跑），假上下文同样要接上；
+    // AI 生成里还会用到 mergeDefs（把模型给的定义并进用户自定义框）
+    ctx.parse = () => comp.methods.parse.call(ctx)
+    ctx.mergeDefs = (d) => comp.methods.mergeDefs.call(ctx, d)
+    ctx.defsToText = (d) => comp.methods.defsToText.call(ctx, d)
+    return ctx
+  }
+
+  // ① 自定义 pattern 文本 → 定义表：注释行、没有正则的行都要跳过（否则会把注释当成 pattern 送后端）
+  const dctx = mk()
+  dctx.defText = '# 注释\nMY_ID [A-Z]{2}-\\d{4}\nNOPE\n\nOTHER \\d+'
+  const defs = comp.computed.definitions.call(dctx)
+  check(defs.MY_ID === '[A-Z]{2}-\\d{4}' && defs.OTHER === '\\d+' && !('NOPE' in defs) && !('#' in defs),
+    '自定义 pattern 要按「NAME 正则」解析，注释行与没有正则的行必须跳过: ' + JSON.stringify(defs))
+
+  // ② 编译失败：错误留在面板上且清空旧结果 —— 用户是照着这个错误改 pattern 的
+  const bad = mk()
+  bad.sample = 'a b c'
+  bad.patternText = '%{NOPE:x}'
+  bad.result = { total: 1, lines: [] }
+  sandbox.api = { post: () => Promise.resolve({ code: 4016, message: '%{NOPE:x} 未定义的 pattern' }) }
+  await comp.methods.parse.call(bad)
+  check(bad.parseError.indexOf('未定义') >= 0 && bad.result === null,
+    'pattern 编译失败必须把错误留在面板并清空上一次结果（否则用户对着过时结果改 pattern）')
+
+  // ③ AI 生成：终稿填进 pattern 框 → **自动复跑一次解析**（右栏立刻反映新 pattern 的结果）。
+  //    「自动复跑」是这一版的口径：模型判断不了自己的 pattern 能不能匹配样例（实测会把日志格式定义里
+  //    的变量顺序当成字面分隔符），服务端 final 前已用本地引擎实跑校验、必要时回喂修正一次，
+  //    前端再复跑一次是为了让使用者马上看到结果，而不是对着上一版 pattern 的结果发呆。
+  //    追加只用一轮：请求带上上一版 pattern 与**首轮**补充要求原文，成功即清空上下文（按钮消失），
+  //    失败保留（可重试）——三条都在方法体里，读模板 regex 锁不住。
+  const ai = mk()
+  ai.sample = 'a b'
+  ai.aiHint = '初始要求'
+  const posts = []
+  const sseStub2 = (frames) => ({
+    post: (url, body, handlers) => {
+      posts.push({ url: url, body: body })
+      for (const [type, data] of frames) handlers.onEvent(type, data)
+      handlers.onEnd({ status: 200, contentType: 'text/event-stream' })
+      return { close: () => {} }
+    }
+  })
+  const parseOK = { code: 0, data: {
+    total: 1, matched: 1, partial: 0, missed: 0, truncated: false,
+    lines: [{ no: 1, raw: 'a b', matched: true, partial: false, pattern_index: 0, fields: [{ name: 'a', value: 'a' }] }] } }
+  const okPayload = { patterns: ['%{WORD:a} %{WORD:b}'], definitions: {}, explain: '两个词', fields: [],
+    verify: { ok: true, matched: 1, partial: 0, missed: 0, total: 1, attempts: 1, adopted_retry: false, error: '' } }
+  // 解析走普通 api.post（不是 SSE），所以这里也要记一笔，才能断言「生成后确实复跑了」
+  sandbox.api = { post: (url) => { posts.push({ url: url, body: null }); return Promise.resolve(parseOK) } }
+  sandbox.__INFRA_SSE__ = sseStub2([['final', JSON.stringify(okPayload)]])
+  await comp.methods.aiGenerate.call(ai, false)
+  await new Promise(r => setTimeout(r, 0))
+  check(ai.patternText === '%{WORD:a} %{WORD:b}',
+    'AI 生成的 pattern 必须填进 pattern 输入框: ' + JSON.stringify(ai.patternText))
+  check(posts.filter(p => p.url.indexOf('/grok/parse') >= 0).length === 1,
+    'AI 生成后必须自动复跑一次解析（否则右栏显示的还是上一版 pattern 的结果）: ' + JSON.stringify(posts.map(p => p.url)))
+  check(!!ai.result && ai.result.total === 1 && ai.result.lines.length === 1,
+    'AI 生成后右栏应铺上新 pattern 的解析结果')
+  check(!!ai.aiVerify && ai.aiVerify.ok === true && ai.aiVerify.attempts === 1,
+    'final 里的 verify 结果要记下来（界面据此说明生成质量）: ' + JSON.stringify(ai.aiVerify))
+  check(comp.computed.verifyText.call(ai).indexOf('1/1') >= 0,
+    '校验说明要写明命中行数: ' + comp.computed.verifyText.call(ai))
+  check(!!ai.aiPrev && ai.aiPrev.patterns.length === 1,
+    'AI 生成成功后必须留下可追加上下文（否则「追加生成」按钮永不出现）')
+  check(!('prev' in posts[0].body), '首轮生成不应带 prev 上下文（此时还没有任何一版 pattern）')
+
+  // ③b phase 帧（首稿未整行命中、服务端正在按失败样例修正）：草稿必须清空重来，
+  //     否则修正稿会和首稿拼在一起，用户看到的是一段根本没验证过的混合串。
+  const ph = mk()
+  ph.sample = 'a b'
+  let atPhase = null
+  sandbox.__INFRA_SSE__ = {
+    post: (url, body, handlers) => {
+      handlers.onEvent('delta', JSON.stringify({ field: 'patterns', index: 0, text: '%{WORD:a}' }))
+      const before = ph.aiDraftPatterns.slice()
+      handlers.onEvent('phase', JSON.stringify({ stage: 'retry', message: '未整行命中', matched: 0, total: 1 }))
+      atPhase = { before: before, after: ph.aiDraftPatterns.slice(), phase: ph.aiPhase }
+      handlers.onEvent('delta', JSON.stringify({ field: 'patterns', index: 0, text: '%{WORD:a} %{WORD:b}' }))
+      handlers.onEvent('final', JSON.stringify(okPayload))
+      handlers.onEnd({ status: 200, contentType: 'text/event-stream' })
+      return { close: () => {} }
+    }
+  }
+  await comp.methods.aiGenerate.call(ph, false)
+  await new Promise(r => setTimeout(r, 0))
+  check(atPhase.before.length === 1 && atPhase.after.length === 0,
+    'phase 帧必须清空草稿（修正稿重新起草，不能与首稿混在一起）: ' + JSON.stringify(atPhase))
+  check(atPhase.phase.indexOf('修正') >= 0 && atPhase.phase.indexOf('0/1') >= 0,
+    'phase 帧要给出「命中几行 / 正在修正」的说明: ' + atPhase.phase)
+  check(ph.aiPhase === '' && ph.patternText === '%{WORD:a} %{WORD:b}',
+    'final 之后要收起修正提示并落终稿: phase=' + JSON.stringify(ph.aiPhase))
+
+  // ③c 模型给的自定义 pattern 只能**追加**到用户已有的定义里：整体覆盖会让用户写过的定义消失，
+  //     下一次「解析」直接报「未定义的 pattern」（用户会以为是自己写错了）。
+  const dm = mk()
+  dm.sample = 'a b'
+  dm.defText = '# 我的注释\nMY_ID [A-Z]{2}'
+  sandbox.__INFRA_SSE__ = sseStub2([['final', JSON.stringify({
+    patterns: ['%{MY_ID:id}'], definitions: { EXTRA: '\\d+' }, explain: '', fields: [], usage: {} })]])
+  await comp.methods.aiGenerate.call(dm, false)
+  await new Promise(r => setTimeout(r, 0))
+  check(dm.defText.indexOf('# 我的注释') >= 0 && dm.defText.indexOf('MY_ID [A-Z]{2}') >= 0 &&
+    dm.defText.indexOf('EXTRA \\d+') >= 0,
+    '模型定义只能追加，用户原有的行（含注释）必须保留: ' + JSON.stringify(dm.defText))
+  check(dm.showDefs === true, '追加了模型定义后「自定义 pattern」区要自动展开，否则等于没生效')
+
+  // ④ 追加生成：请求带上一版 pattern 与首轮补充要求原文，成功即清空上下文（按钮消失）
+
+  // 追加：body 带上一版 pattern + 首轮补充要求（aiHint 已改成「再细化」也不漂移），成功后清空上下文
+  ai.aiHint = '再细化'
+  sandbox.__INFRA_SSE__ = sseStub2([['final', JSON.stringify({
+    patterns: ['%{WORD:a} %{WORD:b} %{DATA:rest}'], definitions: {}, explain: '更细', fields: [], usage: {} })]])
+  await comp.methods.aiGenerate.call(ai, true)
+  await new Promise(r => setTimeout(r, 0))
+  // 追加轮的请求：从 posts 里按 URL 找（生成后紧跟的自动复跑也会进 posts，不能直接取最后一条）
+  const follow = posts.filter(p => p.url.indexOf('/grok/ai') >= 0).pop()
+  check(follow.body.prev && follow.body.prev.patterns[0] === '%{WORD:a} %{WORD:b}' && follow.body.prev.hint === '初始要求',
+    '追加生成必须带上上一版 pattern 与「首轮」补充要求原文: ' + JSON.stringify(follow.body.prev))
+  check(follow.body.hint === '再细化', '追加轮的 hint 应是本轮文本框内容（补充要求以本轮为准）')
+  check(ai.aiPrev === null && ai.aiBase === '',
+    '追加成功后必须清空上下文——追加只给一次，用完按钮要消失: aiPrev=' + JSON.stringify(ai.aiPrev))
+
+  // 追加失败：上下文与错误都保留（按钮留着可重试）
+  const ai2 = mk()
+  ai2.sample = 'a b'
+  sandbox.__INFRA_SSE__ = sseStub2([['final', JSON.stringify(okPayload)]])
+  await comp.methods.aiGenerate.call(ai2, false)
+  sandbox.__INFRA_SSE__ = sseStub2([['error', JSON.stringify({ message: 'boom' })]])
+  await comp.methods.aiGenerate.call(ai2, true)
+  check(!!ai2.aiPrev && ai2.aiError === 'boom',
+    '追加失败时必须保留上下文（按钮留着可重试，不能白丢一次机会）: ' + JSON.stringify(ai2.aiPrev))
+}
+
+// Logstash 配置区块的行为断言：锁的是「AI 只是加分项」这条设计——配置文本由后端本地拼装，
+// 前端只负责落位，所以 enhance 三态（ok / skipped / failed）下配置都必须在；
+// 把 failed 当失败、连配置一起吞掉，用户就白点了一次生成（这正是本功能最该防的退化）。
+async function logstashFlow(comp) {
+  const msg = { warning: () => {}, success: () => {}, error: () => {} }
+  const calls = []
+  const mk = () => Object.assign({}, comp.data(), {
+    conn: { id: 7 }, $message: msg,
+    patterns: ['%{WORD:a}'], definitions: {}, sample: 'a b', hint: ''
+  })
+  // 前端所有 AI 请求都只走流式通道，但这个通道有两种收尾：
+  //   - SSE 帧（有增强时的 phase / final；服务端进了流式阶段再失败是 error 帧）；
+  //   - 非 SSE 业务 JSON（pattern 编译不过这类前置校验，服务端还没发流式头就返回了 4016），
+  //     通道会取出 body.message 转成 onError({message}) —— 见 wails-shim 里的 rawBuf 分支。
+  const sseStub = (frames) => {
+    sandbox.__INFRA_SSE__ = {
+      post: (url, body, handlers) => {
+        calls.push({ url: url, body: body })
+        for (const [type, data] of frames) handlers.onEvent && handlers.onEvent(type, data)
+        handlers.onEnd && handlers.onEnd({ status: 200, contentType: 'text/event-stream' })
+        return { close: () => {} }
+      }
+    }
+  }
+  const finalFrame = (data) => sseStub([['final', JSON.stringify(data)]])
+  const failStub = (message) => {
+    sandbox.__INFRA_SSE__ = {
+      post: (url, body, handlers) => {
+        calls.push({ url: url, body: body })
+        handlers.onError && handlers.onError({ message: message, status: 400 })
+        return { close: () => {} }
+      }
+    }
+  }
+
+  // ① 正常：配置与状态记账都要落位，请求打到 /grok/logstash
+  const c = mk()
+  finalFrame({ config: 'filter {}', fields: ['a'], gsub: [], remove: [], notes: '', enhance: 'ok', dropped_gsub: [], dropped_remove: [] })
+  await comp.methods.generate.call(c)
+  check(c.config === 'filter {}' && c.enhance === 'ok' && c.fields.length === 1,
+    'Logstash：生成后配置与状态必须落位: ' + JSON.stringify({ config: c.config, enhance: c.enhance }))
+  check(calls.length === 1 && calls[0].url.indexOf('/grok/logstash') >= 0 &&
+    calls[0].body.tag === '' && calls[0].body.source === '' && calls[0].body.patterns.length === 1,
+    'Logstash：请求要打到 /grok/logstash 并带上 pattern / tag / source: ' + JSON.stringify(calls[0]))
+  check(calls[0].body.drop_defaults === true,
+    'Logstash：默认要删采集器字段（drop_defaults 默认 true，与开关初值一致）: ' + JSON.stringify(calls[0].body))
+  check(String(comp.computed.statusText.call(c)).indexOf('AI 已按样例补充') >= 0,
+    'Logstash：有增强时要说明补了什么: ' + comp.computed.statusText.call(c))
+
+  // ①b phase 帧：等待期间要把「在干什么」显示出来（一次模型调用可能十几秒，干转会被当成卡死），
+  //     final 到达后还要收掉，不能留在界面上
+  const ph = mk()
+  let atPhase = null
+  sandbox.__INFRA_SSE__ = {
+    post: (url, body, handlers) => {
+      calls.push({ url: url, body: body })
+      handlers.onEvent('phase', JSON.stringify({ message: '已交给模型判断 mutate 处理…' }))
+      atPhase = { phase: ph.phase, loading: ph.loading }
+      handlers.onEvent('final', JSON.stringify({ config: 'filter {}', fields: [], enhance: 'ok' }))
+      handlers.onEnd({ status: 200, contentType: 'text/event-stream' })
+      return { close: () => {} }
+    }
+  }
+  await comp.methods.generate.call(ph)
+  check(atPhase.phase.indexOf('模型') >= 0 && atPhase.loading === true,
+    'Logstash：phase 帧要显示成进度文案（否则等待期间界面毫无反应）: ' + JSON.stringify(atPhase))
+  check(ph.phase === '' && ph.config === 'filter {}',
+    'Logstash：final 之后要收起进度文案并落配置: ' + JSON.stringify({ phase: ph.phase, config: ph.config }))
+
+  // ② AI 调用失败：后端已降级为纯解析配置，前端必须照常展示 + 说清原因
+  const f = mk()
+  finalFrame({ config: 'filter {}', fields: [], enhance: 'failed', enhance_error: 'connection refused' })
+  await comp.methods.generate.call(f)
+  check(f.config === 'filter {}' && f.enhance === 'failed',
+    'Logstash：AI 增强失败时配置仍要展示（AI 只是加分项，不能把配置吞掉）: ' + JSON.stringify(f.config))
+  check(String(comp.computed.statusText.call(f)).indexOf('connection refused') >= 0,
+    'Logstash：AI 失败原因要摊开说: ' + comp.computed.statusText.call(f))
+
+  // ②b error 帧：流式阶段失败（如模型超时）也要落到面板上并收掉 loading
+  const ef = mk()
+  sseStub([['error', JSON.stringify({ message: '模型调用超时' })]])
+  await comp.methods.generate.call(ef)
+  check(ef.error.indexOf('模型调用超时') >= 0 && ef.loading === false,
+    'Logstash：error 帧要落到面板并收掉 loading: ' + JSON.stringify({ e: ef.error, l: ef.loading }))
+
+  // ③ pattern 编译失败：SSE 之前的前置校验（服务端连流式响应头都还没发），
+  //     通道把它转成 onError —— 错误要留在面板 + 清掉旧配置
+  const b = mk()
+  b.config = 'stale-config'
+  failStub('%{NOPE:x} 未定义的 pattern')
+  await comp.methods.generate.call(b)
+  check(b.error.indexOf('未定义') >= 0 && b.config === '',
+    'Logstash：pattern 编译失败要把错误留在面板并清空上一次配置: ' + JSON.stringify({ e: b.error, c: b.config }))
+
+  // ④ 没有 pattern 时不该发请求（省一次网络往返与 token）
+  const n = mk()
+  n.patterns = []
+  const before = calls.length
+  finalFrame({ config: '' })
+  await comp.methods.generate.call(n)
+  check(calls.length === before, 'Logstash：没有 pattern 时不该发请求，实际多了 ' + (calls.length - before) + ' 次')
+
+  // ⑤ 流式通道不可用（非桌面形态）时必须明确报错，不能悄悄回退到普通 POST ——
+  //     那条路会被 axios 的 15 秒默认超时打断，表现就从「功能不可用」变成「每次生成都超时」
+  const noSse = mk()
+  delete sandbox.__INFRA_SSE__
+  sandbox.api = { post: () => { calls.push({ url: 'api-fallback', body: null }); return Promise.resolve({ code: 0, data: { config: 'fallback' } }) } }
+  await comp.methods.generate.call(noSse)
+  check(noSse.config === '' && !calls.some(x => x.url === 'api-fallback'),
+    'Logstash：流式通道不可用时必须明确报错，不能悄悄回退到普通 POST')
+}
+
+// ⑫ 解读弹框的行为断言（用户口径）：首次执行自动弹出 / 关闭只是收起、结论仍留一份 /
+//    「查看解读」只重开不重跑 / 「重新分析」重跑并整体覆盖（永远只有一份）。
+//    这四条都发生在方法体里（visible 置位、result 是否被替换、有没有真发请求），
+//    读模板 regex 一条也锁不住 —— 所以这里直接驱动方法。
+async function explainFlow(comp) {
+  const calls = []
+  // 每轮首个 delta 到达**之前**的 result 快照：这才是「重新分析从空白重来」的证据。
+  // （只看 run 结束后的 result 是不够的：final 帧无论如何都会整体替换，
+  //  把「跨轮不清空」这种缺陷蒙过去 —— 反向验证时实测漏判过一次。）
+  let beforeDelta = null
+  let cur = null
+  const mk = () => {
+    const ctx = Object.assign({}, comp.data(), {
+      connId: 1, cfgLoaded: true, cfg: { enabled: true, model: 'm', base_url: 'u' }, $emit: () => {}
+    })
+    // 假上下文不是 Vue 实例：方法内部互相调用（this.run / this.hasResult / this.emitState）
+    // 以及组件自己的入口方法都要手动接上，否则一调用就是「is not a function」
+    ctx.run = () => comp.methods.run.call(ctx)
+    ctx.analyze = (p) => comp.methods.analyze.call(ctx, p)
+    ctx.open = () => comp.methods.open.call(ctx)
+    ctx.rerun = () => comp.methods.rerun.call(ctx)
+    ctx.hasResult = () => comp.methods.hasResult.call(ctx)
+    ctx.emitState = () => comp.methods.emitState.call(ctx)
+    return ctx
+  }
+  // 流式桩：delta 一帧 + final 一帧 + onEnd（同步投递，断言可线性书写）
+  const stub = () => {
+    sandbox.__INFRA_SSE__ = {
+      post: (url, body, handlers) => {
+        calls.push({ url: url, body: body })
+        beforeDelta = cur && cur.result ? JSON.parse(JSON.stringify(cur.result)) : null
+        handlers.onEvent('delta', JSON.stringify({ field: 'summary', text: '半' }))
+        handlers.onEvent('final', JSON.stringify({
+          summary: '结论', findings: ['发现'], suggestions: ['建议'],
+          digest: { series_count: 1, truncated: false, lines: ['l'] }, usage: {}
+        }))
+        handlers.onEnd({ status: 200, contentType: 'text/event-stream' })
+        return { close: () => {} }
+      }
+    }
+  }
+
+  const c = mk()
+  cur = c
+  check(c.visible === false, '解读：组件初始不该弹出弹框')
+  stub()
+  c.analyze({ expr: 'up', mode: 'instant', start: 1, end: 2, step: 0 })
+  check(c.visible === true, '解读：首次执行必须自动弹出弹框')
+  check(calls.length === 1, '解读：首次执行应真的发起一次解读请求，实际 ' + calls.length + ' 次')
+  check(c.hasResult() && c.result.findings.length === 1, '解读：首次执行后应落一份结论')
+  const first = c.result
+
+  // 关闭只是收起：结论必须留着（这是「关闭之后支持重新查看」的前提）
+  c.visible = false
+  check(c.hasResult(), '解读：关闭弹框不该把结论一起丢掉（否则无从「重新查看」）')
+  const n = calls.length
+  c.open()
+  check(c.visible === true && calls.length === n,
+    '解读：「查看解读」必须只重开、不重跑（否则白白再花一次 token）')
+  c.rerun()
+  check(calls.length === n + 1, '解读：「重新分析」必须重跑一次接口，实际增了 ' + (calls.length - n) + ' 次')
+  check(beforeDelta !== null && beforeDelta.summary === '' && beforeDelta.findings.length === 0,
+    '解读：重新分析必须从空白重来（永远只保留一份，不能叠在上一版结论上）'
+    + ' 实测 delta 前快照 = ' + JSON.stringify(beforeDelta))
+  check(c.result !== first && c.result.findings.length === 1,
+    '解读：重新分析后结论仍是单份（不能把两次结果叠起来）')
+
+  // 重来要跟着新参数走（弹框顶部那行「解读对象」用的就是它）
+  c.analyze({ expr: 'rate(x[5m])', mode: 'range', start: 1000, end: 2000, step: 15 })
+  check(c.lastParams.expr === 'rate(x[5m])', '解读：从结果区再次进入时必须更新解读对象参数')
+  check(String(comp.computed.rangeText.call(c)).indexOf('范围') === 0,
+    '解读：「解读对象」的时间范围文案应能正常生成')
+
+  // 配置未读完就点解读：不能直接停在引导态，要记下来等配置到位再补跑
+  const late = mk()
+  cur = late
+  late.cfgLoaded = false; late.cfg = {}
+  late.pendingRun = false
+  late.analyze({ expr: 'up', mode: 'instant', start: 1, end: 2, step: 0 })
+  check(late.visible === true && late.pendingRun === true,
+    '解读：配置还没读完时点解读应记下待跑（否则会误停在「还没启用」引导态）')
+}
+
+// ⑬ 数据导入的行为断言（用户口径）：两阶段确认 / 预览与类型可改 / 真跑关超时 /
+//     进度与取消靠 progress_key / 「检查」SSE 出结果后「预览」才可用。
+// 索引页异步化行为：列表与总数分两个请求；总数由 /indices/total 独立落位；搜索不动总数
+async function indexTabFlow(comp) {
+  if (!comp) return
+  const gets = []
+  sandbox.api = {
+    get: (url) => {
+      gets.push(url)
+      if (url.indexOf('/indices/total') >= 0) return Promise.resolve({ code: 0, data: { total: 123 } })
+      return Promise.resolve({ code: 0, data: { list: [{ index: 'a' }], total: 1, truncated: false } })
+    },
+    post: () => Promise.resolve({ code: 0 })
+  }
+  const c = Object.assign({}, comp.methods, comp.data(), { conn: { id: 5 } })
+  await comp.methods.loadIndices.call(c)
+  await new Promise(r => setTimeout(r, 0))
+  check(gets.some(u => u.indexOf('/indices/total') >= 0),
+    '索引页：总数要独立异步拉取（不挡列表渲染）: ' + JSON.stringify(gets))
+  check(c.allTotal === 123 && c.loadingTotal === false,
+    '索引页：总数由 /indices/total 落位并收起转圈: ' + c.allTotal)
+  check(c.indices.length === 1 && c.idxTotal === 1 && c.loadingIndices === false,
+    '索引页：列表先到先渲染（保留搜索匹配数）')
+  c.idxKw = 'a'
+  await comp.methods.searchIndices.call(c)
+  await new Promise(r => setTimeout(r, 0))
+  check(c.allTotal === 123, '索引页：搜索不应改动左上角总数')
+}
+
+// Discover 时间升降序的行为断言：默认降序；切到 asc 后重查请求必须带 sort_order=asc
+async function discoverSortFlow(comp) {
+  if (!comp) return
+  const calls = []
+  sandbox.api = {
+    post: (url, body) => { calls.push({ url: url, body: body }); return Promise.resolve({ code: 0, data: { result_id: 'x', hits: [], total: 0, window: 1000 } }) },
+    get: () => Promise.resolve({ code: 0, data: {} })
+  }
+  const mk = (extra) => Object.assign({}, comp.methods, comp.data(), {
+    conn: { id: 3 }, view: { id: 9, time_field: '@timestamp' }, timeField: '@timestamp', fields: [],
+    start: '2026-10-14 00:00:00', end: '2026-10-14 01:00:00',
+    $message: { warning: () => {}, error: () => {} }, $refs: {}, $nextTick: (f) => { if (f) f() }
+  }, extra || {})
+  const ctx = mk()
+  await comp.methods.runSearch.call(ctx)
+  check(calls.length === 1 && calls[0].body.sort_order === 'desc',
+    'Discover：默认时间降序（最新优先）: ' + JSON.stringify(calls[0] && calls[0].body && calls[0].body.sort_order))
+  const ctx2 = mk({ sortOrder: 'asc' })
+  await comp.methods.runSearch.call(ctx2)
+  check(calls.length === 2 && calls[1].url.indexOf('/search') >= 0 && calls[1].body.sort_order === 'asc',
+    'Discover：升序查询要带 sort_order=asc')
+
+  // 一个按钮切换：点一下 升序（重查带 asc），再点切回 降序（重查带 desc）
+  const ctx3 = mk()
+  comp.methods.toggleSort.call(ctx3)
+  await new Promise(r => setTimeout(r, 0))
+  check(ctx3.sortOrder === 'asc' && calls.length === 3 && calls[2].body.sort_order === 'asc',
+    'Discover：点按钮应切到升序并立即重查')
+  comp.methods.toggleSort.call(ctx3)
+  await new Promise(r => setTimeout(r, 0))
+  check(ctx3.sortOrder === 'desc' && calls.length === 4 && calls[3].body.sort_order === 'desc',
+    'Discover：再点一下应切回降序并重查')
+
+  // 命中高亮：多项分色、同项同色（大小写不敏感）；高亮项只在「查询」时刻刷新，打字不改动
+  const ctx4 = mk()
+  ctx4.hlTerms = ['foo', 'timeout']
+  const html = comp.methods.hlValue.call(ctx4, 'FOO then timeout then foo')
+  check(html.indexOf('es-hlchip c0') >= 0 && html.indexOf('es-hlchip c1') >= 0
+    && (html.match(/es-hlchip c0/g) || []).length === 2,
+    'Discover：多个命中项分色（同项同色、大小写不敏感）: ' + html)
+  const ctx5 = mk()
+  ctx5.hlTerms = ['old']
+  ctx5.kql = 'warning'
+  await comp.methods.runSearch.call(ctx5)
+  check(JSON.stringify(ctx5.hlTerms) === '["warning"]', 'Discover：高亮项在查询时刻才刷新: ' + JSON.stringify(ctx5.hlTerms))
+  ctx5.kql = 'typing-after-query'
+  check(JSON.stringify(ctx5.hlTerms) === '["warning"]', 'Discover：查询后继续打字不改动已渲染的高亮')
+}
+
+async function importFlow(comp) {
+  const msg = { warning: () => {}, success: () => {}, error: () => {}, info: () => {} }
+  const calls = []
+  const mk = (extra) => Object.assign({}, comp.methods, comp.data(), {
+    conn: { id: 7 }, $message: msg, sources: ['C:/tmp/a.jsonl'], index: 'logs'
+  }, extra || {})
+  const stub = (fn) => {
+    sandbox.api = {
+      post: (url, body, cfg) => {
+        calls.push({ url: url, body: body, cfg: cfg })
+        return Promise.resolve(fn(url, body) || { code: 0 })
+      },
+      get: () => Promise.resolve({ code: 0, data: { found: false } })
+    }
+  }
+
+  // ① 两阶段：先预检（confirmed=false），弹确认后再真跑（confirmed=true，且关掉超时）
+  {
+    const c = mk()
+    c.types = { time_local: 'date', status: 'long' }
+    c.filter = '*access*.log'
+    c.renames = { time_local: 'ts' }
+    let confirms = 0
+    let confirmMsg = ''
+    c.$confirm = (msg) => { confirms++; confirmMsg = msg; return Promise.resolve() }
+    stub((url, body) => body.confirmed
+      ? { code: 0, data: { read: 10, indexed: 9, failed: 1, skipped: 2, partial: 1, elapsed_ms: 120, failures: [], dropped_fields: [], files: [] } }
+      : { code: 0, data: { need_confirm: true, sources: body.sources, size: 2048, index: 'logs' } })
+
+    await comp.methods.start.call(c)
+    check(confirms === 1, '导入：真跑之前必须让用户确认一次（文件 + 目标索引）')
+    check(confirmMsg.indexOf('时间字段') >= 0 && confirmMsg.indexOf('time_local') >= 0,
+      '导入：确认框要单独显示识别到的时间字段（date 类型）: ' + confirmMsg)
+    check(calls[0].body.filter === '*access*.log', '导入：包内过滤规则要随请求发送')
+    check(calls[1].body.renames && calls[1].body.renames.time_local === 'ts',
+      '导入：字段映射（第二列）要随请求发送')
+    check(calls[0].body.recreate_index === false && calls[1].body.recreate_index === false,
+      '导入：普通导入不带 recreate_index（只有重建入口才为 true）')
+    check(calls.length === 2, '导入：应是「预检 + 真跑」两次请求，实际 ' + calls.length + ' 次')
+    check(Array.isArray(calls[0].body.sources) && calls[0].body.sources.length === 1,
+      '导入：请求体要用 sources 数组携带所选文件（支持多选）')
+    check(calls[0].body.confirmed === false && calls[1].body.confirmed === true,
+      '导入：第一次是预检，第二次才真跑')
+    check(calls[1].cfg && calls[1].cfg.timeout === 0,
+      '导入：真跑必须关掉 HTTP 超时（耗时由数据量决定，15 秒默认值必定不够）')
+    check(!!calls[1].body.progress_key, '导入：真跑要带 progress_key（进度与取消都靠它）')
+    check(!('id_field' in calls[1].body), '导入：请求体不该再带 id_field（文档 id 由 ES 自动生成）')
+    check(!('field' in calls[1].body) && !('split_pattern' in calls[1].body),
+      '导入：请求体不该再带 field/split_pattern（规则区已删除，pattern 由「检查」生成）')
+    check(c.showProgress === true, '导入：开始导入要自动弹出进度框（用户要求的过程可见）')
+    check(c.result && c.result.indexed === 9, '导入：结果要落位: ' + JSON.stringify(c.result))
+    check(c.importing === false, '导入：收尾后 loading 必须复位')
+  }
+
+  // ② 确认框里取消：不能再发真跑请求（用户没同意就别动数据）
+  {
+    const c = mk()
+    c.$confirm = () => Promise.reject(new Error('cancel'))
+    calls.length = 0
+    stub(() => ({ code: 0, data: { need_confirm: true, size: 1, index: 'logs' } }))
+    await comp.methods.start.call(c)
+    check(calls.length === 1, '导入：确认框取消后不该再发真跑请求，实际 ' + calls.length + ' 次')
+    check(!c.result, '导入：取消后不该有结果')
+  }
+
+  // ③ 预览：样本/统计/类型要落位；索引已存在时自动切到「不新建」
+  {
+    const c = mk({ createIndex: true })
+    calls.length = 0
+    stub(() => ({
+      code: 0, data: {
+        kind: 'json', scanned: 30, matched: 28, partial: 1, skipped: 1,
+        types: { a: 'long', b: 'keyword' },
+        type_options: ['keyword', 'long'], index_exists: true,
+        skip_reasons: ['第 2 行未匹配 pattern'], files: [],
+        rows: [
+          { no: 1, raw: '{"a":1}', status: 'matched', fields: [{ name: 'a', value: '1' }] },
+          { no: 2, raw: '这条不匹配', status: 'skipped', reason: '第 2 行未匹配 pattern', fields: [] }
+        ]
+      }
+    }))
+    await comp.methods.doPreview.call(c)
+    check(calls.length === 1 && calls[0].url.indexOf('/import/preview') >= 0,
+      '导入：预览要打到 /import/preview')
+    check(c.preview && c.preview.scanned === 30, '导入：预览统计要落位')
+    check(c.showPreview === true, '导入：预览要弹框展示（左右布局，不是塞在面板里）')
+    check(c.types.a === 'long' && c.types.b === 'keyword',
+      '导入：推断出的字段类型要落位')
+    // 改副本不能动到服务端回的对象：共享的话重跑预览看不出差异，用户到底改过哪几个字段就说不清
+    c.types.a = 'keyword'
+    check(c.preview.types.a === 'long', '导入：类型必须存副本，改它不能污染 preview.types')
+    check(c.createIndex === false,
+      '导入：索引已存在时应自动切到「不新建」（否则 PUT 必报 already exists）')
+    check(comp.computed.typeRows.call(c).length === 2, '导入：字段定义表要按字段展开')
+    // 逐行预览：未命中的行也要在（带原因），三态映射成 grok 卡片样式 —— 用户对照着找问题
+    const pvRows = c.preview.rows
+    check(pvRows.length === 2 && pvRows[1].status === 'skipped'
+      && String(pvRows[1].reason).indexOf('第 2 行') >= 0 && pvRows[0].fields.length === 1,
+      '导入：逐行预览必须含未命中行与原因、命中行带字段')
+    check(comp.methods.rowClass.call(c, pvRows[0]) === 'is-ok'
+      && comp.methods.rowClass.call(c, pvRows[1]) === 'is-miss',
+      '导入：逐行预览的命中/未命中要映射成 grok 卡片的三态样式')
+  }
+
+  // ④ 取消：要带上本次任务的 key，否则取消不到自己那一次
+  {
+    const c = mk({ key: 'imp-abc' })
+    let sent = null
+    sandbox.api = {
+      post: (url, body) => { sent = { url: url, body: body }; return Promise.resolve({ code: 0, data: { cancelled: true } }) },
+      get: () => Promise.resolve({ code: 0, data: { found: false } })
+    }
+    await comp.methods.cancel.call(c)
+    check(sent && sent.url.indexOf('/import/cancel') >= 0 && sent.body.key === 'imp-abc',
+      '导入：取消要带上本次任务的 key')
+  }
+
+  // ⑤ 本地选择文件只在桌面端可用（浏览器里没有原生对话框，静默失败会让人以为按钮坏了）
+  {
+    const c = mk()
+    const warned = []
+    c.$message = { warning: (m) => warned.push(m) }
+    sandbox.__INFRA_DESKTOP__ = false
+    await comp.methods.pickFile.call(c)
+    check(warned.length === 1, '导入：非桌面端点「选择文件」要明确提示，实际 ' + JSON.stringify(warned))
+  }
+
+  // ⑥ 输入目标索引即时校验存在性：打 /import/exists，已存在要自动切「不新建」
+  {
+    const c = mk({ createIndex: true })
+    const gets = []
+    sandbox.api = {
+      post: () => Promise.resolve({ code: 0 }),
+      get: (url, cfg) => { gets.push({ url: url, cfg: cfg }); return Promise.resolve({ code: 0, data: { exists: true, valid: true } }) }
+    }
+    await comp.methods.checkExists.call(c)
+    check(gets.length === 1 && gets[0].url.indexOf('/import/exists') >= 0
+      && gets[0].cfg && gets[0].cfg.params.index === 'logs',
+      '导入：输入索引要打 /import/exists 即时校验，并把索引名带给后端')
+    check(c.indexExists === true && c.createIndex === false,
+      '导入：即时校验发现索引已存在要自动切「不新建」（否则真跑 PUT 必报 already exists）')
+
+    const c2 = mk({ createIndex: true })
+    sandbox.api.get = () => Promise.resolve({ code: 0, data: { exists: false, valid: true } })
+    await comp.methods.checkExists.call(c2)
+    check(c2.indexExists === false && c2.createIndex === true,
+      '导入：索引不存在时保持「不存在时创建」勾选，不该误改用户的选择')
+  }
+
+  // ⑦ 「检查」SSE 流水线：日志按步骤落面板（时间 + 状态标记）；done(ready) 决定「预览」出不出
+  {
+    const c = mk({ hint: 'logback: %d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg' })
+    let analyzeBody = null
+    sandbox.__INFRA_SSE__ = {
+      post: (url, body, handlers) => {
+        analyzeBody = body
+        for (const [t, d] of [
+          ['log', JSON.stringify({ text: '当前上传文件类型为：普通文本（按行解析）', kind: 'info' })],
+          ['final', JSON.stringify({
+            patterns: ['%{WORD:m}'], definitions: { X: '\\d+' },
+            verify: { ok: true, matched: 20, partial: 0, missed: 0, total: 20, attempts: 1, adopted_retry: false }
+          })],
+          ['done', JSON.stringify({ ready: true })]
+        ]) handlers.onEvent(t, d)
+        handlers.onEnd({ status: 200, contentType: 'text/event-stream' })
+        return { close: () => {} }
+      }
+    }
+    await comp.methods.doAnalyze.call(c)
+    check(analyzeBody && analyzeBody.hint === c.hint,
+      '导入：日志格式说明要随检查请求发送（否则 AI 生成字段名全凭想象）')
+    check(c.analyzed === true, '导入：检查跑完（done ready）后「预览」才出现')
+    check((c.patterns || []).length === 1 && c.patterns[0] === '%{WORD:m}' && c.definitions.X === '\\d+',
+      '导入：final 帧的 pattern/definitions 要收进内存（预览/导入随请求带上）: ' + JSON.stringify(c.patterns))
+    check(c.logs.length >= 3 && typeof c.logs[0] === 'object' && !!c.logs[0].time && c.logs[0].kind === 'info',
+      '导入：日志行要带时间与状态标记（步骤式输出）: ' + JSON.stringify(c.logs))
+    check(c.logs.some(l => l.kind === 'ok' && l.text.indexOf('本次抽样全部通过') >= 0)
+      && c.logs.some(l => l.kind === 'ok' && l.text.indexOf('分析完成') >= 0),
+      '导入：抽样全通过 / 分析完成要用成功样式逐条落日志: ' + JSON.stringify(c.logs.map(l => l.text)))
+    check(!c.logs.some(l => l.text.indexOf('%{WORD:m}') >= 0),
+      '导入：日志不再输出生成的正则（用户口径：去掉输出的正则）: ' + JSON.stringify(c.logs.map(l => l.text)))
+
+    const c2 = mk()
+    sandbox.__INFRA_SSE__ = sseStub([['error', JSON.stringify({ message: '抽样失败' })]])
+    await comp.methods.doAnalyze.call(c2)
+    check(c2.analyzed === false, '导入：检查失败（error 帧）时不该出现「预览」入口')
+
+    const c3 = mk()
+    sandbox.__INFRA_SSE__ = sseStub([['done', JSON.stringify({ ready: false })]])
+    await comp.methods.doAnalyze.call(c3)
+    check(c3.analyzed === false, '导入：done(ready:false)（未生成 pattern）时不该出现「预览」入口')
+    check(c3.logs.some(l => l.kind === 'err'), '导入：未生成 pattern 要用错误样式说明')
+    delete sandbox.__INFRA_SSE__
+  }
+
+  // ⑧ 多文件与拖拽：acceptFiles 收下选择并复位分析态；投放只认导入面板本身
+  {
+    const c = mk()
+    c.desktop = true
+    comp.methods.acceptFiles.call(c, ['C:/logs/a.log', 'C:\\logs\\b.log', ' ', null])
+    check(c.sources.length === 2, '导入：acceptFiles 要收下多文件并过滤空串: ' + JSON.stringify(c.sources))
+    check(c.analyzed === false && c.preview === null && c.patterns.length === 0,
+      '导入：换文件后要复位分析/预览/pattern 状态')
+    check(comp.computed.fileLabel.call(c).indexOf('共 2 个文件') >= 0
+      && comp.computed.fileLabel.call(c).indexOf('a.log') >= 0,
+      '导入：多文件要显示「N 个文件：名字」: ' + comp.computed.fileLabel.call(c))
+
+    const c2 = mk({ sources: [] })
+    c2.desktop = true
+    comp.methods.onFilesDropped.call(c2, { elementId: 'other-area', files: ['C:/x.log'] })
+    check(c2.sources.length === 0, '导入：投放到其它区域的文件不该改选择')
+    comp.methods.onFilesDropped.call(c2, { elementId: 'es-imp-drop', files: ['C:/x.log', 'C:/y.log'] })
+    check(c2.sources.length === 2, '导入：投放到导入面板要接住拖入的多文件')
+
+    const c3 = mk({ sources: [], importing: true })
+    c3.desktop = true
+    comp.methods.onFilesDropped.call(c3, { elementId: 'es-imp-drop', files: ['C:/x.log'] })
+    check(c3.sources.length === 0, '导入：导入进行中不接收新的拖放')
+
+    // 包内过滤：只对压缩包生效的行 + 改动即复位分析态
+    const cz = mk({ sources: ['C:/logs/a.zip'] })
+    check(comp.computed.isArchive.call(cz) === true, '导入：选中压缩包时要出现「包内过滤」行')
+    const cz2 = mk({ sources: ['C:/logs/a.tgz', 'C:/logs/b.log'] })
+    check(comp.computed.isArchive.call(cz2) === true, '导入：多选里含压缩包也算（tgz 认）')
+    const cz3 = mk({ sources: ['C:/logs/b.log', 'C:/logs/c.jsonl'] })
+    check(comp.computed.isArchive.call(cz3) === false, '导入：普通日志/JSON 不显示包内过滤行')
+
+    const cf = mk()
+    cf.analyzed = true
+    cf.preview = { rows: [] }
+    cf.patterns = ['%{WORD:m}']
+    comp.watch.filter.call(cf)
+    check(cf.analyzed === false && cf.preview === null && cf.patterns.length === 0,
+      '导入：改包内过滤要复位分析态（旧的检查/预览结果作废）')
+    const ch = mk()
+    ch.analyzed = true
+    comp.watch.hint.call(ch)
+    check(ch.analyzed === false, '导入：改日志格式说明要复位分析态')
+  }
+
+  // ⑨ 补救闭环：跳过样例回喂重生成 / 删除重建导入 / 索引按文件名自动取名 / 写入计数核实
+  {
+    // 索引自动取名：去扩展名（含 .tar.gz 双重后缀）、非法字符替换、全非法则返回空
+    const cd = mk({ index: '' })
+    check(comp.methods.deriveIndex.call(cd, 'C:/logs/2026-10-13/yshapi_access_2026-10-13.log') === 'yshapi_access_2026-10-13',
+      '导入：索引名要能按文件名自动生成')
+    check(comp.methods.deriveIndex.call(cd, 'C:/x/logs.tar.gz') === 'logs', '导入：.tar.gz 双重后缀要去干净')
+    check(comp.methods.deriveIndex.call(cd, 'C:/x/应用 日志 2026.log') === '2026', '导入：非法字符要替换并修剪')
+    check(comp.methods.deriveIndex.call(cd, 'C:/x/应用.log') === '', '导入：生成不出合法名时返回空（交给手填）')
+
+    const cd2 = mk({ index: '' })
+    comp.methods.acceptFiles.call(cd2, ['C:/logs/2026-10-13/yshapi_access_2026-10-13.log'])
+    check(cd2.index === 'yshapi_access_2026-10-13', '导入：选文件后目标索引自动按文件名填: ' + cd2.index)
+    const cd3 = mk({ index: 'my-custom' })
+    comp.methods.acceptFiles.call(cd3, ['C:/logs/other_2026.log'])
+    check(cd3.index === 'my-custom', '导入：用户手输过索引就不再被自动覆盖')
+
+    // 用跳过样本重新生成：跳过样例随检查请求带上，且先收起进度弹框
+    const cr = mk()
+    cr.result = { index: 'logs', skipped: 2, skip_samples: ['bad one', 'bad two'] }
+    cr.showProgress = true
+    let refBody = null
+    sandbox.__INFRA_SSE__ = {
+      post: (url, body, handlers) => {
+        refBody = body
+        handlers.onEnd({ status: 200, contentType: 'text/event-stream' })
+        return { close: () => {} }
+      }
+    }
+    comp.methods.refineFromSkips.call(cr)
+    await new Promise(r => setTimeout(r, 0))
+    check(refBody && refBody.extra_samples && refBody.extra_samples.length === 2,
+      '导入：用跳过样本重新生成要把跳过样例随检查请求带上: ' + JSON.stringify(refBody && refBody.extra_samples))
+    check(cr.showProgress === false, '导入：重新生成时先收起进度弹框')
+    delete sandbox.__INFRA_SSE__
+
+    // 删除重建导入：弹不可撤销确认；两次请求都带 recreate_index；强制建索引并带字段类型
+    const cri = mk({ createIndex: false })
+    cri.index = 'logs'
+    cri.types = { ts: 'date' }
+    let confirms3 = 0
+    cri.$confirm = () => { confirms3++; return Promise.resolve() }
+    calls.length = 0
+    stub((url, body) => body.confirmed
+      ? { code: 0, data: { read: 1, indexed: 1, skipped: 0, failed: 0, elapsed_ms: 1, failures: [], dropped_fields: [], files: [], count_before: 0 } }
+      : { code: 0, data: { need_confirm: true, sources: body.sources, size: 1, index: 'logs', index_exists: true } })
+    await comp.methods.reimport.call(cri)
+    await new Promise(r => setTimeout(r, 0))
+    check(confirms3 === 1, '导入：重建导入要弹不可撤销确认')
+    check(calls.length === 2 && calls[0].body.recreate_index === true && calls[1].body.recreate_index === true,
+      '导入：重建导入两次请求都要带 recreate_index')
+    check(calls[1].body.create_index === true && JSON.stringify(calls[1].body.types) === '{"ts":"date"}',
+      '导入：重建时强制建索引并带上字段类型（「不存在时创建」勾没勾都要建）')
+    comp.methods.stopVerifyCount.call(cri)
+
+    // 计数核实：达到期望（before + indexed）即停
+    const cv = mk()
+    cv.result = { index: 'logs', indexed: 100, count_before: 0 }
+    sandbox.api = {
+      post: () => Promise.resolve({ code: 0 }),
+      get: () => Promise.resolve({ code: 0, data: { count: 100 } })
+    }
+    comp.methods.startVerifyCount.call(cv)
+    await new Promise(r => setTimeout(r, 0))
+    check(cv.verify && cv.verify.done === true && cv.verify.current === 100,
+      '导入：完成后核实索引计数（每 5 秒刷新、达到期望即停）: ' + JSON.stringify(cv.verify))
+    comp.methods.stopVerifyCount.call(cv)
+
+    const cv2 = mk()
+    cv2.result = { index: 'logs', indexed: 100, count_before: 0 }
+    sandbox.api.get = () => Promise.resolve({ code: 0, data: { count: 120 } })
+    comp.methods.startVerifyCount.call(cv2)
+    await new Promise(r => setTimeout(r, 0))
+    check(cv2.verify && cv2.verify.done === true && cv2.verify.over === true,
+      '导入：计数多于期望要如实标记（可能有历史数据）: ' + JSON.stringify(cv2.verify))
+    comp.methods.stopVerifyCount.call(cv2)
+  }
+
+  // ⑩ 跳过超阈值暂停闭环：waiting 弹框 → continue / refine（中止 → 重新生成 → 自动删除重建）
+  {
+    const cp = mk()
+    cp.key = 'imp-p'
+    comp.methods.applyProgress.call(cp, { waiting: true, skipped: 25, skip_samples: ['s1', 's2'] })
+    check(cp.pauseAsk === true && cp.pauseInfo && cp.pauseInfo.skipped === 25
+      && cp.pauseInfo.skip_samples.length === 2 && cp.pauseInfo.key === 'imp-p',
+      '导入：跳过超阈值挂起要弹决策框并带现场样例: ' + JSON.stringify(cp.pauseInfo))
+    comp.methods.applyProgress.call(cp, { waiting: true, skipped: 26, skip_samples: [] })
+    check(cp.pauseAsk === true && cp.pauseInfo.skipped === 25, '重复轮询不该叠加/覆盖决策框')
+
+    const pc = mk()
+    pc.key = 'imp-c'
+    pc.pauseInfo = { key: 'imp-c', skipped: 25, skip_samples: ['x'] }
+    pc.pauseAsk = true
+    const resPosts = []
+    sandbox.api = {
+      post: (url, body) => { resPosts.push({ url: url, body: body }); return Promise.resolve({ code: 0, data: { ok: true } }) },
+      get: () => Promise.resolve({ code: 0, data: { found: false } })
+    }
+    await comp.methods.pauseDecision.call(pc, 'continue')
+    check(resPosts.length === 1 && resPosts[0].url.indexOf('/import/resume') >= 0
+      && resPosts[0].body.action === 'continue' && pc.pauseAsk === false && pc._pauseDecided === true,
+      '导入：暂停时选「继续」要打 resume(continue) 并收起弹框')
+
+    const pr = mk()
+    pr.key = 'imp-r'
+    pr.pauseInfo = { key: 'imp-r', skipped: 25, skip_samples: ['r1', 'r2'] }
+    pr.pauseAsk = true
+    resPosts.length = 0
+    await comp.methods.pauseDecision.call(pr, 'refine')
+    check(resPosts.length === 1 && resPosts[0].body.action === 'abort' && pr._pendingRefine === true
+      && pr._pauseSamples.length === 2,
+      '导入：选「重新生成」要中止导入并记下现场样例')
+
+    // 补救链：重新生成完成（done）后自动删除重建导入
+    const cc = mk({ hint: 'fmt' })
+    cc._chainReimport = true
+    calls.length = 0
+    stub((url, body) => body.confirmed
+      ? { code: 0, data: { read: 1, indexed: 1, skipped: 0, failed: 0, elapsed_ms: 1, failures: [], dropped_fields: [], files: [], count_before: 0 } }
+      : { code: 0, data: { need_confirm: true, sources: body.sources, size: 1, index: 'logs', index_exists: true } })
+    sandbox.__INFRA_SSE__ = sseStub([['done', JSON.stringify({ ready: true })]])
+    await comp.methods.doAnalyze.call(cc)
+    await new Promise(r => setTimeout(r, 0))
+    check(cc._chainReimport === false && calls.length === 2 && calls[1].body.recreate_index === true,
+      '导入：重新生成完成后要自动删除重建导入: ' + JSON.stringify(calls.map(x => x.body.recreate_index)))
+    comp.methods.stopVerifyCount.call(cc)
+    delete sandbox.__INFRA_SSE__
+
+    // 抽屉逐文件状态：已完成打勾 / 当前转圈 / 待处理；导入结束全部打勾
+    const cfd = mk()
+    cfd.progress = { files: ['a.log', 'b.log', 'c.log'], file_step: 2, phase: 'running' }
+    check(comp.methods.fileState.call(cfd, 0) === 'done' && comp.methods.fileState.call(cfd, 1) === 'active'
+      && comp.methods.fileState.call(cfd, 2) === 'pending',
+      '导入：抽屉文件清单状态应为 done/active/pending')
+    const cfd2 = mk()
+    cfd2.progress = { files: ['a.log'], file_step: 1, phase: 'done' }
+    check(comp.methods.fileState.call(cfd2, 0) === 'done', '导入结束后每个文件都要打勾')
+  }
+}
+Promise.resolve()
+  .then(() => followupFlow(sandbox.MetricsAIGen, '监控生成面板',
+    { connId: 1, question: '看看各容器内存' },
+    { promql: 'up', explain: '', range: null, used_metrics: 0, usage: {} }))
+  .then(() => followupFlow(sandbox.MySQLAI, 'MySQL 生成面板',
+    { conn: { id: 1 }, db: 'mall', question: '查订单' },
+    { sql: 'SELECT 1', tables: ['mall.orders'], explain: '', sql_type: 'DQL', statement_count: 1, confirm_level: '', used_catalog: 0, usage: {} }))
+  .then(() => grokFlow(sandbox.EsGrokTab))
+  .then(() => logstashFlow(sandbox.EsGrokLogstash))
+  .then(() => explainFlow(sandbox.MetricsAIExplain))
+  .then(() => indexTabFlow(sandbox.EsIndexTab))
+  .then(() => discoverSortFlow(sandbox.EsDiscover))
+  .then(() => importFlow(sandbox.EsImportTab))
+  .then(() => { restoreStream(); report() })
+  .catch(e => { restoreStream(); errs.push('AI 面板行为断言执行异常: ' + e.message); report() })
+
+// 收尾必须由 ⑨ 的异步断言回调触发（上面的 .then / .catch）：
+// 那是本文件唯一异步项，若在这里直接判定，异步断言的结果会落在判定之后被丢掉（门禁假绿）。
+function report() {
+  if (errs.length) {
+    console.log('前端装载冒烟 不通过：')
+    errs.forEach(e => console.log('  - ' + e))
+    process.exit(1)
+  }
+  console.log(`前端装载冒烟 通过：脚本 ${loaded}/${expected} 个，9 个套件注册齐备，`
+    + `页面局部组件 ${Object.keys(page.components).length} 个，模板 ${page.template.length} 字符`
+    + (RECORD ? '已重录为基线。' : '逐字节一致。'))
+}

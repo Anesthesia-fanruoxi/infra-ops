@@ -261,7 +261,7 @@ func TestBuildCatalogEntry(t *testing.T) {
 			{Name: "amount", Type: "decimal(10,2)", Comment: ""},
 			{Name: "create_time", Type: "datetime", Comment: "创建时间"},
 			{Name: "uid", Type: "bigint", Comment: "用户ID"},
-			{Name: "created_at", Type: "bigint", Comment: "创建时间戳", Unit: "ms"},
+			{Name: "created_at", Type: "bigint", Comment: "创建时间戳"},
 		},
 	}
 
@@ -278,12 +278,9 @@ func TestBuildCatalogEntry(t *testing.T) {
 	if e.Columns[1].Note != "订单金额" || e.Columns[3].Note != "用户ID" || e.Columns[4].Note != "创建时间戳" {
 		t.Errorf("模型说明未按序回填：%+v", e.Columns)
 	}
-	// 真实列类型与时间戳单位随目录标记（生成 SQL 时做时间自适应）
+	// 真实列类型随目录标记（生成 SQL 时做时间自适应）
 	if e.Columns[2].Type != "datetime" || e.Columns[0].Type != "bigint" {
 		t.Errorf("字段类型未随目录标记：%+v", e.Columns)
-	}
-	if e.Columns[4].Unit != "ms" {
-		t.Errorf("时间戳单位未随目录标记：%+v", e.Columns)
 	}
 
 	// notes 数量不符（漏答 / 多答）：整表退回原注释，避免错位把 A 的说明挂到 B 上
@@ -304,8 +301,8 @@ func TestCatalogContextTypeHints(t *testing.T) {
 			{Name: "stat_date", Type: "int unsigned", Note: "统计日期"},
 			{Name: "is_delete", Type: "tinyint(1)", Note: "逻辑删除"},
 			{Name: "candidate_id", Type: "int", Note: "候选人"},
-			{Name: "created_at", Type: "bigint(20)", Unit: "ms", Note: "创建时间戳"},
-			{Name: "updated_at", Type: "int", Unit: "s", Note: "更新时间"},
+			{Name: "created_at", Type: "bigint(20)", Note: "创建时间戳"},
+			{Name: "updated_at", Type: "int", Note: "更新时间"},
 		},
 	}
 	got := catalogContext([]model.MySQLAICatalogEntry{e})
@@ -317,9 +314,9 @@ func TestCatalogContextTypeHints(t *testing.T) {
 	if !strings.Contains(got, "pay_at [int 时间戳]") || !strings.Contains(got, "stat_date [int 时间戳]") {
 		t.Errorf("整数时间列未标时间戳：\n%s", got)
 	}
-	// 有探测单位的时间戳列标出秒 / 毫秒，生成 SQL 时按单位换算
-	if !strings.Contains(got, "created_at [int 时间戳·毫秒]") || !strings.Contains(got, "updated_at [int 时间戳·秒]") {
-		t.Errorf("时间戳单位未标出：\n%s", got)
+	// int 时间戳统一标 [int 时间戳]：生成 SQL 时一律按毫秒（13 位）换算，不再区分单位
+	if !strings.Contains(got, "created_at [int 时间戳]") || !strings.Contains(got, "updated_at [int 时间戳]") {
+		t.Errorf("int 时间戳未统一标记：\n%s", got)
 	}
 	// 与时间无关的列不占上下文；int 名字含 date 子串也不误标（candidate_id）
 	if strings.Contains(got, "id [") || strings.Contains(got, "is_delete [") || strings.Contains(got, "candidate_id [") {
@@ -330,27 +327,6 @@ func TestCatalogContextTypeHints(t *testing.T) {
 	old := entry("t_order", "订单主表", "create_time")
 	if strings.Contains(catalogContext([]model.MySQLAICatalogEntry{old}), "create_time [") {
 		t.Errorf("无类型标记时不应猜测类型")
-	}
-}
-
-func TestTimestampUnit(t *testing.T) {
-	cases := []struct {
-		v    int64
-		want string
-	}{
-		{1731024000, "s"},     // 2024-11 秒级（10 位）
-		{1731024000000, "ms"}, // 毫秒级（13 位）
-		{100000000000, "ms"},  // 1e11 起必为毫秒（毫秒到 1973 年，秒级要 5138 年才够 12 位）
-		{99999999999, "s"},    // 边界之下按秒（11 位）
-		{100000000, "s"},      // 1e8 起为秒（1973 年）
-		{99999999, ""},        // 小值判不了（可能是时长等非时间戳）
-		{0, ""},
-		{-1, ""},
-	}
-	for _, c := range cases {
-		if got := timestampUnit(c.v); got != c.want {
-			t.Errorf("timestampUnit(%d) = %q, want %q", c.v, got, c.want)
-		}
 	}
 }
 
@@ -513,5 +489,55 @@ func TestAddUsage(t *testing.T) {
 	addUsage(&total, model.MySQLAIUsage{Calls: 1, TotalTokens: 4, Source: "estimated"})
 	if total.Source != "estimated" {
 		t.Errorf("混入估算后应整体标 estimated：%+v", total)
+	}
+}
+
+// TestBuildSQLFollowupMessages 锁定 MySQL 追加生成的对话拼装：assistant 上一版 SQL + user 追加要求，
+// 上一版缺失时退回单轮；追加要求段必须写清「当前目标库」（库可能被切过，以本次请求为准）。
+func TestBuildSQLFollowupMessages(t *testing.T) {
+	if got := buildSQLFollowupMessages(nil, "db1", "再加个过滤"); got != nil {
+		t.Errorf("没有上一轮时应返回 nil，得到 %+v", got)
+	}
+	if got := buildSQLFollowupMessages(&aiSQLPrev{Question: "查订单"}, "db1", "再加个过滤"); got != nil {
+		t.Errorf("上一轮没有 SQL 时应返回 nil，得到 %+v", got)
+	}
+
+	msgs := buildSQLFollowupMessages(&aiSQLPrev{
+		Schema:   "mall",
+		Question: "查最近 7 天订单金额",
+		SQL:      "SELECT `mall`.`orders`.`amount` FROM `mall`.`orders`",
+		Tables:   []string{"mall.orders"},
+		Explain:  "订单金额",
+	}, "mall", "只要已支付的")
+	if len(msgs) != 2 {
+		t.Fatalf("追加上下文应为 2 条消息，得到 %d", len(msgs))
+	}
+	if msgs[0].Role != "assistant" || msgs[1].Role != "user" {
+		t.Fatalf("消息角色错位: %s / %s", msgs[0].Role, msgs[1].Role)
+	}
+	var prev sqlReply
+	if err := unmarshalModelJSON(msgs[0].Content, &prev); err != nil {
+		t.Fatalf("上一版 JSON 不可解析: %v（%s）", err, msgs[0].Content)
+	}
+	if prev.SQL != "SELECT `mall`.`orders`.`amount` FROM `mall`.`orders`" {
+		t.Errorf("上一版 SQL 丢失: %q", prev.SQL)
+	}
+	if len(prev.Tables) != 1 || prev.Tables[0] != "mall.orders" {
+		t.Errorf("上一版涉及表丢失: %v", prev.Tables)
+	}
+	for _, want := range []string{"当前目标库：mall", "只要已支付的"} {
+		if !strings.Contains(msgs[1].Content, want) {
+			t.Errorf("追加要求段缺少 %q: %s", want, msgs[1].Content)
+		}
+	}
+}
+
+// TestSQLTraceQuestion 调用记录里追加生成要能与首轮区分开。
+func TestSQLTraceQuestion(t *testing.T) {
+	if got := traceQuestion("查订单", false); got != "查订单" {
+		t.Errorf("首轮问题不应加前缀: %q", got)
+	}
+	if got := traceQuestion("只要已支付", true); got != "追加：只要已支付" {
+		t.Errorf("追加问题应带前缀: %q", got)
 	}
 }

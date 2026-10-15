@@ -27,6 +27,7 @@ window.SettingsAI = {
       </el-form-item>
       <el-form-item label="调用超时（秒）">
         <el-input-number v-model="form.timeout" :min="10" :max="600" :step="10" style="width:100%" />
+        <div class="set-tip">流式生成按「多久没有新数据」计时（生成再久也不会中途失败）；非流式请求按整体时长</div>
       </el-form-item>
     </div>
 

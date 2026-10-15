@@ -36,6 +36,55 @@ type esNodeStats struct {
 	} `json:"indices"`
 }
 
+// indicesTotal 只数业务索引个数：h=index 不拉统计列，比列表请求轻；
+// 与列表分两个请求下发，列表先到先渲染，总数慢一步也不挡表格。
+func (c *escClient) indicesTotal(ctx context.Context) (int, error) {
+	status, body, err := c.do(ctx, http.MethodGet,
+		"/_cat/indices?format=json&h=index&expand_wildcards=open,closed", nil)
+	if err != nil {
+		return 0, err
+	}
+	if status == http.StatusNotFound {
+		return 0, nil
+	}
+	if status != http.StatusOK {
+		return 0, esErr(status, body, "读取索引总数失败")
+	}
+	var list []map[string]interface{}
+	if err := json.Unmarshal(body, &list); err != nil {
+		return 0, fmt.Errorf("解析索引总数失败: %w", err)
+	}
+	total := 0
+	for _, m := range list {
+		if name := strOf(m["index"]); !strings.HasPrefix(name, ".") {
+			total++
+		}
+	}
+	return total, nil
+}
+
+// docCount 统计索引当前文档数（GET /<index>/_count）。索引不存在按 0 计 —— 导入后
+// 核实「是否全部写入」时，刚建好的索引也可能还没建出来，0 是合法读数而非错误。
+func (c *escClient) docCount(ctx context.Context, index string) (int64, error) {
+	status, body, err := c.do(ctx, http.MethodGet, "/"+pathEscape(index)+"/_count", nil)
+	if err != nil {
+		return 0, err
+	}
+	if status == http.StatusNotFound {
+		return 0, nil
+	}
+	if status != http.StatusOK {
+		return 0, esErr(status, body, "统计文档数失败")
+	}
+	var out struct {
+		Count int64 `json:"count"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil {
+		return 0, fmt.Errorf("解析文档数失败: %w", err)
+	}
+	return out.Count, nil
+}
+
 func (c *escClient) overview(ctx context.Context) (*model.ESOverview, error) {
 	status, body, err := c.do(ctx, http.MethodGet, "/", nil)
 	if err != nil {
@@ -143,31 +192,46 @@ func (c *escClient) nodes(ctx context.Context) ([]model.ESNode, error) {
 	return nodes, nil
 }
 
-func (c *escClient) indices(ctx context.Context) ([]model.ESIndex, error) {
+// indexListCap 索引列表一次最多回给前端的条数。集群里索引可能成千上万，
+// 全塞给界面既慢又没必要——但「一共有多少个」必须如实告知，否则搜索/分页都无从谈起。
+const indexListCap = 100
+
+// indices 返回业务索引（剔除 . 开头系统索引）。
+//
+// pattern 非空时作为 ES 索引名通配（支持 * ? 与逗号分隔多段）拼进 /_cat/indices/{pattern}，
+// 由集群在**全部**索引里匹配，而不是只在本地已加载的前 100 条里找——这正是「搜索却搜不全」的根因。
+// 返回：list 最多 indexListCap 条（按索引名升序，保证「前 100」稳定），total 为匹配到的**全部**条数。
+func (c *escClient) indices(ctx context.Context, pattern string) ([]model.ESIndex, int, error) {
+	path := "/_cat/indices"
+	if p := strings.TrimSpace(pattern); p != "" {
+		path += "/" + pathEscapePattern(p)
+	}
+	// 不带 size 限制：要拿到全部匹配行才能算准 total，展示条数在本地截断即可。
 	// expand_wildcards 去掉 hidden（仅 open,closed），并在下面剔除 . 开头系统索引，
-	// 使列表只展示业务索引，不展示隐藏与系统索引。
-	const path = "/_cat/indices?format=json&h=index,health,status,pri,rep,docs.count,docs.deleted,store.size&expand_wildcards=open,closed&size=100"
+	// 使列表只展示业务索引，不展示隐藏与系统索引。s=index 让「前 100」按名稳定。
+	path += "?format=json&h=index,health,status,pri,rep,docs.count,docs.deleted,store.size&expand_wildcards=open,closed&s=index"
 	status, body, err := c.do(ctx, http.MethodGet, path, nil)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
+	}
+	// 通配未命中任何索引时，部分 ES 版本回 404：按「0 条匹配」处理，不当错误抛给界面。
+	if status == http.StatusNotFound {
+		return []model.ESIndex{}, 0, nil
 	}
 	if status != http.StatusOK {
-		return nil, esErr(status, body, "读取索引列表失败")
+		return nil, 0, esErr(status, body, "读取索引列表失败")
 	}
 	var list []map[string]interface{}
 	if err := json.Unmarshal(body, &list); err != nil {
-		return nil, fmt.Errorf("解析索引列表失败: %w", err)
+		return nil, 0, fmt.Errorf("解析索引列表失败: %w", err)
 	}
-	indices := make([]model.ESIndex, 0, 100)
+	all := make([]model.ESIndex, 0, len(list))
 	for _, m := range list {
 		name := strOf(m["index"])
 		if strings.HasPrefix(name, ".") {
 			continue
 		}
-		if len(indices) >= 100 {
-			break
-		}
-		indices = append(indices, model.ESIndex{
+		all = append(all, model.ESIndex{
 			Index:       name,
 			Health:      strOf(m["health"]),
 			Status:      strOf(m["status"]),
@@ -178,7 +242,11 @@ func (c *escClient) indices(ctx context.Context) ([]model.ESIndex, error) {
 			StoreSize:   strOf(m["store.size"]),
 		})
 	}
-	return indices, nil
+	total := len(all)
+	if total > indexListCap {
+		all = all[:indexListCap]
+	}
+	return all, total, nil
 }
 
 func (c *escClient) createIndex(ctx context.Context, name string, shards, replicas *int) error {

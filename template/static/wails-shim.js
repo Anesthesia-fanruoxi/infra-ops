@@ -248,6 +248,108 @@
 
   window.EventSource = BridgeEventSource
 
+  // ---- POST 流式消费（AI 生成接口专用） ----
+  // 原生 EventSource 只发 GET，而 AI 生成接口的上下文（问题、模式、上一轮结果）
+  // 都在 POST body 里；故这里给出与 BridgeEventSource 同源的桥接版消费，
+  // 经 SSEBridge.OpenPOST 转发，帧语义（event/data 行）与 GET 流完全一致。
+  //
+  // 与 EventSource 的两个刻意差异：
+  //  1. 绝不自动重连——POST 重放意味着重复生成、重复计 token 费；
+  //  2. 业务错误（HTTP 200 + 非 SSE 的 resp.Fail JSON）不再当作流结束，
+  //     解析出 message 交给 onError，避免把「生成失败」显示成「生成完成」。
+  //
+  // 用法：const s = window.__INFRA_SSE__.post(url, body, {
+  //   onEvent(type, data), onEnd({status, contentType}), onError({message}) })
+  // s.close() 可随时中断（后端请求 ctx 随之取消）。
+  window.__INFRA_SSE__ = {
+    post: function (url, body, handlers) {
+      const h = handlers || {}
+      const clientID = 'p' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10)
+      let closed = false
+      let unsubChunk = null
+      let unsubEnd = null
+      let rawBuf = '' // 业务错误 JSON 也走 chunk 通道，需要原文才能取出 message
+      const parser = new SSEParser(function (type, data) {
+        if (closed || typeof h.onEvent !== 'function') return
+        try { h.onEvent(type, data) } catch (e) { console.error('[wails-shim] SSE 帧处理异常:', e) }
+      })
+      function cleanup() {
+        if (unsubChunk) { try { unsubChunk() } catch (e) { /* */ } unsubChunk = null }
+        if (unsubEnd) { try { unsubEnd() } catch (e) { /* */ } unsubEnd = null }
+      }
+      function finish(err) {
+        if (closed) return
+        closed = true
+        cleanup()
+        if (err && typeof h.onError === 'function') h.onError(err)
+      }
+      ensureRuntime().then(function (wails) {
+        if (closed) return null
+        unsubChunk = wails.Events.On('sse:' + clientID, function (ev) {
+          const text = (ev && ev.data) || ''
+          if (rawBuf.length < 65536) rawBuf += text
+          parser.feed(text)
+        })
+        unsubEnd = wails.Events.On('sse:' + clientID + ':end', function (ev) {
+          const d = (ev && ev.data) || {}
+          const status = typeof d.status === 'number' ? d.status : 0
+          const contentType = String(d.contentType || '')
+          if (closed) return
+          if (isSSEContentType(contentType)) {
+            closed = true
+            cleanup()
+            if (typeof h.onEnd === 'function') h.onEnd({ status: status, contentType: contentType })
+            return
+          }
+          let message = '生成失败（HTTP ' + (status || '未知') + '）'
+          try {
+            const biz = JSON.parse(rawBuf)
+            if (biz && biz.message) message = biz.message
+          } catch (e) { /* 错误体不是 JSON：保留通用提示 */ }
+          finish({ message: message, status: status })
+        })
+        return wails.Call.ByName('infra-ops/desktop.SSEBridge.OpenPOST', clientID, url, JSON.stringify(body == null ? {} : body))
+      }).then(function () {
+        if (!closed && typeof h.onOpen === 'function') h.onOpen()
+      }).catch(function (err) {
+        finish({ message: (err && err.message) || '流式通道不可用，请重启应用后重试' })
+      })
+      return {
+        close: function () {
+          if (closed) return
+          closed = true
+          cleanup()
+          try { window.wails.Call.ByName('infra-ops/desktop.SSEBridge.Close', clientID).catch(function () {}) } catch (e) { /* */ }
+        }
+      }
+    }
+  }
+
+  // ---- 文件拖放入库 ----
+  // 外部文件拖放到窗口由 WebView2 原生捕获，Go 侧（desktop/file_drop.go）把
+  // WindowFilesDropped 转发成应用事件 infra:files-dropped（只到 Go 的监听层，
+  // 前端从这里订阅）。元素只需带 data-file-drop-target 属性即可成为投放目标
+  // （运行时 JS 负责悬停高亮 class file-drop-target-active 与命中判定）。
+  // 用法：const off = window.__INFRA_DROP__.on(({files, elementId}) => {...})；off() 退订。
+  window.__INFRA_DROP__ = {
+    on: function (callback) {
+      let unsub = null
+      let cancelled = false
+      ensureRuntime().then(function (wails) {
+        if (cancelled) return
+        try {
+          unsub = wails.Events.On('infra:files-dropped', function (ev) {
+            callback((ev && ev.data) || {})
+          })
+        } catch (e) { /* 事件系统不可用：拖拽静默不生效 */ }
+      }).catch(function () { /* 运行时未就绪：拖拽不可用，其余功能不受影响 */ })
+      return function () {
+        cancelled = true
+        if (unsub) { try { unsub() } catch (e) { /* */ } unsub = null }
+      }
+    }
+  }
+
   // ---- F12 打开 DevTools ----
   // 为什么必须自己做（Windows 上 Wails 的三重限制，详见 desktop/devtools.go）：
   //  1. Wails 硬编码 PutAreBrowserAcceleratorKeysEnabled(false)，浏览器加速键被整体关掉，

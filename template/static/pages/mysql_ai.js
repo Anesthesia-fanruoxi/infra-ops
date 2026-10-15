@@ -1,6 +1,10 @@
 // MySQL 工作台 · AI 面板：自然语言 → SQL。
 // 上下文来自「语义目录」（表注释 + 字段注释先经模型归纳并缓存）；
 // 生成范围跟着工作台的读写开关走（只读只给查询、可写给写语句），生成即自动追加进编辑器、不自动执行。
+// 结果不理想时可「追加生成」：带上首轮需求与最新一版 SQL，让模型在此基础上改。
+// 追加**只给一次**——成功即丢弃上下文，按钮随之消失，回到「只有一个生成按钮」的起始态；
+// 想再改就重新提问（这样界面上永远最多两个按钮，也不需要「重新开始」这种清理入口）。
+// 追加轮在编辑器里按「替换上一次 AI 追加的那段」落位，不堆版本。
 window.MySQLAI = {
   props: {
     conn: { type: Object, required: true },
@@ -78,15 +82,34 @@ window.MySQLAI = {
     </div>
 
     <textarea class="mysql-ai-input" v-model="question" spellcheck="false" :disabled="loading"
-      @keydown.ctrl.enter.prevent="generate"
+      @keydown.ctrl.enter.prevent="generate(false)"
       :placeholder="placeholder"></textarea>
     <div class="mysql-ai-actions">
       <span class="mysql-ai-tip">Ctrl + Enter 生成</span>
       <span class="mysql-ai-spacer"></span>
-      <el-button type="primary" size="small" :loading="loading" @click="generate">生成 SQL</el-button>
+      <el-button v-if="prev" size="small" :disabled="loading" :loading="loadingFollowup" @click="generate(true)">追加生成</el-button>
+      <el-button type="primary" size="small" :loading="loading && !loadingFollowup" @click="generate(false)">生成 SQL</el-button>
+    </div>
+
+    <!-- 追加生成的上下文提示：带的是首轮需求 + 最新一版 SQL，且**只有这一次机会**，
+         说清楚「模型看到什么、还能不能追加」，使用者才不用猜 -->
+    <div class="mysql-ai-catalog-msg mysql-ai-tip" v-if="prev">
+      已带上首轮需求与最新一版 SQL，本次追加将在其基础上修改（只能追加一次）：<b>{{ prev.question }}</b>
     </div>
 
     <div class="mysql-ai-error" v-if="error"><pre>{{ error }}</pre></div>
+
+    <!-- 生成草稿（流式）：模型边生成边显示，完成且通过服务端门禁后自动追加进编辑器、草稿即收；
+         被拦截 / 解析失败时草稿保留并标记「未采用」，配合上面的报错看「模型当时给了什么」 -->
+    <div class="mysql-ai-draft" v-if="draftLoading || draftSql || draftExplain">
+      <div class="mysql-ai-draft-head">
+        <span class="mysql-ai-draft-tag" :class="draftLoading ? 'is-live' : 'is-dead'">{{ draftLoading ? '生成中…' : '草稿 · 未采用' }}</span>
+        <span class="mysql-ai-draft-hint" v-if="draftLoading">完成并校验通过后自动追加进编辑器</span>
+      </div>
+      <pre class="mysql-ai-draft-sql" v-if="draftSql">{{ draftSql }}</pre>
+      <div class="mysql-ai-draft-explain" v-if="draftExplain">{{ draftExplain }}</div>
+      <div class="mysql-ai-draft-wait" v-if="draftLoading && !draftSql && !draftExplain">正在等待模型响应…</div>
+    </div>
 
     <!-- 生成反馈（SQL 已自动追加进编辑器，不再重复展示）：涉及表徽标 + 写语句告警 -->
     <div class="mysql-ai-tables" v-if="sql && tables.length">
@@ -191,11 +214,16 @@ window.MySQLAI = {
     return {
       cfg: {}, dbs: [], db: this.schema || '', loadingDbs: false,
       question: '', sql: '', explain: '', tables: [], used: 0,
+      // prev = 追加生成的上下文（首轮需求 + 最新一版 SQL）；base 存首轮原文，供追加时回灌。
+      // 追加成功即连同 base 一起清空（追加只给一次）、切库也会清空。loadingFollowup 只用于按钮各自的转圈
+      base: '', prev: null, loadingFollowup: false,
       // sqlType / stmtCount / confirmLevel 由服务端随生成结果下发（静态分类，不是让模型自己声明）
       sqlType: '', stmtCount: 0, confirmLevel: '',
       // token 用量也由服务端下发：usage = 本次生成，catalogUsage = 上次目录生成
       usage: {}, catalogUsage: {},
       loading: false,
+      // 流式草稿：模型边生成边展示的 sql / explain 增量（生成完成后自动追加进编辑器，草稿即收）
+      draftSql: '', draftExplain: '', draftLoading: false,
       catalogCount: 0, catalogMsg: '', catalogOpen: false, error: '',
       // 连接级目录概况：connTotal = 全连接缓存条数（0 = 提示「当前没有缓存语义目录」）；schemaCounts = 每库条数
       connTotal: 0, schemaCounts: {},
@@ -260,6 +288,7 @@ window.MySQLAI = {
   beforeUnmount() {
     window.removeEventListener('ai-config-changed', this.onCfgChanged)
     this.stopTaskPoll() // 组件卸载不丢任务：轮询只是查看通道，任务本身在服务端继续
+    if (this._sqlStream) { this._sqlStream.close(); this._sqlStream = null } // 生成流随组件走：关掉即取消服务端请求
   },
   methods: {
     async init() {
@@ -307,6 +336,8 @@ window.MySQLAI = {
       this.catalogCount = 0
       this.catalogMsg = ''
       this.sql = ''; this.explain = ''; this.tables = []; this.error = ''
+      // 换库即丢追加上下文：上一版 SQL 是按旧库生成的，接着追加只会串味
+      this.clearPrev()
       this.sqlType = ''; this.stmtCount = 0; this.confirmLevel = ''
       this.usage = {}; this.catalogUsage = {}
       this.$emit('pick-db', db)
@@ -487,34 +518,103 @@ window.MySQLAI = {
       if (s.state === 'failed') return '失败'
       return '排队中'
     },
-    async generate() {
+    // generate(true) = 追加生成：把首轮需求与最新一版 SQL 一并带上，让模型在上一版基础上改；
+    // 结果替换掉编辑器里上一次 AI 追加的那段（工作台按块识别，用户手改过就退回追加，绝不覆盖手写内容）。
+    // 流式口径：delta 帧边收边拼草稿（只服务展示）；final 帧才落结果并追加进编辑器——
+    // 门禁（只读模式、危险写法）以服务端为准，被拦下时草稿保留并标「未采用」
+    async generate(followup) {
       const q = this.question.trim()
       if (this.loading) return
       if (!this.db) { ElMessage.warning('请先选择要查询的库'); return }
       // 不再因「当前库没有目录」拦下：上下文含连接内所有库的目录，
       // 当前库没建也能用其他库的表生成跨库查询；真一个目录都没有时服务端会明确报错
       if (!q) { ElMessage.warning('请先用一句话描述你想查什么'); return }
+      // 没有上一轮时「追加」退化为普通生成（按钮此时也不会出现，双保险）
+      const usePrev = !!followup && !!this.prev
+      const sse = window.__INFRA_SSE__
+      if (!sse) { this.error = '流式通道不可用：请通过桌面应用运行后重试'; return }
+
       this.loading = true
+      this.loadingFollowup = usePrev
       this.error = ''
       this.usage = {}
-      try {
-        const r = await api.post('/mysql/' + this.conn.id + '/ai/sql',
-          { schema: this.db, question: q }, { timeout: 180000 })
-        if (r.code === 0 && r.data) {
-          this.sql = r.data.sql || ''
-          this.explain = r.data.explain || ''
-          this.tables = r.data.tables || []
-          this.used = r.data.used_catalog || 0
-          this.sqlType = r.data.sql_type || ''
-          this.stmtCount = r.data.statement_count || 0
-          this.confirmLevel = r.data.confirm_level || ''
-          this.usage = r.data.usage || {}
-          // 生成即自动追加进编辑器（追加语义，不自动执行）
-          if (this.sql) this.$emit('use-sql', this.sql, { auto: true })
+      this.draftSql = ''
+      this.draftExplain = ''
+      this.draftLoading = true
+
+      const body = { schema: this.db, question: q }
+      if (usePrev) body.prev = {
+        schema: this.db, question: this.base, sql: this.prev.sql,
+        tables: this.prev.tables, explain: this.prev.explain
+      }
+      let settled = false // final / error 帧是否已到（onEnd 据此区分「正常结束」与「提前断流」）
+      const finish = () => {
+        this.loading = false
+        this.loadingFollowup = false
+        this.draftLoading = false
+        this._sqlStream = null
+      }
+      // final 帧落结果：与旧同步口径完全一致（含追加一次性语义与自动追加进编辑器）
+      const applyFinal = (d) => {
+        this.sql = d.sql || ''
+        this.explain = d.explain || ''
+        this.tables = d.tables || []
+        this.used = d.used_catalog || 0
+        this.sqlType = d.sql_type || ''
+        this.stmtCount = d.statement_count || 0
+        this.confirmLevel = d.confirm_level || ''
+        this.usage = d.usage || {}
+        // 追加只给一次：成功即丢弃上下文（按钮随之消失），回到只有一个生成按钮的起始态；
+        // 首轮成功则记下这一版，供下一次追加使用。失败不动上下文，按钮留着可重试。
+        if (usePrev) {
+          this.prev = null
+          this.base = ''
+        } else if (this.sql) {
+          this.base = q
+          this.prev = { question: q, sql: this.sql, tables: this.tables, explain: this.explain }
         } else {
-          this.error = r.message || '生成失败'
+          this.prev = null
+          this.base = ''
         }
-      } catch (e) { /* 拦截器已提示 */ } finally { this.loading = false }
+        // 生成即自动追加进编辑器（追加语义，不自动执行）；追加轮走「替换上一版」语义
+        if (this.sql) this.$emit('use-sql', this.sql, { auto: true, replaceAi: usePrev })
+        this.draftSql = '' // 终稿已落，草稿收起
+        this.draftExplain = ''
+      }
+      this._sqlStream = sse.post('/api/mysql/' + this.conn.id + '/ai/sql', body, {
+        onEvent: (type, data) => {
+          let ev = {}
+          try { ev = JSON.parse(data) } catch (e) { return }
+          if (type === 'delta') {
+            if (ev.field === 'sql') this.draftSql += ev.text || ''
+            else if (ev.field === 'explain') this.draftExplain += ev.text || ''
+            return
+          }
+          if (type === 'error') {
+            settled = true
+            this.error = ev.message || '生成失败'
+            finish() // 草稿保留：标成「未采用」的同时能看到模型给了什么
+            return
+          }
+          if (type === 'final' && !settled) {
+            settled = true
+            applyFinal(ev)
+            finish()
+          }
+        },
+        onEnd: () => {
+          if (!settled) { this.error = '生成未完成（连接提前结束），请重试'; finish() }
+        },
+        onError: (err) => {
+          if (!settled) { this.error = (err && err.message) || '生成失败'; finish() }
+        }
+      })
+    },
+    // 丢掉追加上下文（切库时用：上一版 SQL 是按旧库生成的，接着追加只会串味）。
+    // 界面上没有「重新开始」按钮——追加成功本来就会自己清空
+    clearPrev() {
+      this.prev = null
+      this.base = ''
     },
     // token 数按千分位展示；耗时过千按秒看（模型调用常在秒级）
     fmtNum(n) { return Number(n || 0).toLocaleString('zh-CN') },

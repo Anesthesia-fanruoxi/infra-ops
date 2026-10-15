@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>measure · ES · Grok 解析</title>
+  <link rel="stylesheet" href="../template/static/vendor/element-plus.css">
+  <link rel="stylesheet" href="../template/static/style.css">
+  <style>
+    body { margin: 0; background: #F5F7FA; }
+    #app { min-height: 100vh; }
+    #out { margin: 12px 24px; padding: 12px; background: #111827; color: #A7F3D0; font: 12px/1.6 monospace; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div class="page-card" style="margin:24px;padding:16px">
+      <es-grok-tab ref="grok" :conn="conn" />
+    </div>
+  </div>
+  <pre id="out"></pre>
+<!--
+  用法（无头浏览器，实测几何与断言，不估算）：
+    "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe" --headless=new --disable-gpu \
+      --window-size=1440,900 --virtual-time-budget=12000 --dump-dom \
+      "file:///D:/project/go/infra-ops/script/measure_es_grok.html?stage=result"
+    截图：--dump-dom 换成 --screenshot=shot.png 并加 &shot=true
+
+  场景（?stage=…，默认 result；AI 走流式，另见 ?ai=retry）：
+    result       解析结果版式：字段表 / 三态左侧色条 / 统计行；同时压「宽字段值不横向溢出」
+    ai           点「AI 生成」走完整流式链路：草稿 → final → 自动复跑解析；打印校验行 / 字段解释网格 / 用量
+    ai=retry     同上，但中间插入 phase 帧（首稿未命中 → 服务端回喂修正），用它验「修正提示」的版式与收尾
+    long         超长字段值（长 URL / 长 stack）：右列不许被撑出横向滚动条
+    miss         全部未命中：每行都要给「怎么改 pattern」的可操作提示
+    ls           点「生成配置」：量 Logstash 配置区块（状态行 / 配置块自滚不撑宽 / 表单行未被压扁）
+    窄视口        加 --window-size=800,900 即可（与 stage 无关）
+
+  ⚠️ 这个台子只挂组件本身，**没有真机的高度链**（.content > .page-fade > 页面根节点），
+     所以「两栏各自滚动 / 列宽比例」这类结论必须去页面级集成台 measure_es_page.html 拿；
+     在这里量到的 pane 高度是内容高（滚动自然不生效），那是量台没有定高容器，不是缺陷。
+
+  为什么建这个台子：Grok 面板的价值全在「看得清」——字段名与值要对得上、
+  未命中要有可操作的提示、长值不能把面板撑破。这些只有真渲染能量出来：
+  纯读代码看不出长 URL 会不会顶出滚动条，也看不出窄屏下两栏是不是还在硬挤。
+-->
+  <script src="../template/static/vendor/vue.global.prod.js"></script>
+  <script src="../template/static/vendor/element-plus.min.js"></script>
+  <script src="../template/static/vendor/element-plus-icons-vue.min.js"></script>
+  <script src="../template/static/vendor/element-plus-zh-cn.min.js"></script>
+
+  <!-- 被测组件（真实文件，顺序同 index.html）：Logstash 配置区块是 grok 面板的子组件，
+       必须先于 es_grok.js 装载 -->
+  <script src="../template/static/pages/es_grok_logstash.js"></script>
+  <script src="../template/static/pages/es_grok.js"></script>
+
+  <script>
+const QS = new URLSearchParams(location.search)
+const STAGE = QS.get('stage') || 'result'
+const SHOT = QS.get('shot') === 'true'
+
+window.__errors = []
+window.addEventListener('error', function (e) {
+  window.__errors.push(String(e.message) + ' @ ' + String(e.filename || '?').split('/').pop() + ':' + String(e.lineno || 0))
+})
+window.addEventListener('unhandledrejection', function (e) {
+  window.__errors.push('rejection: ' + String((e.reason && e.reason.message) || e.reason))
+})
+
+const LINE_MATCH = '2026-10-10 14:20:31 ERROR [order-service,trace=9f2c] com.example.OrderController - create order failed: timeout'
+const LINE_MATCH2 = '2026-10-10 14:20:32 INFO [order-service,trace=9f2d] com.example.OrderService - order created ok'
+const LINE_PART = '2026-10-10 14:20:33 WARN [order-service]'
+const LINE_MISS = '=== line without any timestamp or level ==='
+const LONG_URL = '2026-10-10 14:20:31 ERROR [order-service] GET https://gateway.internal.example.com/api/v1/orders/detail?id=8f2c1d0e-4a7b-4c1e-9f30-12ab34cd56ef&trace=9f2c1d0e4a7b4c1e9f3012ab34cd56ef&full=1 HTTP/1.1 504 gateway timeout from upstream order-core after 30000ms'
+const LONG_STACK = '2026-10-10 14:20:31 ERROR [order-service] java.lang.IllegalStateException: cannot acquire connection from pool at com.example.order.core.Pool.acquire(Pool.java:184) ~[order-core-2.14.0.jar:2.14.0] at com.example.order.core.OrderService.create(OrderService.java:96)'
+
+// ===================== mock 后端 =====================
+window.__posts = []
+function delay(ms, v) { return new Promise(function (res) { setTimeout(function () { res(v) }, ms) }) }
+
+function field(name, value, type) { const f = { name: name, value: value }; if (type) f.type = type; return f }
+function line(no, raw, matched, partial, fields) {
+  return { no: no, raw: raw, matched: matched, partial: partial, pattern_index: matched ? 0 : (partial ? 0 : -1), fields: fields || [] }
+}
+
+const FIELDS_MATCH = [
+  field('ts', '2026-10-10 14:20:31'), field('level', 'ERROR'),
+  field('ctx', 'order-service,trace=9f2c'), field('logger', 'com.example.OrderController'),
+  field('message', 'create order failed: timeout')
+]
+
+const PARSE_PAYLOAD = {
+  total: 4, matched: 2, partial: 1, missed: 1, truncated: false,
+  patterns: ['%{TIMESTAMP_ISO8601:ts} %{LOGLEVEL:level} \\[%{DATA:ctx}\\] %{JAVACLASS:logger} - %{GREEDYDATA:message}'],
+  lines: [
+    line(1, LINE_MATCH, true, false, FIELDS_MATCH),
+    line(2, LINE_MATCH2, true, false, FIELDS_MATCH.map(function (f) { return field(f.name, f.value) })),
+    line(3, LINE_PART, false, true, [field('ts', '2026-10-10 14:20:33'), field('level', 'WARN')]),
+    line(4, LINE_MISS, false, false, [])
+  ]
+}
+
+const LONG_PAYLOAD = {
+  total: 2, matched: 2, partial: 0, missed: 0, truncated: false,
+  patterns: ['%{TIMESTAMP_ISO8601:ts} %{LOGLEVEL:level} \\[%{DATA:ctx}\\] %{GREEDYDATA:message}'],
+  lines: [
+    line(1, LONG_URL, true, false, [field('ts', '2026-10-10 14:20:31'), field('level', 'ERROR'),
+      field('ctx', 'order-service'), field('message', LONG_URL.slice(38))]),
+    line(2, LONG_STACK, true, false, [field('ts', '2026-10-10 14:20:31'), field('level', 'ERROR'),
+      field('message', LONG_STACK.slice(38))])
+  ]
+}
+
+const MISS_PAYLOAD = {
+  total: 2, matched: 0, partial: 0, missed: 2, truncated: false,
+  patterns: ['%{NUMBER:n}'],
+  lines: [line(1, LINE_MATCH, false, false, []), line(2, LINE_MISS, false, false, [])]
+}
+
+const AI_PAYLOAD = {
+  patterns: ['%{TIMESTAMP_ISO8601:ts} %{LOGLEVEL:level} \\[%{DATA:ctx}\\] %{JAVACLASS:logger} - %{GREEDYDATA:message}'],
+  definitions: { APPCTX: '[a-z-]+(?:,[a-z]+=[0-9a-f]+)?' },
+  explain: '标准 Java 应用日志：时间戳 + 级别 + 方括号上下文 + logger + 消息。',
+  fields: [{ name: 'ts', desc: '日志时间' }, { name: 'level', desc: '日志级别' }, { name: 'ctx', desc: '应用与 trace 上下文' },
+    { name: 'logger', desc: '出日志的类' }, { name: 'message', desc: '消息正文' }],
+  verify: { ok: true, matched: 4, partial: 0, missed: 0, total: 4, attempts: 2, adopted_retry: true, error: '' },
+  usage: { calls: 2, total_tokens: 1687, elapsed_ms: 11421, source: 'api' }
+}
+
+window.api = {
+  post: function (url, body) {
+    window.__posts.push({ url: url, body: body })
+    // AI 生成已改走流式（window.__INFRA_SSE__.post），这里**刻意不再桩** ——
+    // 留着旧分支会让「前端误回退到 api.post」这类回归悄悄通过
+    if (url.indexOf('/grok/ai') >= 0) return Promise.resolve({ code: 1, message: '未桩住的 POST ' + url })
+    if (STAGE === 'long') return delay(20, { code: 0, data: LONG_PAYLOAD })
+    if (STAGE === 'miss') return delay(20, { code: 0, data: MISS_PAYLOAD })
+    return delay(20, { code: 0, data: PARSE_PAYLOAD })
+  }
+}
+
+// Logstash 配置场景的载荷：用真实的 nginx 配置压版式 —— 单行 pattern 和 remove_field 数组都很长，
+// 正好验「配置块自己横向滚动、不把整个面板撑宽」（pre + white-space:pre 的典型风险点）。
+const LS_PATTERN = '%{TIMESTAMP_ISO8601:time} %{NUMBER:timestamp} %{IP:client_ip} %{WORD:method} %{URIPATHPARAM:request_url} %{NUMBER:status:int} %{NUMBER:request_time:float} (?:%{NUMBER:upstream_response_time:float}|-)'
+const LS_CONFIG = [
+  'filter {',
+  '  if "nginx" in [tags] {',
+  '    grok {',
+  '      match => { "message" => "' + LS_PATTERN + '" }',
+  '    }',
+  '    mutate {',
+  '      gsub => ["upstream_response_time", "-", "0.0"]',
+  '      remove_field => ["agent", "event", "host", "@version", "cloud", "input", "ecs", "container", "offset", "log", "message"]',
+  '    }',
+  '  }',
+  '}'
+].join('\n')
+const LS_PAYLOAD = {
+  config: LS_CONFIG, tag: 'nginx', source: 'message', patterns: [LS_PATTERN],
+  fields: ['time', 'timestamp', 'client_ip', 'method', 'request_url', 'status', 'request_time', 'upstream_response_time'],
+  gsub: [{ field: 'upstream_response_time', from: '-', to: '0.0' }],
+  remove: ['agent', 'event', 'host', '@version', 'cloud', 'input', 'ecs', 'container', 'offset', 'log', 'message'],
+  notes: '占位符归零并清理采集器字段',
+  enhance: 'ok', enhance_error: '', dropped_gsub: [], dropped_remove: []
+}
+
+// ===================== 流式 mock =====================
+// 桌面桥的「POST + SSE」在量台里的等价物（与 wails-shim.js 的 __INFRA_SSE__.post 同签名）。
+// ?ai=retry 走「首稿不命中 → phase → 修正稿 → final」这条真实链路。
+window.__ssePosts = []
+function sseFrames() {
+  const wantRetry = QS.get('ai') === 'retry'
+  const frames = []
+  frames.push([30, 'delta', { field: 'patterns', index: 0, text: '%{TIMESTAMP_ISO8601:ts} \\| %{LOGLEVEL:level}' }])
+  if (wantRetry) frames.push([60, 'phase', { stage: 'retry', message: '未整行命中', matched: 0, total: 4 }])
+  frames.push([90, 'delta', { field: 'patterns', index: 0, text: AI_PAYLOAD.patterns[0] }])
+  frames.push([110, 'delta', { field: 'explain', text: AI_PAYLOAD.explain }])
+  frames.push([150, 'final', AI_PAYLOAD])
+  return frames
+}
+// Logstash 配置生成的帧序列：phase（进度）→ final（配置）。
+// 它也走流式 —— 同步返回会被 axios 的 15 秒默认超时打断（真机上就是这么报的）。
+// ⚠️ 这里刻意**不**在 window.api.post 上留 logstash 分支：留了的话「前端误回退到普通 POST」
+// 会被静默放过（配置照样渲染出来），而那正是超时故障的根因。
+function lsStream(url, body, handlers) {
+  window.__ssePosts.push({ url: url, body: body || {} })
+  const h = handlers || {}
+  const timers = []
+  let closed = false
+  const emit = function (type, obj) {
+    if (!closed && typeof h.onEvent === 'function') h.onEvent(type, JSON.stringify(obj))
+  }
+  timers.push(setTimeout(function () { emit('phase', { message: '已交给模型判断 mutate 处理…' }) }, 70))
+  timers.push(setTimeout(function () {
+    if (closed) return
+    emit('final', LS_PAYLOAD)
+    closed = true
+    if (typeof h.onEnd === 'function') h.onEnd({ status: 200, contentType: 'text/event-stream' })
+  }, 220))
+  return { close: function () { closed = true; timers.forEach(clearTimeout) } }
+}
+
+window.__INFRA_SSE__ = {
+  post: function (url, body, handlers) {
+    if (url.indexOf('/grok/logstash') >= 0) return lsStream(url, body, handlers)
+    window.__ssePosts.push({ url: url, body: body || {} })
+    const h = handlers || {}
+    const timers = []
+    let closed = false
+    const emit = function (type, obj) {
+      if (!closed && typeof h.onEvent === 'function') h.onEvent(type, JSON.stringify(obj))
+    }
+    let t = 0
+    sseFrames().forEach(function (f) {
+      t += f[0]
+      timers.push(setTimeout(function () { emit(f[1], f[2]) }, t))
+    })
+    timers.push(setTimeout(function () {
+      if (closed) return
+      closed = true
+      if (typeof h.onEnd === 'function') h.onEnd({ status: 200, contentType: 'text/event-stream' })
+    }, t + 60))
+    return { close: function () { closed = true; timers.forEach(clearTimeout) } }
+  }
+}
+
+const app = Vue.createApp({
+  data() { return { conn: { id: 1, name: 'es-prod' } } }
+})
+app.use(ElementPlus)
+app.component('es-grok-tab', window.EsGrokTab)
+const vm = app.mount('#app')
+
+// ===================== 断言 =====================
+const L = []
+function push(s) { L.push(s) }
+function q(sel) { return document.querySelector(sel) }
+function qa(sel) { return [].slice.call(document.querySelectorAll(sel)) }
+function txt(el) { return el ? el.textContent.replace(/\s+/g, ' ').trim() : '—' }
+// 等流式跑完：帧是按累计延时投递的（ai=retry 的 final 落在 ~440ms 之后），
+// 写死 sleep 会在中途取样 —— 量到的就是「phase 刚来、final 还没到」的中间态（已踩）。
+async function waitSettled(g, cap) {
+  const t0 = Date.now()
+  while (g.aiLoading && Date.now() - t0 < (cap || 4000)) {
+    await new Promise(function (r) { setTimeout(r, 50) })
+  }
+  await new Promise(function (r) { setTimeout(r, 80) })
+}
+function finish() {
+  if (SHOT) return
+  document.getElementById('out').textContent = L.join('\n')
+}
+
+function overflow(tag) {  const wrap = q('.es-grok-wrap')
+  if (!wrap) { push('!! 面板未渲染'); return }
+  const r = wrap.getBoundingClientRect()
+  push(tag + ' 面板宽 ' + Math.round(r.width) + ' × 高 ' + Math.round(r.height)
+    + '  docScrollW=' + document.documentElement.scrollWidth + ' clientW=' + document.documentElement.clientWidth
+    + '  横向溢出=' + (document.documentElement.scrollWidth > document.documentElement.clientWidth + 1 ? 'YES' : 'no'))
+  const card = q('.es-grok-card')
+  if (card) {
+    const cr = card.getBoundingClientRect()
+    push('    首卡片 ' + Math.round(cr.width) + '×' + Math.round(cr.height)
+      + '  卡片内横向溢出=' + (card.scrollWidth > card.clientWidth + 1 ? 'YES' : 'no')
+      + '  原始行省略=' + (getComputedStyle(q('.es-grok-raw')).textOverflow || '?'))
+  }
+  const val = q('.es-grok-fval')
+  if (val) {
+    push('    首字段值 ' + Math.round(val.getBoundingClientRect().width) + 'px  换行=' + getComputedStyle(val).wordBreak
+      + '  在卡片内=' + (val.scrollWidth <= val.clientWidth + 1 || val.getBoundingClientRect().right <= card.getBoundingClientRect().right + 1 ? 'YES' : 'NO'))
+  }
+}
+
+async function run() {
+  const g = vm.$refs.grok
+  if (!g) { push('!! 组件实例未挂上（ref 失效）'); finish(); return }
+  push('场景 = ' + STAGE + '  视口 = ' + window.innerWidth + '×' + window.innerHeight)
+
+  g.sample = [LINE_MATCH, LINE_MATCH2, LINE_PART, LINE_MISS].join('\n')
+  if (STAGE === 'long') g.sample = [LONG_URL, LONG_STACK].join('\n')
+  g.patternText = '%{TIMESTAMP_ISO8601:ts} %{LOGLEVEL:level} \\[%{DATA:ctx}\\] %{JAVACLASS:logger} - %{GREEDYDATA:message}'
+
+  if (STAGE === 'ls') {
+    // 量「Logstash 配置区块」的版式：状态行 / 配置块是否自滚 / 表单行是否被压扁。
+    // 配置块是 pre + white-space:pre（缩进必须保留），单行 pattern 很长 ⇒ 它必须自己横向滚动，
+    // 而不是把整个面板撑宽——这是本场景唯一要证伪的东西。
+    const ls = g.$refs.ls
+    if (!ls) { push('!! 子组件实例未挂上（ref=ls 失效）'); finish(); return }
+    ls.tag = 'nginx'
+    // props 是异步更新的：g.patternText 刚设完，子组件这一帧读到的还是空（不等就直接返回「请先填写 pattern」）
+    await new Promise(function (r) { setTimeout(r, 80) })
+    await ls.generate()
+    await new Promise(function (r) { setTimeout(r, 450) }) // 帧在 70 / 220ms 投递，要等够
+    push('  进度文案已收掉 = ' + (ls.phase === '' ? 'YES' : 'NO（残留: ' + ls.phase + '）'))
+    push('  状态行 = ' + txt(q('.es-grok-ls .es-grok-ai-status')))
+    push('  说明行 = ' + txt(q('.es-grok-ls-head')))
+    const code = q('.es-grok-ls-code')
+    if (code) {
+      const cr = code.getBoundingClientRect()
+      push('  配置块 ' + Math.round(cr.width) + '×' + Math.round(cr.height)
+        + '  内部横向滚动=' + (code.scrollWidth > code.clientWidth + 1 ? 'YES（长行自理，未撑破外层）' : 'no')
+        + '  white-space=' + getComputedStyle(code).whiteSpace
+        + '  源码行数=' + LS_CONFIG.split('\n').length)
+    } else {
+      push('!! 配置块未渲染')
+    }
+    const form = q('.es-grok-ls-form')
+    if (form) {
+      const fr = form.getBoundingClientRect()
+      push('  表单行 宽 ' + Math.round(fr.width) + '  高 ' + Math.round(fr.height)
+        + '  子项 ' + form.children.length + ' 个  flex-wrap=' + getComputedStyle(form).flexWrap)
+    }
+    push('  拦下提示（本条应为 —，本场景没有被拦项）= ' + txt(q('.es-grok-ls-drop')))
+  } else if (STAGE === 'ai') {
+    g.aiHint = '把 trace 上下文也拆出来'
+    await g.aiGenerate(false)
+    await waitSettled(g)
+    push('  校验行 = ' + txt(q('.es-grok-ai-status')))
+    push('  字段解释 ' + qa('.es-grok-fitem').length + ' 条  首条 = ' + txt(q('.es-grok-fitem'))
+      + '  网格列数 = ' + (q('.es-grok-fgrid') ? getComputedStyle(q('.es-grok-fgrid')).gridTemplateColumns.split(' ').length : '—'))
+    push('  explain 有效底色 = ' + (q('.es-grok-ai-result') ? getComputedStyle(q('.es-grok-ai-result')).backgroundColor : '—'))
+    push('  用量行 = ' + txt(q('.es-grok-usage')))
+    push('  pattern 已回填 = ' + (g.patternText.indexOf('GREEDYDATA') >= 0 ? 'YES' : 'NO'))
+    push('  SSE 请求 = ' + window.__ssePosts.map(function (p) { return p.url }).join(' , '))
+    push('  自动复跑解析 = ' + window.__posts.filter(function (p) { return p.url.indexOf('/grok/parse') >= 0 }).length + ' 次'
+      + '（生成后必须为 1：右栏要立刻反映新 pattern 的结果）')
+    push('  校验说明 = ' + window.EsGrokTab.computed.verifyText.call(g))
+  } else {
+    await g.parse()
+    await new Promise(function (r) { setTimeout(r, 400) })
+  }
+
+  const cards = qa('.es-grok-card')
+  push('行卡片 ' + cards.length + ' 张  统计行 = ' + txt(q('.es-grok-stat')))
+  push('  三态计数: is-ok=' + qa('.es-grok-card.is-ok').length
+    + ' is-part=' + qa('.es-grok-card.is-part').length + ' is-miss=' + qa('.es-grok-card.is-miss').length)
+  push('  字段行 ' + qa('.es-grok-frow').length + ' 条  首字段名 = ' + txt(q('.es-grok-fname')) + '  首字段值 = ' + txt(q('.es-grok-fval')))
+  if (cards.length) {
+    const first = cards[0]
+    push('  首卡片字段名序列 = ' + [].slice.call(first.querySelectorAll('.es-grok-fname')).map(txt).join(' / '))
+  }
+  if (STAGE === 'miss') {
+    push('  未命中提示 = ' + txt(q('.es-grok-tip')))
+  }
+  if (STAGE === 'ai') {
+    push('  AI 校验行 = ' + txt(q('.es-grok-ai-status')))
+    push('  AI 字段解释 ' + qa('.es-grok-fitem').length + ' 条  首条 = ' + txt(q('.es-grok-fitem')))
+    push('  用量行 = ' + txt(q('.es-grok-usage')))
+    push('  请求 = ' + window.__posts.map(function (p) { return p.url }).join(' , '))
+    push('  pattern 已回填 = ' + (g.patternText.indexOf('GREEDYDATA') >= 0 ? 'YES' : 'NO'))
+  }
+  overflow('几何')
+  push('JS 错误 = ' + window.__errors.length + ' 条' + (window.__errors.length ? ' -> ' + window.__errors.join(' | ') : ''))
+  finish()
+}
+
+setTimeout(run, 300)
+  </script>
+</body>
+</html>

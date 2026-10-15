@@ -43,9 +43,9 @@ window.EsViewsTab = {
       <template #empty><empty-state text="暂无数据视图：先创建一个视图（名称 / 索引匹配 / 时间字段），再进入检索" /></template>
     </el-table>
 
-    <!-- 新建 / 编辑：同一抽屉 · 左表单 / 右匹配索引 -->
+    <!-- 新建 / 编辑：同一抽屉 · 左表单 / 右匹配索引。抽屉即开即用；右侧索引列表单独转圈异步加载 -->
     <el-drawer v-model="drawer" :title="drawerTitle" size="760px" append-to-body :close-on-click-modal="false" class="es-view-drawer" @opened="onDrawerOpened">
-      <div class="es-view-create" v-loading="loadingIdx">
+      <div class="es-view-create">
         <div class="es-view-create-left">
           <el-form label-position="top" @submit.prevent>
             <el-form-item label="名称" required>
@@ -79,10 +79,11 @@ window.EsViewsTab = {
         <div class="es-view-create-right">
           <div class="es-view-match-head">
             <span>匹配索引</span>
-            <span class="mono">{{matchedIndices.length}} / {{allIndexNames.length}}</span>
+            <span class="mono">{{loadingIdx ? '…' : matchedTotal + ' / ' + totalIndices}}</span>
           </div>
-          <div class="es-view-match-list">
+          <div class="es-view-match-list" v-loading="loadingIdx">
             <div v-for="name in matchedIndices" :key="name" class="es-view-match-item mono">{{name}}</div>
+            <div v-if="matchedTotal > matchedIndices.length" class="es-lc-empty-hint">共匹配 {{matchedTotal}} 个，仅展示前 {{matchedIndices.length}} 个</div>
             <div v-if="!matchedIndices.length" class="es-lc-empty-hint">
               {{ form.index_pattern.trim() ? '无匹配索引，可试加 * 如 ysh*' : '输入索引匹配后在此过滤'}}
             </div>
@@ -100,16 +101,13 @@ window.EsViewsTab = {
       origin: { name: '', index_pattern: '', time_field: '' },
       form: { name: '', index_pattern: '', time_field: '' },
       dupMsg: '',
-      allIndexNames: [], loadingIdx: false,
+      matchedIndices: [], matchedTotal: 0, totalIndices: 0, loadingIdx: false,
       timeFields: [], fetchingTF: false
     }
   },
   computed: {
     isEdit() { return this.mode === 'edit' },
     drawerTitle() { return this.isEdit ? '编辑数据视图' : '新建数据视图' },
-    matchedIndices() {
-      return this.filterIndices(this.allIndexNames, this.form.index_pattern)
-    },
     // 保存时会被自动补 * 的预览（仅当补全结果与用户输入不同才提示）
     autoSuffix() {
       const p = (this.form.index_pattern || '').trim()
@@ -121,7 +119,13 @@ window.EsViewsTab = {
       return !!(this.form.name.trim() && !this.dupMsg && this.form.index_pattern.trim() && this.form.time_field.trim())
     }
   },
+  watch: {
+    // 输入索引匹配即防抖走后端全量匹配：右侧要反映「真实会命中哪些索引」，
+    // 而不是只在已加载的前 100 条里过滤（否则第 101 个索引明明能命中却显示无匹配）。
+    'form.index_pattern'() { this.onPatternInput() }
+  },
   mounted() { this.loadViews() },
+  beforeUnmount() { if (this._matchTimer) { clearTimeout(this._matchTimer); this._matchTimer = null } },
   methods: {
     async loadViews() {
       this.loading = true
@@ -149,29 +153,33 @@ window.EsViewsTab = {
     async onDrawerOpened() {
       await this.loadIndexNames()
     },
+    // loadIndexNames 抽屉打开时拉一次全量基线：totalIndices = 业务索引总数，
+    // 再按当前 index_pattern 匹配一次，填充右侧列表。
     async loadIndexNames() {
       this.loadingIdx = true
       try {
         const r = await api.get('/es/' + this.conn.id + '/indices')
-        if (r.code === 0) {
-          const list = r.data?.list || []
-          this.allIndexNames = list.map(x => x.index).filter(Boolean).sort()
-        }
+        if (r.code === 0) this.totalIndices = r.data?.total || 0
       } catch (e) { /* */ } finally { this.loadingIdx = false }
+      await this.matchIndices()
     },
-    // Kibana 风格：本地按 pattern 过滤；无 * / ? 时按前缀预览（ysh → ysh*）
-    filterIndices(names, pattern) {
-      const raw = (pattern || '').trim()
-      if (!raw) return names.slice()
-      const parts = raw.split(',').map(s => s.trim()).filter(Boolean)
-      if (!parts.length) return names.slice()
-      const regs = parts.map(p => {
-        let glob = p
-        if (!/[*?]/.test(glob)) glob = glob + '*'
-        const esc = glob.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.')
-        return new RegExp('^' + esc + '$')
-      })
-      return names.filter(n => regs.some(re => re.test(n)))
+    onPatternInput() {
+      if (this._matchTimer) clearTimeout(this._matchTimer)
+      this._matchTimer = setTimeout(() => this.matchIndices(), 300)
+    },
+    // matchIndices 走后端在全部索引里匹配 index_pattern（用与保存同一套 normalizePattern 规则）。
+    // 返回的 list 最多 100 条用于展示，total 是真实命中总数——搜索不再受「只加载了前 100 条」限制。
+    async matchIndices() {
+      const raw = (this.form.index_pattern || '').trim()
+      const q = raw ? this.normalizePattern(raw) : ''
+      try {
+        const r = await api.get('/es/' + this.conn.id + '/indices', { params: q ? { q } : {} })
+        if (r.code !== 0) return
+        const list = r.data?.list || []
+        this.matchedIndices = list.map(x => x.index).filter(Boolean)
+        this.matchedTotal = r.data?.total || 0
+        if (!q) this.totalIndices = this.matchedTotal // 空 pattern = 全量基线
+      } catch (e) { /* */ }
     },
     syncText(row) {
       return row.sync_status === 'idle' ? '正常' : row.sync_status === 'syncing' ? '同步中' : '失败'

@@ -19,6 +19,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"infra-ops/api/shared"
 	"infra-ops/common/aiconfig"
 	"infra-ops/common/aiopenai"
 	"infra-ops/common/resp"
@@ -61,10 +62,11 @@ const promqlPromptHead = `你是 Prometheus / VictoriaMetrics 的 PromQL 查询�
 2. 只用下面给出的指标名，绝不编造不存在的指标；
 3. 计数器（counter）算速率用 rate() / irate() 配范围选择器（如 rate(http_requests_total[5m])），不要对 counter 直接求和或平均；gauge 直接选，或用 avg_over_time() / max_over_time() 等；
 4. 用户提到「每秒 / 每分钟 / 每 5 分钟」这类粒度时，换算成 rate() 等函数里的范围选择器窗口；没提就默认 [5m]；查询的时间跨度由界面控制，表达式里不要写任何时间；
-5. 需求涉及具体项目 / 主机 / 容器 / 服务等实体时，必须用对应标签过滤，值只能取自下方给出的标签取值（支持 =~ 模糊匹配）；列表里没有的值绝不编造；需求就是看全局时不要加多余过滤；需要按实例拆分时用 by(instance)；
-6. 取 topN 用 topk(N, ...)；占比用 sum(...) / sum(...)；聚合用 by / without；
-7. 表达式必须是完整、可直接执行的一条 PromQL；
-8. 用户提到想看的时间段（如「今天 / 昨天 / 本周 / 上周 / 本月 / 最近 N 分钟 / N 小时 / N 天」）时，在 range 里给出时间标记（时间窗由界面按标记设置，表达式里依然不要写时间）：最近 N 分钟 / 小时 / 天写 last_Nm / last_Nh / last_Nd（如 last_30m、last_6h、last_3d）；今天 today、昨天 yesterday、本周 this_week、上周 last_week、本月 this_month、上月 last_month；没提到时间就留空串。
+5. 需求涉及具体项目 / 主机 / 容器 / 服务等实体时，必须用对应标签过滤，值只能取自下方给出的标签取值（支持 =~ 模糊匹配）；列表里没有的值绝不编造；需求就是看全局时不要加多余过滤；
+6. 用户要求「以 X 维度展示 / 按 X 拆分 / 每个 X 一条线」时，必须写成按该维度的聚合（如 sum by (container) (指标{过滤})），不能只给裸选择器——原始序列可能带 id、image 等额外标签，裸选择器保证不了每条序列正好是用户要的维度；explain 里声称的维度必须与表达式里的聚合一致；按实例拆分即 by(instance)；
+7. 取 topN 用 topk(N, ...)；占比用 sum(...) / sum(...)；
+8. 表达式必须是完整、可直接执行的一条 PromQL；
+9. 用户提到想看的时间段（如「今天 / 昨天 / 本周 / 上周 / 本月 / 最近 N 分钟 / N 小时 / N 天」）时，在 range 里给出时间标记（时间窗由界面按标记设置，表达式里依然不要写时间）：最近 N 分钟 / 小时 / 天写 last_Nm / last_Nh / last_Nd（如 last_30m、last_6h、last_3d）；今天 today、昨天 yesterday、本周 this_week、上周 last_week、本月 this_month、上月 last_month；没提到时间就留空串。
 输出结构：{"promql":"表达式","explain":"一句话说明这个表达式算什么、单位是什么","range":"时间范围标记，没提到时间就留空串"}`
 
 const promqlUserPrompt = `可用指标（共 %d 个，已按与需求的相关度挑选；格式：指标名（类型）：说明）：
@@ -76,13 +78,30 @@ const promqlRetryPrompt = `上一次生成的表达式在本集群执行时报�
 %s
 请检查指标名与函数用法，修正后重新输出 JSON（只输出 JSON）。`
 
+// promqlFollowupPrompt 追加生成的第二段用户消息：上一轮的结果已作为 assistant 消息回灌，
+// 这里只给「上一轮需求 + 本轮追加要求」，避免把表达式再抄一遍（那部分在 assistant JSON 里）。
+// range 的沿用规则单独说明：追加要求通常不含时间，若不交代，模型会按首轮规则把 range 留空，
+// 用户上一轮识别出的时间范围就被悄悄丢掉了。
+const promqlFollowupPrompt = `最初的需求：%s
+最近一版表达式：见上一条 JSON 的 promql 字段——它是按这个需求与后续追加要求逐步改出来的。
+用户在本轮提出追加要求：%s
+请在最近一版的基础上按追加要求修改，仍然成立的部分保持不变，按同样的 JSON 结构输出三个字段；若追加要求没有提到时间，range 沿用上一轮的标记（不要因为本轮没提时间就清空）。`
+
+// 追加上下文里文本字段的截断上限：只带一轮，但要防用户把整段长表达式/长说明贴进来把上下文撑爆。
+const (
+	prevQuestionMax = 1000
+	prevExprMax     = 2000
+	prevExplainMax  = 500
+)
+
 const explainPromptHead = `你是监控数据分析助手，负责解读 PromQL 查询结果的统计摘要，帮助运维判断系统当前状态。
 当前时间：%s
 规则：
 1. 只输出 JSON，不要输出任何解释文字，不要用 markdown 代码块包裹；
 2. 结论必须基于给出的统计数字，不要编造数据里没有的信息；
-3. summary 给总体结论（2-3 句）；
-4. findings 列出值得注意的现象（异常峰值、持续上升 / 下降、全为 0、序列间差异悬殊、数据缺失等），每条一句话；没有异常就说明运行平稳；
+3. summary 给总体结论（2-3 句）：先给整体水位与量级，再给最值得注意的一点；
+4. findings 列出值得注意的现象（异常峰值、持续上升 / 下降、全为 0、序列间差异悬殊、数据缺失等），
+   每条一句话并带上关键数字（末值 / 极值 / 均值 / 趋势 / 缺失数）；序列多时先给整体分布（多少条在什么区间、最高最低差多少），再点出最有代表性的几条；一切正常就给一条说明平稳，不要凑条数；
 5. suggestions 给可操作的下一步排查建议（看什么、检查什么），一切正常时给继续观察类建议；
 6. 全部用中文，简洁直接，不说空话。
 输出结构：{"summary":"总体结论","findings":["发现 1","发现 2"],"suggestions":["建议 1","建议 2"]}`
@@ -116,6 +135,45 @@ type explainReply struct {
 
 type aiPromQLReq struct {
 	Question string `json:"question" binding:"required"`
+	// Prev 追加生成的上下文：Question 是最初那个需求（前端固定为首轮原文，不随后续轮次漂移），
+	// PromQL 是最近一版表达式。服务端把最近一版回灌成 assistant 消息，模型据此按新要求改。
+	// 只带一轮——追加一次基本够用，且上下文体积恒定，中间轮次的要求已经体现在表达式里了。
+	Prev *aiPromQLPrev `json:"prev"`
+}
+
+// aiPromQLPrev 上一轮的生成结果（追加生成用）。
+type aiPromQLPrev struct {
+	Question string `json:"question"`
+	PromQL   string `json:"promql"`
+	Explain  string `json:"explain"`
+}
+
+// buildFollowupMessages 组装追加生成的对话尾巴（assistant 上一版 + user 追加要求）。
+// 上一轮没有表达式（首轮失败 / 前端没传）时返回 nil，调用方按单轮生成处理。
+func buildFollowupMessages(prev *aiPromQLPrev, question string) []aiopenai.Message {
+	if prev == nil || strings.TrimSpace(prev.PromQL) == "" {
+		return nil
+	}
+	assistant := replyJSON(&promqlReply{
+		PromQL:  truncateRunes(strings.TrimSpace(prev.PromQL), prevExprMax),
+		Explain: truncateRunes(strings.TrimSpace(prev.Explain), prevExplainMax),
+	})
+	if assistant == "" {
+		return nil
+	}
+	return []aiopenai.Message{
+		{Role: "assistant", Content: assistant},
+		{Role: "user", Content: fmt.Sprintf(promqlFollowupPrompt,
+			truncateRunes(strings.TrimSpace(prev.Question), prevQuestionMax), question)},
+	}
+}
+
+// traceQuestion 调用记录里的问题文本：追加生成加个前缀，翻记录时一眼能分清首轮与追加。
+func traceQuestion(question string, followup bool) string {
+	if !followup {
+		return question
+	}
+	return "追加：" + question
 }
 
 // GeneratePromQL POST /api/metrics/conns/:id/ai/promql
@@ -154,21 +212,44 @@ func (h *Handler) GeneratePromQL(c *gin.Context) {
 	}
 	picked := pickMetrics(cat.names, cat.meta, question, promqlContextMetrics)
 
+	// —— 前置校验全部通过：进入流式返回 ——
+	// 响应头一经发出，后续失败只能以 event: error 帧回传。
+	sw, ok := shared.NewSSEStream(c)
+	if !ok {
+		return
+	}
+
 	trace := h.beginTrace(aiTraceParams{
 		Kind: model.MetricsAIKindPromQL, Conn: conn,
 		Model: aiCfg.Model, BaseURL: aiCfg.BaseURL,
-		MetricCount: len(picked), Question: question,
+		MetricCount: len(picked), Question: traceQuestion(question, req.Prev != nil),
 	})
 	defer trace.done()
 
+	// 追加生成时的首轮问题要用「上一轮的原话」：否则对话读起来是
+	// user 说追加要求 → assistant 答的是上一版 → user 又说一遍追加要求，模型容易答跑偏。
+	baseQuestion := question
+	if req.Prev != nil && strings.TrimSpace(req.Prev.Question) != "" {
+		baseQuestion = truncateRunes(strings.TrimSpace(req.Prev.Question), prevQuestionMax)
+	}
+	// 实体对齐提示把两轮问题合起来喂：追加要求里新出现的实体（如「再看成享花」）也能命中标签取值
 	msgs := []aiopenai.Message{
 		{Role: "system", Content: fmt.Sprintf(promqlPromptHead, nowText())},
-		{Role: "user", Content: fmt.Sprintf(promqlUserPrompt, len(picked), metricContext(picked, cat.meta), labelsBlock(cat, question), question)},
+		{Role: "user", Content: fmt.Sprintf(promqlUserPrompt, len(picked), metricContext(picked, cat.meta), labelsBlock(cat, baseQuestion+" "+question), baseQuestion)},
 	}
-	reply, err := h.chatGenerate(ctx, aiC, msgs, trace)
+	// 追加生成：把上一轮的结果与追加要求接在首轮对话之后（只带一轮，上下文体积恒定）
+	msgs = append(msgs, buildFollowupMessages(req.Prev, question)...)
+
+	// 流式草稿：promql / explain 的字符串增量边生成边推
+	emit := func(ev shared.JSONStringEvent) {
+		if ev.Index < 0 && (ev.Field == "promql" || ev.Field == "explain") {
+			sw.Send("delta", gin.H{"field": ev.Field, "text": ev.Delta})
+		}
+	}
+	reply, err := h.chatGenerate(ctx, aiC, msgs, trace, emit)
 	if err != nil {
 		trace.fail(err)
-		resp.Fail(c, resp.CodeInternal, err.Error())
+		sw.Send("error", gin.H{"message": err.Error()})
 		return
 	}
 	expr := reply.PromQL
@@ -178,12 +259,18 @@ func (h *Handler) GeneratePromQL(c *gin.Context) {
 	verifyErr := ""
 	if _, err := client.query(ctx, expr, time.Now().UnixMilli()); err != nil {
 		verifyErr = err.Error()
-		// 把远端报错回喂给模型修正，只重试一次；重试失败保留首稿
+		// 把远端报错回喂给模型修正，只重试一次；重试失败保留首稿。
+		// 流式下第二稿会覆盖草稿区：先推 reset 让前端清空并说明缘由——
+		// 不然用户已经看到的首稿会「突变」成另一条表达式，无从理解
+		sw.Send("reset", gin.H{
+			"reason": "首稿试跑未通过，已带报错让模型修正（重试一次）",
+			"detail": truncateRunes(verifyErr, 500),
+		})
 		retryMsgs := append(msgs,
 			aiopenai.Message{Role: "assistant", Content: replyJSON(reply)},
 			aiopenai.Message{Role: "user", Content: fmt.Sprintf(promqlRetryPrompt, truncateRunes(verifyErr, 500))},
 		)
-		if reply2, err2 := h.chatGenerate(ctx, aiC, retryMsgs, trace); err2 == nil {
+		if reply2, err2 := h.chatGenerate(ctx, aiC, retryMsgs, trace, emit); err2 == nil {
 			expr, explain, rangeMark = reply2.PromQL, strings.TrimSpace(reply2.Explain), reply2.Range
 			if _, err := client.query(ctx, expr, time.Now().UnixMilli()); err == nil {
 				verifyErr = ""
@@ -194,7 +281,7 @@ func (h *Handler) GeneratePromQL(c *gin.Context) {
 	}
 	trace.row.Expr = truncateRunes(expr, logExprMax)
 
-	resp.OK(c, model.MetricsAIPromQLResult{
+	sw.Send("final", model.MetricsAIPromQLResult{
 		PromQL: expr, Explain: explain, UsedMetrics: len(picked),
 		VerifyError: verifyErr,
 		Range:       resolveAIRange(rangeMark, time.Now()),
@@ -203,8 +290,16 @@ func (h *Handler) GeneratePromQL(c *gin.Context) {
 }
 
 // chatGenerate 发起一次生成调用并解析出结构；用量与原文进 trace。
-func (h *Handler) chatGenerate(ctx context.Context, aiC *aiopenai.Client, msgs []aiopenai.Message, trace *aiTrace) (*promqlReply, error) {
-	res, err := aiC.Chat(ctx, msgs)
+// onDelta 非空时把模型输出 JSON 的字符串增量（promql / explain）交给调用方做流式展示；
+// 每次调用用独立扫描器——重试轮是一份全新的 JSON 文档。
+func (h *Handler) chatGenerate(ctx context.Context, aiC *aiopenai.Client, msgs []aiopenai.Message, trace *aiTrace, onDelta func(shared.JSONStringEvent)) (*promqlReply, error) {
+	scanner := &shared.JSONStreamScanner{}
+	res, err := aiC.ChatStream(ctx, msgs, func(chunk string) error {
+		if onDelta != nil {
+			scanner.Feed(chunk, onDelta)
+		}
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -352,6 +447,12 @@ func (h *Handler) ExplainResult(c *gin.Context) {
 	}
 	digest := buildDigest(res, digestMaxLines)
 
+	// —— 前置校验与重跑取数据都已通过：进入流式返回 ——
+	// 响应头一经发出，后续失败只能以 event: error 帧回传。
+	sw, ok := shared.NewSSEStream(c)
+	if !ok {
+		return
+	}
 	question := strings.TrimSpace(req.Question)
 	trace := h.beginTrace(aiTraceParams{
 		Kind: model.MetricsAIKindExplain, Conn: conn,
@@ -371,13 +472,30 @@ func (h *Handler) ExplainResult(c *gin.Context) {
 	userMsg := fmt.Sprintf(explainUserPrompt,
 		res.Expr, modeText(res), rangeText(res), stepText, points,
 		len(res.Series), digestMaxLines, strings.Join(digest.Lines, "\n"), question)
-	aiRes, err := aiC.Chat(ctx, []aiopenai.Message{
+
+	// 流式草稿：summary / findings / suggestions 的字符串增量边生成边推
+	scanner := &shared.JSONStreamScanner{}
+	aiRes, err := aiC.ChatStream(ctx, []aiopenai.Message{
 		{Role: "system", Content: fmt.Sprintf(explainPromptHead, nowText())},
 		{Role: "user", Content: userMsg},
+	}, func(chunk string) error {
+		scanner.Feed(chunk, func(ev shared.JSONStringEvent) {
+			switch ev.Field {
+			case "summary":
+				if ev.Index < 0 {
+					sw.Send("delta", gin.H{"field": "summary", "text": ev.Delta})
+				}
+			case "findings", "suggestions":
+				if ev.Index >= 0 {
+					sw.Send("delta", gin.H{"field": ev.Field, "index": ev.Index, "text": ev.Delta})
+				}
+			}
+		})
+		return nil
 	})
 	if err != nil {
 		trace.fail(err)
-		resp.Fail(c, resp.CodeInternal, err.Error())
+		sw.Send("error", gin.H{"message": err.Error()})
 		return
 	}
 	trace.fill(aiRes)
@@ -386,11 +504,12 @@ func (h *Handler) ExplainResult(c *gin.Context) {
 
 	var reply explainReply
 	if err := unmarshalModelJSON(aiRes.Content, &reply); err != nil {
-		trace.fail(err)
-		resp.Fail(c, resp.CodeInternal, "解析模型返回失败: "+err.Error())
+		perr := fmt.Errorf("解析模型返回失败: %w", err)
+		trace.fail(perr)
+		sw.Send("error", gin.H{"message": perr.Error()})
 		return
 	}
-	resp.OK(c, model.MetricsAIExplainResult{
+	sw.Send("final", model.MetricsAIExplainResult{
 		Summary:     strings.TrimSpace(reply.Summary),
 		Findings:    orEmptyStrings(reply.Findings),
 		Suggestions: orEmptyStrings(reply.Suggestions),

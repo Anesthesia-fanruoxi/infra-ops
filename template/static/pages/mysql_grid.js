@@ -76,10 +76,10 @@ window.MySQLGrid = {
       <el-button text size="small" :disabled="analyzing" @click="closeAnalysis">关闭</el-button>
     </div>
     <div class="mysql-explain-loading" v-if="analyzing">
-      <span class="mysql-explain-dot"></span>正在重跑 EXPLAIN 并分析执行计划，通常需要几秒到十几秒…
+      <span class="mysql-explain-dot"></span>正在重跑 EXPLAIN 并流式分析执行计划（内容边生成边显示）…
     </div>
-    <div class="mysql-explain-error" v-else-if="analysisError"><pre>{{ analysisError }}</pre></div>
-    <template v-else>
+    <div class="mysql-explain-error" v-if="analysisError"><pre>{{ analysisError }}</pre></div>
+    <template v-if="analysis">
       <div class="mysql-explain-summary" v-if="analysis.summary">{{ analysis.summary }}</div>
       <div class="mysql-explain-section" v-if="(analysis.findings || []).length">
         <div class="mysql-explain-section-title">观察发现</div>
@@ -109,7 +109,7 @@ window.MySQLGrid = {
           <el-button class="mysql-explain-copy" text size="small" @click="copySql(analysis.optimized_sql)">复制</el-button>
         </div>
       </div>
-      <div class="mysql-explain-digest">
+      <div class="mysql-explain-digest" v-if="digestRowCount || digestTables.length">
         <a class="mysql-explain-toggle" @click="digestOpen = !digestOpen">
           {{ digestOpen ? '收起' : '展开' }}解读依据（{{ digestRowCount }} 行执行计划{{ digestTruncated ? '，仅列前若干行' : '' }}{{ digestTables.length ? ' + ' + digestTables.length + ' 张表结构' : '' }}）
         </a>
@@ -140,14 +140,19 @@ window.MySQLGrid = {
     }
   },
   watch: {
-    // 换了一批结果（重新执行）：上一批的分析面板随之清掉，避免张冠李戴
+    // 换了一批结果（重新执行）：上一批的分析面板随之清掉，避免张冠李戴；
+    // 还在跑的流式分析一并取消（后端请求 ctx 随之断开）
     result() {
       this.runSeq++
       this.analyzing = false
       this.analysis = null
       this.analysisError = ''
       this.digestOpen = false
+      this._closeStream()
     }
+  },
+  beforeUnmount() {
+    this._closeStream() // 分析流随组件走：关掉即取消服务端请求
   },
   computed: {
     // 解读依据面板的数据面（analysis 可能为空，模板里少写重复判空）
@@ -158,43 +163,89 @@ window.MySQLGrid = {
   },
   methods: {
     // AI 分析执行计划：仅后端标记 can_analyze 的 EXPLAIN 结果可进（按钮同判据）；
-    // 请求只带 SQL 与库名——后端重跑 EXPLAIN 取计划送模型，查询结果数据不上传 AI
+    // 请求只带 SQL 与库名——后端重跑 EXPLAIN 取计划送模型，查询结果数据不上传 AI。
+    // 流式口径：delta 帧直接把增量拼进 analysis（终稿以 final 帧为准，服务端清洗过），
+    // 因此面板要「边生成边显示」——等待期只留一个静态转圈是不可接受的感知成本
     async analyze() {
       if (this.analyzing || !this.analyzeSql) return
       const target = this.analyzeSql
-      const seq = this.runSeq // 批号快照：响应回来时批号变了就丢弃（重跑同一句 SQL 也不算数）
+      const seq = this.runSeq // 批号快照：流回来时批号变了就丢弃（重跑同一句 SQL 也不算数）
+      const sse = window.__INFRA_SSE__
+      if (!sse) {
+        this.analysisError = '流式通道不可用：请通过桌面应用运行后重试'
+        return
+      }
       this.analyzing = true
       this.analysisError = ''
       this.digestOpen = false
-      try {
-        const r = await api.post('/mysql/' + this.connId + '/query/analyze', {
-          sql: target, schema: this.schema
-        }, { timeout: 0 })
-        if (this.runSeq !== seq) return // 已执行新一批：丢弃过期响应
-        if (r && r.code === 0 && r.data) {
-          this.analysis = {
-            summary: r.data.summary || '',
-            findings: r.data.findings || [],
-            suggestions: r.data.suggestions || [],
-            index_statements: r.data.index_statements || [],
-            optimized_sql: r.data.optimized_sql || '',
-            digest: r.data.digest || { row_count: 0, truncated: false, lines: [] },
-            usage: r.data.usage || {}
-          }
-        } else {
-          this.analysisError = (r && r.message) || '分析失败'
-        }
-      } catch (e) {
-        if (this.runSeq === seq) this.analysisError = '请求失败，请重试'
-      } finally {
-        if (this.runSeq === seq) this.analyzing = false
+      // 空白结果对象：delta 直接往上拼（digest 与 usage 只有 final 帧才有）
+      this.analysis = {
+        summary: '', findings: [], suggestions: [], index_statements: [], optimized_sql: '',
+        digest: { row_count: 0, truncated: false, lines: [], tables: [] }, usage: {}
       }
+      const stale = () => this.runSeq !== seq
+      const appendDelta = (ev) => {
+        if (stale()) return
+        if (ev.field === 'summary') this.analysis.summary += ev.text || ''
+        else if (ev.field === 'optimized_sql') this.analysis.optimized_sql += ev.text || ''
+        else if (ev.field === 'findings' || ev.field === 'suggestions' || ev.field === 'index_statements') {
+          const arr = this.analysis[ev.field]
+          const idx = Math.max(0, ev.index || 0)
+          while (arr.length <= idx) arr.push('')
+          arr[idx] += ev.text || ''
+        }
+      }
+      let settled = false
+      const stream = sse.post('/api/mysql/' + this.connId + '/query/analyze', {
+        sql: target, schema: this.schema
+      }, {
+        onEvent: (type, data) => {
+          if (stale()) { stream.close(); return }
+          let ev = {}
+          try { ev = JSON.parse(data) } catch (e) { return }
+          if (type === 'delta') { appendDelta(ev); return }
+          if (type === 'error') {
+            settled = true
+            this.analysisError = ev.message || '分析失败'
+            this.analyzing = false
+            return
+          }
+          if (type === 'final' && !settled) {
+            settled = true
+            this.analysis = {
+              summary: ev.summary || '',
+              findings: ev.findings || [],
+              suggestions: ev.suggestions || [],
+              index_statements: ev.index_statements || [],
+              optimized_sql: ev.optimized_sql || '',
+              digest: ev.digest || { row_count: 0, truncated: false, lines: [] },
+              usage: ev.usage || {}
+            }
+            this.analyzing = false
+          }
+        },
+        onEnd: () => {
+          if (stale() || settled) return
+          this.analysisError = '分析未完成（连接提前结束），请重试'
+          this.analyzing = false
+        },
+        onError: (err) => {
+          if (stale() || settled) return
+          this.analysisError = (err && err.message) || '分析失败，请重试'
+          this.analyzing = false
+        }
+      })
+      this._analysisStream = stream
     },
     closeAnalysis() {
+      this._closeStream()
       this.analyzing = false
       this.analysis = null
       this.analysisError = ''
       this.digestOpen = false
+    },
+    _closeStream() {
+      if (this._analysisStream) { this._analysisStream.close(); this._analysisStream = null }
     },
     fmtNum(n) { return Number(n || 0).toLocaleString('zh-CN') },
     // 毫秒在千以下按毫秒看，超过就换成秒 —— 模型调用耗时常在秒级

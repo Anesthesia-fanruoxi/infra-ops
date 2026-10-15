@@ -24,7 +24,9 @@
   场景（?stage=…，默认 view=workbench）：
     view=page                连接列表：表格 → 卡片 → 点「查询」进入工作台
     view=workbench&stage=initial   工作台初始布局（顶栏 / 表达式行 / 时间行 / 三个空态）
-    view=workbench&stage=chain     AI 生成 → 填入表达式 → 执行 → 图表/统计表 → AI 解读 → 依据展开（全链）
+    view=workbench&stage=chain     AI 生成 → 填入表达式 → 执行 → 图表/统计表 → AI 解读（弹框自动开）
+                                   → 生成中关弹框再点「查看解读」（生成中也必须可点、且不重跑）
+                                   → 依据展开 → 关闭（按钮转「查看解读/重新分析」）→ 查看（不重跑）→ 重新分析（重跑覆盖）
     view=workbench&stage=preset    时间预设：默认 1h/15s → 切 24h（步长应随 preset 变 60）→ 执行
     view=workbench&stage=instant   即时查询：切 instant → 执行 → 单点序列照样出图
     view=workbench&stage=airange   AI 时间范围：生成即自动填入；命中预设切 chip（6h）、「今天」走自定义冻结区间
@@ -33,7 +35,7 @@
   为什么建这个台子：这条工具的主链全在前端编排——AI 生成结果要能「填入表达式」、
   执行参数（毫秒时间戳 / 秒步长 / preset 各带步长）要逐字段对得上、
   ECharts(SVG) 在 v-show 容器里初始化会拿到 0×0 尺寸（必须 nextTick resize）、
-  解读面板在没有结果时必须停在引导态。这些看代码都推不出来，只能跑。
+  解读弹框的开关语义（首次自动弹出 / 关闭后结论留一份 / 查看不重跑 / 重新分析覆盖）只能跑。
 -->
   <script src="../template/static/vendor/vue.global.prod.js"></script>
   <script src="../template/static/vendor/element-plus.min.js"></script>
@@ -42,7 +44,8 @@
   <script src="../template/static/vendor/echarts.min.js"></script>
   <script src="../template/static/vendor/axios.min.js"></script>
 
-  <!-- 被测组件（真实文件，顺序同 index.html：图表 → AI 面板 → 页面） -->
+  <!-- 被测组件（真实文件，顺序同 index.html：高亮 → 图表 → AI 面板 → 页面） -->
+  <script src="../template/static/ai_highlight.js"></script>
   <script src="../template/static/pages/metrics_chart.js"></script>
   <script src="../template/static/pages/metrics_ai.js"></script>
   <script src="../template/static/pages/metrics.js"></script>
@@ -177,54 +180,106 @@ window.api = {
       if ((body || {}).mode === 'instant') return delay(400, { code: 0, data: instantResult(body) })
       return delay(800, { code: 0, data: rangeResult(body) })
     }
-    if (/\/metrics\/conns\/\d+\/ai\/promql$/.test(url)) {
-      window.__promqlCalls = (window.__promqlCalls || 0) + 1
-      const data = {
-        promql: 'rate(node_memory_MemAvailable_bytes[5m])',
-        explain: '计算各节点可用内存的 5 分钟变化率：为负说明内存在被逐步吃掉，绝对值越大消耗越快。',
-        used_metrics: 37,
-        verify_error: VERIFY ? 'parse error at line 1: unexpected ")" (本地试跑返回 400)' : '',
-        usage: { calls: 1, prompt_tokens: 1180, completion_tokens: 96, total_tokens: 1276, source: 'api', elapsed_ms: 1840 }
-      }
-      // ?stage=airange：第 1 次生成带「最近 6 小时」（命中 6h chip），第 2 次带「今天」（日历边界走自定义）
-      if (STAGE === 'airange') {
-        const now = Date.now()
-        if (window.__promqlCalls === 1) {
-          data.range = { start: now - 6 * 3600e3, end: now, label: '最近 6 小时', preset: '6h' }
-        } else {
-          const d = new Date(); d.setHours(0, 0, 0, 0)
-          data.range = { start: d.getTime(), end: now, label: '今天', preset: '' }
-          window.__mockRange2 = data.range
-        }
-      }
-      return delay(800, { code: 0, data: data })
-    }
-    if (/\/metrics\/conns\/\d+\/ai\/explain$/.test(url)) {
-      return delay(900, { code: 0, data: {
-        summary: '整体看，可用内存呈缓慢下降趋势：10.20.30.41 明显低于同组节点，且末段仍在回落，值得优先排查。',
-        findings: [
-          '10.20.30.41 可用内存均值约 3.2e+09，比 10.20.30.42 低约 42%',
-          '末值较区间起点下降约 46%，不是随机波动而是趋势性回落',
-          'node_memory_MemTotal_bytes 序列存在 2 处缺失点（采样断报）'
-        ],
-        suggestions: [
-          '登录 10.20.30.41 查内存大户进程（docker stats / ps aux 排序）',
-          '核查 node_exporter 的采集中断，确认不是 exporter 自身抖动'
-        ],
-        digest: {
-          series_count: 3, truncated: false,
-          lines: [
-            'node_memory_MemAvailable_bytes{instance="10.20.30.41:9100", job="node"} 末值=3.27e+09 最小=3.05e+09 最大=3.13e+10 均值=3.67e+09 趋势=下降',
-            'node_memory_MemAvailable_bytes{instance="10.20.30.42:9100", job="node"} 末值=5.66e+09 最小=5.45e+09 最大=5.85e+09 均值=5.65e+09 趋势=平稳',
-            'node_memory_MemTotal_bytes{instance="10.20.30.41:9100", job="node"} 末值=1.60e+10 最小=1.09e+10 最大=1.61e+10 均值=1.14e+10 趋势=上升'
-          ]
-        },
-        usage: { calls: 1, prompt_tokens: 900, completion_tokens: 210, total_tokens: 1110, source: 'api', elapsed_ms: 2380 }
-      } })
-    }
+    // AI 生成 / 解读已改走流式（window.__INFRA_SSE__.post），桩在下方 SSE mock 里；
+    // 这里**刻意不再桩**：留着旧分支会让「前端误回退到 api.post」这类回归悄悄通过。
     return Promise.resolve({ code: 1, message: '未桩住的 POST ' + url })
   }
 }
+
+// ===================== 流式 mock（AI 生成 / 解读） =====================
+// 桌面桥的「POST + SSE」在量台里的等价物：按帧脚本定时投递 delta / reset / final，
+// 收尾再发 onEnd。生成与解读都走它，与 wails-shim.js 的 __INFRA_SSE__.post 同签名。
+window.__ssePosts = []
+function promqlFinal() {
+  const data = {
+    promql: 'rate(node_memory_MemAvailable_bytes[5m])',
+    explain: '计算各节点可用内存的 5 分钟变化率：为负说明内存在被逐步吃掉，绝对值越大消耗越快。',
+    used_metrics: 37,
+    verify_error: VERIFY ? 'parse error at line 1: unexpected ")" (本地试跑返回 400)' : '',
+    usage: { calls: 1, prompt_tokens: 1180, completion_tokens: 96, total_tokens: 1276, source: 'api', elapsed_ms: 1840 }
+  }
+  // ?stage=airange：第 1 次生成带「最近 6 小时」（命中 6h chip），第 2 次带「今天」（日历边界走自定义）
+  if (STAGE === 'airange') {
+    const now = Date.now()
+    if (window.__promqlCalls === 1) {
+      data.range = { start: now - 6 * 3600e3, end: now, label: '最近 6 小时', preset: '6h' }
+    } else {
+      const d = new Date(); d.setHours(0, 0, 0, 0)
+      data.range = { start: d.getTime(), end: now, label: '今天', preset: '' }
+      window.__mockRange2 = data.range
+    }
+  }
+  return data
+}
+function explainFinal() {
+  return {
+    summary: '整体看，可用内存呈缓慢下降趋势：10.20.30.41 明显低于同组节点，且末段仍在回落，值得优先排查。',
+    findings: [
+      '10.20.30.41 可用内存均值约 3.2e+09，比 10.20.30.42 低约 42%',
+      '末值较区间起点下降约 46%，不是随机波动而是趋势性回落',
+      'node_memory_MemTotal_bytes 序列存在 2 处缺失点（采样断报）'
+    ],
+    suggestions: [
+      '登录 10.20.30.41 查内存大户进程（docker stats / ps aux 排序）',
+      '核查 node_exporter 的采集中断，确认不是 exporter 自身抖动'
+    ],
+    digest: {
+      series_count: 3, truncated: false,
+      lines: [
+        'node_memory_MemAvailable_bytes{instance="10.20.30.41:9100", job="node"} 末值=3.27e+09 最小=3.05e+09 最大=3.13e+10 均值=3.67e+09 趋势=下降',
+        'node_memory_MemAvailable_bytes{instance="10.20.30.42:9100", job="node"} 末值=5.66e+09 最小=5.45e+09 最大=5.85e+09 均值=5.65e+09 趋势=平稳',
+        'node_memory_MemTotal_bytes{instance="10.20.30.41:9100", job="node"} 末值=1.60e+10 最小=1.09e+10 最大=1.61e+10 均值=1.14e+10 趋势=上升'
+      ]
+    },
+    usage: { calls: 1, prompt_tokens: 900, completion_tokens: 210, total_tokens: 1110, source: 'api', elapsed_ms: 2380 }
+  }
+}
+function sseFrames(url) {
+  if (/\/ai\/promql$/.test(url)) {
+    return [
+      [150, 'delta', { field: 'promql', text: 'rate(node_memory_MemAvailable_bytes' }],
+      [150, 'delta', { field: 'promql', text: '[5m])' }],
+      [80, 'delta', { field: 'explain', text: '计算各节点可用内存的 5 分钟变化率' }],
+      [200, 'final', promqlFinal()]
+    ]
+  }
+  if (/\/ai\/explain$/.test(url)) {
+    return [
+      [140, 'delta', { field: 'summary', text: '整体看，可用内存呈缓慢下降趋势：' }],
+      [120, 'delta', { field: 'findings', index: 0, text: '10.20.30.41 可用内存均值约 3.2e+09' }],
+      [120, 'delta', { field: 'findings', index: 1, text: '末值较区间起点下降约 46%' }],
+      [140, 'delta', { field: 'suggestions', index: 0, text: '登录 10.20.30.41 查内存大户进程' }],
+      [220, 'final', explainFinal()]
+    ]
+  }
+  return []
+}
+window.__INFRA_SSE__ = {
+  post: function (url, body, handlers) {
+    window.__ssePosts.push({ url: url, body: body || {} })
+    if (/\/ai\/promql$/.test(url)) window.__promqlCalls = (window.__promqlCalls || 0) + 1
+    const h = handlers || {}
+    let closed = false
+    const timers = []
+    const emit = (type, obj) => {
+      if (!closed && typeof h.onEvent === 'function') h.onEvent(type, JSON.stringify(obj))
+    }
+    let t = 0
+    sseFrames(url).forEach((f) => {
+      t += f[0]
+      timers.push(setTimeout(() => emit(f[1], f[2]), t))
+    })
+    timers.push(setTimeout(() => {
+      if (closed) return
+      closed = true
+      if (typeof h.onEnd === 'function') h.onEnd({ status: 200, contentType: 'text/event-stream' })
+    }, t + 80))
+    return {
+      close: function () { closed = true; timers.forEach(clearTimeout) }
+    }
+  }
+}
+
 
 // ===================== 挂载 =====================
 const app = VIEW === 'page'
@@ -235,6 +290,11 @@ app.use(ElementPlusIconsVue)
 app.component('empty-state', { props: ['text'], template: '<div class="empty-state"><p>{{text}}</p></div>' })
 app.config.globalProperties.$message = ElementPlus.ElMessage
 app.config.globalProperties.$confirm = function (m, t, o) { return ElementPlus.ElMessageBox.confirm(m, t, o) }
+// 生产构建的 Vue 把渲染期异常交给 errorHandler、**不抛 window**：不接住就只能看到
+// 「DOM 没出来 + 零报错」这种最费解的假象（ES 工作台整页空白就是这么查出来的）。挂上它才能对症。
+app.config.errorHandler = function (err, instance, info) {
+  window.__errors.push('vue: ' + ((err && err.message) || String(err)) + ' @ ' + info)
+}
 const vm = app.mount('#app')
 
 // ===================== 断言工具 =====================
@@ -393,17 +453,35 @@ function snapshot(tag) {
     }
   }
 
-  const exp = q('.metrics-ai-explain-panel')
+  // AI 解读现在是弹框：状态以组件实例为准 —— 弹框关闭时 DOM 仍在（Element Plus 用 v-show 收起），
+  // 只扫 DOM 会把「已关闭」误判成「还开着」，那正是这一版要验的语义。
+  const exp = vm.$refs && vm.$refs.aiExp
   if (exp) {
-    push('[AI 解读] 空态=' + (q('.metrics-ai-explain-panel .metrics-ai-blank') ? '有' : '无')
-      + '  加载中=' + (q('.metrics-ai-explain-panel .metrics-ai-loading') ? 'YES' : 'NO'))
-    if (q('.metrics-ai-summary')) push('  summary = ' + JSON.stringify(textOf('.metrics-ai-summary')))
-    if (q('.metrics-ai-section')) {
-      push('  小节数 = ' + document.querySelectorAll('.metrics-ai-explain-panel .metrics-ai-section').length
-        + '  列表项 = ' + document.querySelectorAll('.metrics-ai-explain-panel .metrics-ai-list li').length)
+    push('[AI 解读] 弹框 visible=' + exp.visible + '  busy=' + exp.loading
+      + '  已有结论=' + (typeof exp.hasResult === 'function' && exp.hasResult() ? 'YES' : 'NO')
+      + '  空态=' + (q('.metrics-ai-explain-dialog .metrics-ai-blank') ? '有' : '无')
+      + '  加载中=' + (q('.metrics-ai-explain-dialog .metrics-ai-loading') ? 'YES' : 'NO'))
+    if (q('.metrics-ai-explain-dialog .metrics-ai-summary.mono-hint')) push('  解读对象 = ' + JSON.stringify(textOf('.metrics-ai-explain-dialog .metrics-ai-summary.mono-hint')))
+    if (q('.metrics-ai-explain-dialog .metrics-ai-summary:not(.mono-hint)')) push('  summary = ' + JSON.stringify(textOf('.metrics-ai-explain-dialog .metrics-ai-summary:not(.mono-hint)')))
+    if (q('.metrics-ai-explain-dialog .metrics-ai-section')) {
+      push('  小节数 = ' + document.querySelectorAll('.metrics-ai-explain-dialog .metrics-ai-section').length
+        + '  列表项 = ' + document.querySelectorAll('.metrics-ai-explain-dialog .metrics-ai-list li').length)
     }
-    if (q('.metrics-ai-digest-line')) push('  依据行数 = ' + document.querySelectorAll('.metrics-ai-digest-line').length)
-    if (q('.metrics-ai-explain-panel .metrics-ai-usage')) push('  用量行 = ' + JSON.stringify(textOf('.metrics-ai-explain-panel .metrics-ai-usage')))
+    if (q('.metrics-ai-explain-dialog .metrics-ai-digest-line')) push('  依据行数 = ' + document.querySelectorAll('.metrics-ai-explain-dialog .metrics-ai-digest-line').length)
+    if (q('.metrics-ai-explain-dialog .metrics-ai-usage')) push('  用量行 = ' + JSON.stringify(textOf('.metrics-ai-explain-dialog .metrics-ai-usage')))
+    push('  结果区按钮 = ' + ['AI 解读', '查看解读', '重新分析'].map(function (t) { return t + (btnOf(t) ? '✓' : '✗') }).join(' '))
+    const dl = q('.metrics-ai-explain-dialog')
+    if (dl) {
+      const dr = dl.getBoundingClientRect()
+      push('  弹框几何 = ' + JSON.stringify(rect('.metrics-ai-explain-dialog'))
+        + '  视口宽 = ' + window.innerWidth
+        + '  右溢出 = ' + (dr.right > window.innerWidth + 1 ? Math.round(dr.right - window.innerWidth) + 'px（不该）' : '无')
+        + '  正文限高滚动 = ' + (function () {
+          const b = q('.metrics-ai-explain-dialog .el-dialog__body')
+          if (!b) return '—'
+          return getComputedStyle(b).overflowY === 'auto' ? 'YES（' + Math.round(b.clientHeight) + '/' + Math.round(b.scrollHeight) + '）' : 'NO'
+        })())
+    }
   }
   push('')
 }
@@ -433,7 +511,7 @@ if (VIEW === 'page') {
   }, 1300)
   setTimeout(function () {
     push('[进入工作台] 顶栏存在 = ' + (q('.metrics-bar') ? 'YES' : 'NO') + '  返回按钮 = ' + (btnOf('返回列表') ? 'YES' : 'NO'))
-    push('AI 生成面板存在 = ' + (q('.metrics-ai-gen') ? 'YES' : 'NO') + '  解读面板存在 = ' + (q('.metrics-ai-explain-panel') ? 'YES' : 'NO'))
+    push('AI 生成面板存在 = ' + (q('.metrics-ai-gen') ? 'YES' : 'NO') + '  解读弹框挂载 = ' + (q('.metrics-ai-explain-panel') ? 'YES' : 'NO'))
     push('')
     finish()
   }, 2100)
@@ -441,7 +519,8 @@ if (VIEW === 'page') {
   setTimeout(function () {
     push('[布局] 卡数 = ' + document.querySelectorAll('.page-card').length)
     push('查询卡 = ' + JSON.stringify(rect('.page-card')) + '  结果卡 = ' + textOf('.metrics-result-panel .tool-list-sub'))
-    push('解读卡空态 = ' + JSON.stringify(textOf('.metrics-ai-explain-panel .metrics-ai-blank')))
+    push('解读弹框初始态 = ' + ((vm.$refs.aiExp || {}).visible ? '已弹出（不该）' : '未弹出')
+      + '  结果区解读按钮 = ' + (btnOf('AI 解读') ? '在（不该，还没查询）' : '不在'))
     push('结果空态 = ' + JSON.stringify(textOf('.metrics-result-body .empty-state p')))
     push('')
     snapshot('工作台初始')
@@ -450,7 +529,7 @@ if (VIEW === 'page') {
 } else if (STAGE === 'chain') {
   const Q = '最近一小时各节点可用内存的变化'
   setTimeout(function () { setTextarea('.metrics-ai-gen .metrics-ai-input', Q) }, 300)
-  setTimeout(function () { if (!btnOf('AI 生成')) push('!! 未找到「AI 生成」按钮'); else btnOf('AI 生成').click() }, 500)
+  setTimeout(function () { if (!btnOf('生成 PromQL')) push('!! 未找到「生成 PromQL」按钮'); else btnOf('生成 PromQL').click() }, 500)
   setTimeout(function () {
     snapshot('生成返回')
     wireLog('生成')
@@ -479,22 +558,88 @@ if (VIEW === 'page') {
     snapshot('统计表页签')
     clickRadio('.hosts-view-switch', '图表')
   }, 3200)
-  setTimeout(function () { btnOf('AI 解读').click() }, 3450)
   setTimeout(function () {
-    snapshot('解读返回')
-    const el = window.__posts.filter(function (p) { return /\/ai\/explain$/.test(p.url) })[0]
+    push('-- [点 AI 解读：首次执行应自动弹框] --')
+    const b = btnOf('AI 解读')
+    push('结果区按钮 = ' + (b ? 'YES' : 'NO'))
+    if (b) b.click()
+  }, 3450)
+  setTimeout(function () {
+    const e = vm.$refs.aiExp || {}
+    push('弹框 visible=' + e.visible + '（首次执行自动弹出）  busy=' + e.loading
+      + '  已有结论=' + (typeof e.hasResult === 'function' && e.hasResult() ? 'YES' : 'NO'))
+    push('结果区按钮（生成中）= ' + ['AI 解读', '查看解读', '重新分析'].map(function (t) {
+      const b = btnOf(t)
+      return t + (b ? '✓' + (b.disabled ? '(禁用)' : '(可点)') : '✗')
+    }).join(' '))
+    snapshot('解读流式期')
+    // 生成中把弹框关掉 —— 这正是本次用户要求的场景：解析中也要能点开看
+    const c = btnOf('关闭', '.metrics-ai-explain-dialog')
+    push('流式中关闭弹框 = ' + (c ? 'YES' : 'NO'))
+    if (c) c.click()
+  }, 3700)
+  setTimeout(function () {
+    const v = btnOf('查看解读')
+    push('-- [生成中关闭弹框后的按钮态] --')
+    push('查看解读 存在=' + (v ? 'YES' : 'NO') + '  disabled=' + (v ? v.disabled : '—')
+      + '（生成中也必须可点，否则关了弹框只能干等）')
+    push('')
+    if (v) v.click()
+  }, 3900)
+  setTimeout(function () {
+    const e = vm.$refs.aiExp || {}
+    const n = window.__ssePosts.filter(function (p) { return /\/ai\/explain$/.test(p.url) }).length
+    push('-- [生成中点「查看解读」：应重新打开弹框、且不重跑] --')
+    push('弹框 visible=' + e.visible + '  busy=' + e.loading
+      + '  explain 调用次数 = ' + n + '（应仍为 1）')
+    push('')
+  }, 4100)
+  setTimeout(function () {
+    const el = window.__ssePosts.filter(function (p) { return /\/ai\/explain$/.test(p.url) })[0]
     if (el) push('[解读契约] body=' + JSON.stringify(el.body) + '（start/end/step 应与查询响应完全一致）')
     push('')
-    const t = q('.metrics-ai-digest-toggle')
+    snapshot('解读返回')
+    const t = q('.metrics-ai-explain-dialog .metrics-ai-digest-toggle')
     if (t) t.click(); else push('!! 未找到「解读依据」开关')
-  }, 4600)
+  }, 4400)
   setTimeout(function () {
     push('-- [解读依据展开] --')
-    push('依据行数 = ' + document.querySelectorAll('.metrics-ai-digest-line').length + '  开关文案 = ' + JSON.stringify(textOf('.metrics-ai-digest-toggle')))
+    push('依据行数 = ' + document.querySelectorAll('.metrics-ai-explain-dialog .metrics-ai-digest-line').length
+      + '  开关文案 = ' + JSON.stringify(textOf('.metrics-ai-explain-dialog .metrics-ai-digest-toggle')))
     push('')
-    push('总请求数 = ' + window.__posts.length + '  JS 错误 = ' + (window.__errors.length ? JSON.stringify(window.__errors) : '0 条'))
+    const c = btnOf('关闭', '.metrics-ai-explain-dialog')
+    push('弹框内「关闭」按钮 = ' + (c ? 'YES' : 'NO'))
+    if (c) c.click()
+  }, 4700)
+  setTimeout(function () {
+    const e = vm.$refs.aiExp || {}
+    push('-- [关闭后：结论留一份，按钮转「查看解读 / 重新分析」] --')
+    push('弹框 visible=' + e.visible + '  结论仍在 = ' + (typeof e.hasResult === 'function' && e.hasResult() ? 'YES' : 'NO')
+      + '  按钮 = ' + ['AI 解读', '查看解读', '重新分析'].map(function (t) { return t + (btnOf(t) ? '✓' : '✗') }).join(' '))
+    push('')
+    const v = btnOf('查看解读')
+    if (v) v.click()
+  }, 5000)
+  setTimeout(function () {
+    const e = vm.$refs.aiExp || {}
+    const n = window.__ssePosts.filter(function (p) { return /\/ai\/explain$/.test(p.url) }).length
+    push('-- [查看解读：只重开，不重跑] --')
+    push('弹框 visible=' + e.visible + '  explain 调用次数 = ' + n + '（应仍为 1）')
+    push('结论小节 = ' + document.querySelectorAll('.metrics-ai-explain-dialog .metrics-ai-section').length + ' 个')
+    push('')
+    const r = btnOf('重新分析')
+    if (r) r.click()
+  }, 5300)
+  setTimeout(function () {
+    const n = window.__ssePosts.filter(function (p) { return /\/ai\/explain$/.test(p.url) }).length
+    push('-- [重新分析：重跑并整体覆盖] --')
+    push('explain 调用次数 = ' + n + '（应由 1 变 2）')
+    push('结论小节 = ' + document.querySelectorAll('.metrics-ai-explain-dialog .metrics-ai-section').length
+      + ' 个（永远只有一份，不应翻倍）')
+    push('总请求数 = ' + window.__posts.length + '  SSE 请求数 = ' + window.__ssePosts.length
+      + '  JS 错误 = ' + (window.__errors.length ? JSON.stringify(window.__errors) : '0 条'))
     finish()
-  }, 4800)
+  }, 6100)
 } else if (STAGE === 'preset') {
   setTimeout(function () {
     push('-- [默认预设] --')
@@ -530,7 +675,7 @@ if (VIEW === 'page') {
   const Q1 = '最近 6 小时各节点可用内存的变化'
   const Q2 = '今天各节点内存用量'
   setTimeout(function () { setTextarea('.metrics-ai-gen .metrics-ai-input', Q1) }, 300)
-  setTimeout(function () { if (!btnOf('AI 生成')) push('!! 未找到「AI 生成」按钮'); else btnOf('AI 生成').click() }, 500)
+  setTimeout(function () { if (!btnOf('生成 PromQL')) push('!! 未找到「生成 PromQL」按钮'); else btnOf('生成 PromQL').click() }, 500)
   setTimeout(function () {
     push('-- [生成即自动填入：预设命中（6h）] --')
     push('表达式框值 = ' + JSON.stringify((q('.metrics-expr-input') || {}).value || ''))
@@ -545,7 +690,7 @@ if (VIEW === 'page') {
     if (wl) push('mode=' + wl.body.mode + ' span=' + Math.round((wl.body.end - wl.body.start) / 1000) + 's step=' + wl.body.step + '（期望 21600s/30）')
     push('')
     setTextarea('.metrics-ai-gen .metrics-ai-input', Q2)
-    btnOf('AI 生成').click()
+    btnOf('生成 PromQL').click()
   }, 2700)
   setTimeout(function () {
     push('-- [生成即自动填入：日历边界（今天→自定义）] --')

@@ -88,9 +88,23 @@ window.MetricsWorkbench = {
           <el-radio-button label="chart">图表</el-radio-button>
           <el-radio-button label="table">统计表</el-radio-button>
         </el-radio-group>
-        <el-button v-if="res && res.series.length" type="primary" plain :loading="explaining" @click="explain">
+        <!-- 解读按钮（用户口径）：
+             ① 既没结论也没在生成 → 只有「AI 解读」，点它执行并自动弹框；
+             ② 有结论、**或正在生成** → 「查看解读」+「重新分析」。
+             ⛔「查看解读」在生成期间必须保持可点：弹框关掉后还能点开看流式进度。
+             原来它跟着 busy 一起禁用，生成中一旦关了弹框就只能干等（用户明确要求修掉）。 -->
+        <el-button v-if="res && res.series.length && !explainState.has && !explainState.busy" type="primary" plain
+          @click="explain">
           <el-icon style="margin-right:4px"><MagicStick /></el-icon>AI 解读
         </el-button>
+        <template v-else-if="res && res.series.length">
+          <el-button text @click="viewExplain">
+            <el-icon style="margin-right:4px"><View /></el-icon>查看解读
+          </el-button>
+          <el-button type="primary" plain :loading="explainState.busy" :disabled="explainState.busy" @click="explain">
+            <el-icon style="margin-right:4px"><MagicStick /></el-icon>重新分析
+          </el-button>
+        </template>
       </div>
     </div>
 
@@ -129,9 +143,9 @@ window.MetricsWorkbench = {
     </div>
   </div>
 
-  <div class="page-card tool-panel" ref="aiPanel">
-    <metrics-ai-explain ref="aiExp" :conn-id="conn.id" @open-config="$emit('open-config')" />
-  </div>
+  <!-- AI 解读：组件本体只是个弹框（无内联占位），由结果区的按钮驱动；
+       首次执行自动弹出，关闭后结论留一份，靠「查看解读」重开 -->
+  <metrics-ai-explain ref="aiExp" :conn-id="conn.id" @open-config="$emit('open-config')" @state="onExplainState" />
 
   <!-- 调用记录：统一记录组件（menu=metrics），固定当前连接的过滤。
        版式与 MySQL 使用记录弹窗一致：宽 65%、高 70%，上下各留 15%。 -->
@@ -143,7 +157,9 @@ window.MetricsWorkbench = {
     return {
       st: undefined, pinging: false,
       expr: '', loading: false, err: '', res: null,
-      tab: 'chart', explaining: false, logsDialog: false,
+      tab: 'chart', logsDialog: false,
+      // 解读面板状态（子组件冒泡）：has = 已有一份可查看的结论，busy = 正在生成
+      explainState: { has: false, busy: false },
       mode: 'range',
       preset: '1h', customRange: null, instantAt: null,
       stepSel: 15,
@@ -286,17 +302,21 @@ window.MetricsWorkbench = {
       } catch (e) { /* 拦截器已提示 */ } finally { this.loading = false }
     },
     // 解读用结果里回传的实际查询参数：与「产生这份图」的那次查询逐字段一致
-    // （后端拿到后会重跑查询再解读，不接受前端传结果快照）
-    async explain() {
-      if (this.explaining || !this.res || !this.res.series.length) return
+    // （后端拿到后会重跑查询再解读，不接受前端传结果快照）。
+    // 首次与「重新分析」共用：都重跑、都自动弹框，结论整体覆盖（永远只有一份）
+    explain() {
+      if (!this.res || !this.res.series.length) return
       const panel = this.$refs.aiExp
       if (!panel) return
-      this.explaining = true
-      const box = this.$refs.aiPanel
-      if (box) this.$nextTick(() => box.scrollIntoView({ behavior: 'smooth', block: 'nearest' }))
-      try {
-        await panel.analyze({ expr: this.res.expr, mode: this.res.mode, start: this.res.start, end: this.res.end, step: this.res.step })
-      } finally { this.explaining = false }
+      panel.analyze({ expr: this.res.expr, mode: this.res.mode, start: this.res.start, end: this.res.end, step: this.res.step })
+    },
+    // 查看解读：把保留的那份结论重新打开，不重跑接口
+    viewExplain() {
+      const panel = this.$refs.aiExp
+      if (panel) panel.open()
+    },
+    onExplainState(s) {
+      this.explainState = s || { has: false, busy: false }
     },
     // 序列名渲染：__name__ 优先，其余标签按名称排序（与图表组件、后端 digest 同款口径）
     seriesLabel(m) {

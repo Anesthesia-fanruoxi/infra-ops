@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>AI 解读着色预览（ai_highlight.js）</title>
+<!-- 量台用途：着色规则全在前端，启动应用才能看到效果。这里真实引入同一份
+     template/static/ai_highlight.js 与 style.css（不复制代码，避免与线上漂移），
+     改词表 / 改 .ai-hl-* 样式后刷新本页即可验收。样例文本是手写的典型解读结论。 -->
+<link rel="stylesheet" href="../template/static/style.css">
+<style>
+  body { padding: 28px; background: var(--bg-page); }
+  .pane { max-width: 900px; margin: 0 auto; }
+  h1 { font-size: 18px; margin-bottom: 6px; }
+  .sub { margin-bottom: 18px; font-size: 12.5px; line-height: 1.8; color: var(--text-faint); }
+  .card { margin-bottom: 16px; padding: 18px 20px; border: 1px solid var(--border);
+    border-radius: var(--radius-card); background: var(--bg-card); box-shadow: var(--shadow-card); }
+  .legend { display: flex; flex-wrap: wrap; gap: 18px; font-size: 12.5px; color: var(--text-sub); }
+  .raw-list { margin: 0; padding-left: 18px; }
+  .raw-list li { font-size: 12px; line-height: 1.9; color: var(--text-sub); }
+</style>
+</head>
+<body>
+<div class="pane">
+  <h1>AI 解读着色预览</h1>
+  <div class="sub">
+    左侧色样是五类标记（数值 / 风险 / 注意 / 正常 / 标识符），下方是模拟的解读卡片。
+    页面直接加载线上那份 ai_highlight.js 与 style.css，**改词表或改样式后刷新即见效果**，不用重建 exe。
+  </div>
+
+  <div class="card">
+    <div class="legend">
+      <span><span class="ai-hl ai-hl-num">1.2 GB</span> 数值</span>
+      <span><span class="ai-hl ai-hl-bad">异常</span> 风险</span>
+      <span><span class="ai-hl ai-hl-warn">偏高</span> 注意</span>
+      <span><span class="ai-hl ai-hl-good">平稳</span> 正常</span>
+      <span><span class="ai-hl ai-hl-code">container_memory_usage</span> 表达式标识符</span>
+      <span><span class="ai-hl ai-hl-name">mall-order-7f9c</span> 实体名</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="metrics-ai-summary" id="summary"></div>
+    <div class="metrics-ai-section">
+      <div class="metrics-ai-section-title">观察发现</div>
+      <ul class="metrics-ai-list" id="findings"></ul>
+    </div>
+    <div class="metrics-ai-section">
+      <div class="metrics-ai-section-title">排查建议</div>
+      <ul class="metrics-ai-list is-suggest" id="suggestions"></ul>
+    </div>
+    <div class="metrics-ai-usage">样例文本为手写，仅用于验收着色规则</div>
+  </div>
+
+  <div class="card">
+    <div class="metrics-ai-section-title">原文对照（未着色）</div>
+    <ul class="raw-list" id="raw"></ul>
+  </div>
+</div>
+
+<script src="../template/static/ai_highlight.js"></script>
+<script>
+  const sample = {
+    summary: 'namespace=scfq-service 下 8 个容器的内存使用量整体平稳，峰值出现在 14:20 的 mall-order-7f9c，约 1.86 GB；另有 2 个容器持续增长需要关注。',
+    findings: [
+      'mall-order-7f9c 在 14:20 达到峰值 1.86 GB，是全组最高，比最低的 mall-gateway 高 4.3 倍。',
+      'mall-pay-6d4b 内存持续上升，从 320 MB 涨到 980 MB，3 小时内增长 206%，未见回落。',
+      'mall-gateway-5f7d 全程运行平稳，均值 430 MB，未出现异常抖动。',
+      '1 个容器（mall-job-8c2e）在 14:05 前后出现数据缺失，约 5 分钟无采样点。',
+      '全部容器均未出现 OOM，也没有重启记录。'
+    ],
+    suggestions: [
+      '对 mall-pay-6d4b 排查内存泄漏：用 rate(container_memory_usage_bytes[30m]) 观察增长速率，并核对 JVM 堆上限。',
+      '确认 mall-job-8c2e 的采集是否正常：instance="10.0.3.21:9100" 在 14:05 是否失联。',
+      '复核 mall-order-7f9c 的限额：1.86 GB 已接近 limit（当前 2 GiB），建议放宽或降副本内存占用。'
+    ]
+  }
+
+  const fill = (id, list) => {
+    document.getElementById(id).innerHTML = list.map(t => '<li>' + AiHl.html(t) + '</li>').join('')
+  }
+  document.getElementById('summary').innerHTML = AiHl.html(sample.summary)
+  fill('findings', sample.findings)
+  fill('suggestions', sample.suggestions)
+  // 原文对照用 textContent 逐条写，天然不解析标签
+  const raw = document.getElementById('raw')
+  ;[sample.summary].concat(sample.findings, sample.suggestions).forEach((t) => {
+    const li = document.createElement('li')
+    li.textContent = t
+    raw.appendChild(li)
+  })
+</script>
+</body>
+</html>

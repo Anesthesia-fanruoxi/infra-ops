@@ -289,7 +289,7 @@ func assertNoNil(t *testing.T, v interface{}) {
 
 func TestBuildSearchBodyTimeFilter(t *testing.T) {
 	body, err := BuildSearchBody(mkSchema(), "env:prod", 1789117200000, 1789120800000,
-		[]string{"@timestamp", "message", "host"}, "60s")
+		[]string{"@timestamp", "message", "host"}, "60s", "")
 	if err != nil {
 		t.Fatalf("组装失败: %v", err)
 	}
@@ -312,10 +312,13 @@ func TestBuildSearchBodyTimeFilter(t *testing.T) {
 	if rf["lte"] != nil {
 		t.Fatal("不得使用 lte（会把边界文档重复计入）")
 	}
-	// sort 首键 = 视图时间字段
+	// sort 首键 = 视图时间字段，默认降序（最新优先）
 	sort0 := body["sort"].([]interface{})[0].(map[string]interface{})
 	if _, ok := sort0["@timestamp"]; !ok {
 		t.Fatalf("sort 首键应为视图 time_field: %#v", sort0)
+	}
+	if sort0["@timestamp"].(map[string]interface{})["order"] != "desc" {
+		t.Fatalf("默认应降序: %#v", sort0)
 	}
 	// _source
 	src := body["_source"].([]string)
@@ -338,7 +341,7 @@ func TestBuildSearchBodyTimeFilter(t *testing.T) {
 }
 
 func TestBuildSearchBodyNoColumns(t *testing.T) {
-	body, err := BuildSearchBody(mkSchema(), "", 1, 2, nil, "")
+	body, err := BuildSearchBody(mkSchema(), "", 1, 2, nil, "", "")
 	if err != nil {
 		t.Fatalf("组装失败: %v", err)
 	}
@@ -350,6 +353,29 @@ func TestBuildSearchBodyNoColumns(t *testing.T) {
 	}
 	if _, ok := body["aggs"]; ok {
 		t.Fatal("无 interval 不应下发直方图")
+	}
+}
+
+// TestBuildSearchBodySortOrder 时间升降序：asc 转升序；空串 / 未知值一律回落降序（默认口径）。
+func TestBuildSearchBodySortOrder(t *testing.T) {
+	orderOf := func(order string) string {
+		body, err := BuildSearchBody(mkSchema(), "", 1, 2, nil, "", order)
+		if err != nil {
+			t.Fatalf("组装失败: %v", err)
+		}
+		return body["sort"].([]interface{})[0].(map[string]interface{})["@timestamp"].(map[string]interface{})["order"].(string)
+	}
+	if got := orderOf("asc"); got != "asc" {
+		t.Fatalf("asc 应转升序，实际 %s", got)
+	}
+	if got := orderOf("ASC"); got != "asc" {
+		t.Fatalf("大小写不敏感，实际 %s", got)
+	}
+	if got := orderOf(""); got != "desc" {
+		t.Fatalf("空值应回落降序，实际 %s", got)
+	}
+	if got := orderOf("hack"); got != "desc" {
+		t.Fatalf("未知值应回落降序，实际 %s", got)
 	}
 }
 
